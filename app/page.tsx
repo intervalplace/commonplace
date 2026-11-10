@@ -563,9 +563,21 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
         {!e.pending && <span className="cp-mono">block {e.height.toLocaleString("en-US")}</span>}
         {resonance && resonance.count > 0 && <span>{resonance.count} resonated</span>}
         {href && <a href={href} target="_blank" rel="noreferrer noopener">Open link</a>}
+        {!e.pending && <CopyLink id={e.id} />}
       </div>
     </article>
   );
+}
+
+// A link to one entry that works for anyone, on whatever address this site was opened from
+function CopyLink({ id }: { id: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    const url = `${location.origin}${location.pathname}${hrefEntry(id)}`;
+    try { await navigator.clipboard.writeText(url); } catch { window.prompt("Copy this link", url); return; }
+    setDone(true); setTimeout(() => setDone(false), 1800);
+  };
+  return <button type="button" className="cp-linkbtn" onClick={copy} aria-live="polite">{done ? "Link copied" : "Copy link"}</button>;
 }
 
 // ── Me ──────────────────────────────────────────────────────────────────────
@@ -769,7 +781,7 @@ function EntryView(c: Ctx & { id: Hex }) {
         <div className="cp-meta">
           {e.author && <Who addr={e.author} size={24} />}
           <TopicLink topic={e.topic} />
-          {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span></>}
+          {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span><CopyLink id={e.id} /></>}
         </div>
         {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
         {e.hidden !== undefined ? (
