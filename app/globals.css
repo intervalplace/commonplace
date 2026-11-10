@@ -121,6 +121,13 @@ body.night .cp-wallet .bal { color: var(--night-muted); }
 
 .cp-foot { max-width: 1120px; margin: 0 auto; padding: 0 24px 40px; font-size: 12px; color: var(--muted); display: flex; gap: 18px; flex-wrap: wrap; }
 body.night .cp-foot { color: var(--night-muted); }
+.cp-foot a { color: var(--muted); }
+.cp-about { gap: 32px; }
+.cp-about .lead { margin: 0; font-family: var(--serif); font-size: 23px; line-height: 1.5; }
+.cp-about section { display: flex; flex-direction: column; gap: 10px; }
+.cp-about h2 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 21px; }
+.cp-about p { margin: 0; font-family: var(--serif); font-size: 19px; line-height: 1.6; }
+.cp-about a { color: inherit; }
 body.night .cp-foot a { color: var(--night-muted); }
 
 @media (max-width: 600px) {

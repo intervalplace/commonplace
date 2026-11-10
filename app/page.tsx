@@ -56,13 +56,14 @@ function epochEnds(height: number): string {
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
   if (p[0] === "t" && p[1]) return { view: "topic", topic: decodeURIComponent(p.slice(1).join("/")) };
   if (p[0] === "e" && /^0x[0-9a-f]{64}$/i.test(p[1] ?? "")) return { view: "entry", id: p[1].toLowerCase() as Hex };
   if (p[0] === "everyone") return { view: "everyone" };
+  if (p[0] === "about") return { view: "about" };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
   return { view: "me" };
 }
@@ -250,8 +251,10 @@ export default function Page() {
       {route.view === "entry" && <EntryView {...ctx} id={route.id} />}
       {route.view === "everyone" && <Everyone {...ctx} />}
       {route.view === "person" && <Person {...ctx} addr={route.addr} />}
+      {route.view === "about" && <About />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
+        <a href="#/about">About</a>
         <span>Node: {base.replace(/^https?:\/\//, "")}</span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
         {height > 0 && <span title="The chain ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
@@ -771,6 +774,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onCl
           <li>It is kept with the time it was written, and that can't be changed either.</li>
           {doc && <li>The file is stored on Arweave, which keeps it for good (free at this size), and the entry holds its fingerprint, so anyone can check it is exactly this file.</li>}
         </ul>
+        <a className="cp-hint" href="#/about" target="_blank" rel="noopener" style={{ marginTop: -8 }}>What being kept for good means</a>
         <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span className="cp-mono" style={{ color: "var(--ink)" }}>{short(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>Costs 0.25 CSD, about 2.5 cents</span></div>
         {!key ? (
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
@@ -790,6 +794,73 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onCl
         </div>
       </section>
     </div>
+  );
+}
+
+// ── what this is ────────────────────────────────────────────────────────────
+const REPO = "https://github.com/intervalplace/commonplace";
+function About() {
+  useEffect(() => { window.scrollTo(0, 0); }, []);
+  return (
+    <main className="cp-main cp-about">
+      <h1 className="cp-topic-title" style={{ fontSize: 44 }}>About</h1>
+      <p className="lead">
+        For centuries people kept commonplace books: notebooks of passages worth remembering, things they had worked
+        out, lines they wanted to keep. This one is also a shared memory. What you keep is on your page, among everyone
+        else&apos;s under the same topic, and zoomed out, all of it at once.
+      </p>
+      <section>
+        <h2>What you write is kept for good</h2>
+        <p>
+          Each entry is written to Compute Substrate, a proof-of-work chain held by many independent computers, with
+          the time it was written. Nobody can edit it, remove it or backdate it. That includes you, the people who made
+          this site, and anyone who asks them to. Write what you would be glad to have kept.
+        </p>
+      </section>
+      <section>
+        <h2>Nobody runs it</h2>
+        <p>
+          There is no account, no server and no company. This site is a single static page. It reads from a Compute
+          Substrate node, and it writes with a key your browser makes from one signature by your wallet. The same
+          wallet makes the same key on any device, so there is nothing to back up, and the signature never leaves the
+          page.
+        </p>
+      </section>
+      <section>
+        <h2>What it costs</h2>
+        <p>
+          Keeping an entry costs 0.25 CSD. Resonating with one, a public sign that it meant something to you, costs
+          0.05 CSD. The fees go to the miners who keep the chain running; nobody earns from what you write. Every epoch,
+          about an hour, the chain ranks each topic&apos;s entries by resonance. If you have no CSD, the page can buy a
+          little with USDC on the open CSD/USDC market, with no gas.
+        </p>
+      </section>
+      <section>
+        <h2>Longer writing</h2>
+        <p>
+          Documents, in Markdown or plain text up to 105 KiB, are stored on Arweave, which also keeps files for good.
+          The entry holds the file&apos;s fingerprint, so every reader&apos;s page checks it is exactly the file that
+          was published. Text only, by design.
+        </p>
+      </section>
+      <section>
+        <h2>What this site doesn&apos;t show</h2>
+        <p>
+          This site hides very few entries: only clearly illegal content, only when someone reports it, and never for
+          words or opinions. Every hidden entry is listed publicly with its reason. Hidden entries stay on the chain,
+          and other apps can show them. <a href={HIDDEN_POLICY} target="_blank" rel="noopener">The rules and the list</a>.
+        </p>
+      </section>
+      <section>
+        <h2>One way in</h2>
+        <p>
+          Commonplace is a reference app: one way into a memory that doesn&apos;t depend on it. The format is open, so
+          anyone can build another app that reads and writes the same entries. If this site goes away, everything
+          written here stays. Nobody promises to run this one forever.
+        </p>
+        <p><a href={REPO} target="_blank" rel="noopener">The source, the format and every release</a></p>
+      </section>
+    </main>
   );
 }
 
