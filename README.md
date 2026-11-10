@@ -76,7 +76,7 @@ NEXT_PUBLIC_CSD_API=https://your-csd-node npm run build    # static site in ./ou
 ```
 
 The node's API must allow the site's origin (CORS) and serve `/tip`, `/block/height/*`, `/utxos/*`, `/tx/submit`,
-`/proposals/*`, `/proposal/*`, `/address/*/activity`, `/top/all-time`, `/topk/*` and `/domains`. A visitor can point
+`/proposals/*`, `/proposal/*`, `/address/*/activity`, `/top/all-time`, `/recent/attestations/*`, `/topk/*` and `/domains`. A visitor can point
 the page at another node with `?node=https://…`; it is remembered in their browser.
 
 ## Testing against a local network
@@ -101,5 +101,7 @@ either at mainnet: what they write is permanent.
 - Entries are read from the node's `/proposals` list (the newest 500 across all topics), and
   each topic's own `/proposals/<topic>` list (its newest 500) when that topic or the whole sky
   is opened. Topic counts come from `/domains`. A larger memory needs a lighter index.
-- Resonance counts come from `/top/all-time`, which lists the 50 most resonated entries.
+- Resonance counts come from `/top/all-time`, which lists the network's 50 most resonated
+  proposals, and from each Commonplace topic's `/recent/attestations/<topic>/200`, which only
+  looks back over the last 10,000 blocks. An older entry outside the top 50 shows no count.
 - Pending entries from other people (in the mempool, not yet in a block) are not shown yet.

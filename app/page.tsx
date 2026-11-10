@@ -87,7 +87,10 @@ export default function Page() {
   // the shared memory: every proposal on chain, refreshed every 30 s
   const [height, setHeight] = useState(0);
   const [chain, setChain] = useState<Entry[]>([]);
-  const [resonance, setResonance] = useState<Record<string, { count: number; weight: number }>>({});
+  // resonance: the node's all-time list holds only the network's 50 most attested proposals,
+  // which other apps fill, so each Commonplace topic's recent attestations are counted too
+  const [allTime, setAllTime] = useState<Record<string, { count: number; weight: number }>>({});
+  const [recent, setRecent] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
   const [netError, setNetError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -114,7 +117,7 @@ export default function Page() {
       api.domains().then(setDomains).catch(() => {});
       const es = ps.map(parseEntry).sort((a, b) => b.height - a.height || (a.id < b.id ? -1 : 1));
       setChain(es);
-      api.resonance().then(setResonance).catch(() => {});
+      api.resonance().then(setAllTime).catch(() => {});
       setNetError(null);
       // anything of ours that has landed in a block is no longer pending; give up on a send after a day
       setPending(prev => {
@@ -202,6 +205,31 @@ export default function Page() {
   }, [all]);
   useEffect(() => { needAuthors(chain.filter(e => e.kind === "profile").map(e => e.id)); }, [chain, needAuthors]);
   const byId = useMemo(() => new Map(entries.map(e => [e.id, e])), [entries]);
+
+  // which topics to count: those with a Commonplace entry and, by /domains, any attestations;
+  // each at most every two minutes, since the node walks back through blocks to answer
+  const counted = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!domains.length) return;
+    const ours = new Set(all.filter(e => e.kind !== "link" && e.kind !== "profile").map(e => e.topic));
+    const attested = new Map(domains.map(d => [d.domain, d.attestations]));
+    const due = [...ours].filter(d => (attested.get(d) ?? 0) > 0 && Date.now() - (counted.current.get(d) ?? 0) > 120_000);
+    if (!due.length) return;
+    due.forEach(d => counted.current.set(d, Date.now()));
+    (async () => {
+      for (let i = 0; i < due.length; i += 4) {
+        const got = await Promise.all(due.slice(i, i + 4).map(d => api.resonanceIn(d).catch(() => { counted.current.delete(d); return {}; })));
+        setRecent(prev => Object.assign({ ...prev }, ...got));
+      }
+    })();
+  }, [all, domains, height, api]);
+  // the all-time figure wherever there is one; otherwise the recent count, each at least the
+  // minimum fee (the recent list has no weights)
+  const resonance = useMemo(() => {
+    const out: Record<string, { count: number; weight: number }> = {};
+    for (const [id, n] of Object.entries(recent)) if (n > 0) out[id] = { count: n, weight: n * Number(MIN_FEE_ATTEST) };
+    return Object.assign(out, allTime);
+  }, [recent, allTime]);
 
   // my own page needs to know which entries are mine
   useEffect(() => { if (key && chain.length) needAuthors(chain.map(e => e.id)); }, [key, chain, needAuthors]);

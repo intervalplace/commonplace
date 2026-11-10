@@ -213,6 +213,14 @@ export function node(base: string) {
       for (const r of rows) out[String(r.proposal_id).toLowerCase()] = { count: Number(r.attest_count), weight: Number(r.economic_weight) };
       return out;
     },
+    // attestations on one topic's proposals, counted over the node's last 10,000 blocks (about
+    // two weeks); counts only, the node doesn't sum their weight here
+    resonanceIn: async (domain: string): Promise<Record<string, number>> => {
+      const j = await get(`/recent/attestations/${encodeURIComponent(domain)}/200`);
+      const out: Record<string, number> = {};
+      for (const r of (j.items ?? []) as any[]) out[String(r.proposal_id).toLowerCase()] = Number(r.attest_count);
+      return out;
+    },
     topk: async (epoch: number, domain: string): Promise<{ proposal_id: Hex; score: number }[]> => {
       const j = await get(`/topk/${epoch}/${encodeURIComponent(domain)}`);
       return j.items ?? j.topk ?? j.rows ?? [];
