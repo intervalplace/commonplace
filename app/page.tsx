@@ -1143,7 +1143,7 @@ function Person(c: Ctx & { addr: Hex }) {
           {lately && (
             <a className="cp-lately" href={hrefEntry(lately.id)}>
               <span className="label">Lately</span>
-              {lately.kind === "doc" ? "Published " : ""}{lately.text.length > 160 ? lately.text.slice(0, 160).trimEnd() + "…" : lately.text}
+              {lately.kind === "doc" ? "Published " : lately.kind === "reply" ? "Replied: " : ""}{lately.text.length > 160 ? lately.text.slice(0, 160).trimEnd() + "…" : lately.text}
               <span className="when">{when(lately.time)}</span>
             </a>
           )}
