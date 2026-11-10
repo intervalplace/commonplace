@@ -1122,6 +1122,8 @@ function Person(c: Ctx & { addr: Hex }) {
   }, [c.addr]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const kept = c.entries.filter(e => e.author === c.addr);
+  // their newest entry stands in for a status: it was simply the last thing they kept
+  const lately = kept.filter(e => !e.pending && e.hidden === undefined).reduce<Entry | null>((a, e) => (!a || e.height > a.height ? e : a), null);
   const gbTopic = guestbookTopic(c.addr);
   const guestbook = c.all.filter(e => e.topic === gbTopic && e.kind !== "profile");
   useEffect(() => { c.needAuthors(guestbook.filter(e => !e.pending).map(e => e.id)); }, [guestbook.length]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1138,6 +1140,13 @@ function Person(c: Ctx & { addr: Hex }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: "1 1 260px" }}>
           <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || short(c.addr)}</h1>
           <span className="cp-who" style={{ color: "var(--muted)", overflowWrap: "anywhere" }}>{c.addr}</span>
+          {lately && (
+            <a className="cp-lately" href={hrefEntry(lately.id)}>
+              <span className="label">Lately</span>
+              {lately.kind === "doc" ? "Published " : ""}{lately.text.length > 160 ? lately.text.slice(0, 160).trimEnd() + "…" : lately.text}
+              <span className="when">{when(lately.time)}</span>
+            </a>
+          )}
           <div className="cp-meta">
             {acts && <span>{kept.length} kept</span>}
             {acts && <span>{liked.length} resonated with</span>}

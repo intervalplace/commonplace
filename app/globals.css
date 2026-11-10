@@ -165,3 +165,7 @@ body.night .cp-foot a { color: var(--night-muted); }
 .cp-field input { font-size: 15px; color: var(--ink); border: 1px solid var(--edge); border-radius: 10px; padding: 11px 12px; background: #FFFFFF; min-width: 0; width: 100%; box-sizing: border-box; }
 .cp-field input.cp-mono { font-size: 13px; }
 .cp-field .cp-btn-ghost { flex: none; font-size: 14px; padding: 0 16px; }
+.cp-lately { display: block; margin: 4px 0 2px; font-family: var(--serif); font-style: italic; font-size: 18px; line-height: 1.45; color: var(--ink-2); text-decoration: none; overflow-wrap: anywhere; }
+.cp-lately:hover { color: var(--ink); }
+.cp-lately .label { font-family: var(--sans); font-style: normal; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 10px; }
+.cp-lately .when { font-family: var(--sans); font-style: normal; font-size: 12px; color: var(--muted); margin-left: 10px; white-space: nowrap; }
