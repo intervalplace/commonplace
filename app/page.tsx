@@ -9,6 +9,7 @@ import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
 import { sha256d } from "@/csd";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
+import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
 
 // ── settings and small stores ───────────────────────────────────────────────
@@ -373,6 +374,23 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey }: { k: CsdKey; balan
   );
 }
 
+// ── what CSD is worth: read once per visit from the open market's best offer ─
+let pricePromise: Promise<number | null> | null = null;
+function usePrice(): number | null {
+  const [p, setP] = useState<number | null>(null);
+  useEffect(() => { (pricePromise ??= usdPerCsd().catch(() => null)).then(setP); }, []);
+  return p;
+}
+// ", about 1.3 cents" for an amount in CSD units, or nothing while the price is unknown
+function inUsd(units: bigint, price: number | null): string {
+  if (!price) return "";
+  const cents = (Number(units) / Number(COIN)) * price * 100;
+  if (cents < 1) return `, about ${cents.toFixed(2).replace(/0$/, "")} cents`;
+  if (cents < 10) return `, about ${cents.toFixed(1).replace(/\.0$/, "")} cents`;
+  if (cents < 100) return `, about ${Math.round(cents)} cents`;
+  return `, about $${(cents / 100).toFixed(2)}`;
+}
+
 // ── taking CSD out ──────────────────────────────────────────────────────────
 const exact = (v: bigint) => { const w = v / COIN, f = (v % COIN).toString().padStart(8, "0").replace(/0+$/, ""); return f ? `${w}.${f}` : `${w}`; };
 function parseCsd(s: string): bigint | null {
@@ -724,6 +742,7 @@ function Topic(c: Ctx & { topic: string }) {
 
 // ── one entry, and what was written in reply ────────────────────────────────
 function EntryView(c: Ctx & { id: Hex }) {
+  const price = usePrice();
   const e = c.byId.get(c.id);
   const replies = c.entries.filter(r => r.replyTo === c.id).sort((a, b) => a.height - b.height);
   const parent = e?.replyTo ? c.byId.get(e.replyTo) : undefined;
@@ -765,7 +784,7 @@ function EntryView(c: Ctx & { id: Hex }) {
             <button className="cp-btn-line" disabled={busy || !c.me || mineAlready || closed} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
               {mineAlready ? "You resonated" : busy ? "Sending…" : "Resonate"}
             </button>
-            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? "Each costs 0.05 CSD, about half a cent, and is public. " : "Connect a wallet to resonate. "}{openLine}</span>
+            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? `Each costs 0.05 CSD${inUsd(MIN_FEE_ATTEST, price)}, and is public. ` : "Connect a wallet to resonate. "}{openLine}</span>
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}
@@ -897,6 +916,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onCl
 }) {
   const [step, setStep] = useState<string | null>(null);
   const [key, setKey] = keyState;
+  const price = usePrice();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const first = useRef<HTMLButtonElement>(null);
@@ -914,7 +934,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onCl
           {doc && <li>The file is stored on Arweave, which keeps it for good (free at this size), and the entry holds its fingerprint, so anyone can check it is exactly this file.</li>}
         </ul>
         <a className="cp-hint" href="#/about" target="_blank" rel="noopener" style={{ marginTop: -8 }}>What being kept for good means</a>
-        <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span className="cp-mono" style={{ color: "var(--ink)" }}>{short(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>Costs 0.25 CSD, about 2.5 cents</span></div>
+        <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span className="cp-mono" style={{ color: "var(--ink)" }}>{short(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
         {!key ? (
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
         ) : short_ ? (
@@ -1023,6 +1043,7 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
   addr: Hex; current?: Profile; balance: bigint | null; onKeep: (pic: number, name: string) => Promise<void>; onClose: () => void;
 }) {
   const [pic, setPic] = useState(current?.pic ?? 0);
+  const price = usePrice();
   const [name, setName] = useState(current?.name ?? "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1053,7 +1074,7 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
           <li>You can change them later. The newest one is the one people see, and the old ones stay on the record.</li>
           <li>Names aren&apos;t unique, so your address always shows beside yours.</li>
         </ul>
-        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Avatar addr={addr} pic={pic} size={28} />{cleanName(name) || "No name"}</span><span>Costs 0.25 CSD, about 2.5 cents</span></div>
+        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Avatar addr={addr} pic={pic} size={28} />{cleanName(name) || "No name"}</span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
         {low && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
           <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
           <TopUpHereFor addr={addr} />
@@ -1168,9 +1189,10 @@ const kb = (n: number) => n < 1024 ? `${n} bytes` : `${(n / 1024).toLocaleString
 
 // How much more fits. The chain counts bytes: plain letters are one each, letters like æ, ø and
 // å are two, and an emoji is four, so the number can drop by more than one per character
-function Left({ left }: { left: number }) {
+const MAX_ENTRY_BYTES = 509; // a uri holds 512 bytes, less the "cp:" prefix
+function Left({ left, what = "" }: { left: number; what?: string }) {
   const tip = "Counted in bytes: most letters are one, letters like æ, ø and å are two, an emoji is four.";
-  return <span className={`cp-hint${left < 0 ? " over" : ""}`} title={tip}>{left < 0 ? `${-left} too long` : `${left} left`}</span>;
+  return <span className={`cp-hint${left < 0 ? " over" : ""}`} title={tip}>{left < 0 ? `${-left} too long` : `${left} left${what ? " " + what : ""}`}</span>;
 }
 
 // The document an entry points at, read from Arweave and checked against the entry's fingerprint
@@ -1198,6 +1220,7 @@ function DocWriter({ c, topic }: { c: Ctx; topic: string }) {
   const [doc, setDoc] = useState<Doc | null>(null);
   const [title, setTitle] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const autoTitle = useRef("");
   const pick = async (f: File | undefined) => {
     setErr(null); setDoc(null);
     if (!f) return;
@@ -1207,23 +1230,27 @@ function DocWriter({ c, topic }: { c: Ctx; topic: string }) {
     const bytes = new Uint8Array(await f.arrayBuffer());
     const text = new TextDecoder().decode(bytes);
     const h = /^#\s+(.+)$/m.exec(text);
-    setTitle(t => t || (h ? h[1].trim() : f.name.replace(/\.[^.]+$/, "")).slice(0, 200));
+    const guess = (h ? h[1].trim() : f.name.replace(/\.[^.]+$/, "")).slice(0, 200);
+    const prev = autoTitle.current;
+    autoTitle.current = guess;
+    setTitle(t => (!t || t === prev ? guess : t));
     setDoc({ bytes, type, name: f.name });
   };
   const left = docRoom(title.trim());
+  const docFits = !!doc && room(new TextDecoder().decode(doc.bytes).trim()) >= 0;
   return (
     <div className="cp-file">
       <label className="cp-hint" style={{ fontSize: 14, display: "flex", flexDirection: "column", gap: 8 }}>
         A thesis, an essay, notes: any Markdown or text file up to {kb(FREE_BYTES)}.
         <input type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" onChange={e => pick(e.target.files?.[0])} />
       </label>
-      {doc && <span className="cp-hint">{doc.name}, {kb(doc.bytes.length)}</span>}
+      {doc && <span className="cp-hint">{doc.name}, {kb(doc.bytes.length)}. {docFits ? "This would fit in an ordinary entry, which keeps the words themselves on Compute Substrate. Documents are for writing longer than an entry holds." : `That's ${doc.bytes.length >= 2 * MAX_ENTRY_BYTES ? `about ${Math.round(doc.bytes.length / MAX_ENTRY_BYTES)} entries' worth` : "more than an entry holds"}. The file itself goes to Arweave, and only its title and fingerprint go on Compute Substrate.`}</span>}
       {err && <span className="cp-hint over">{err}</span>}
       <label className="cp-topic" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>Title
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="What it is called" style={{ width: "100%", borderRadius: 8, fontSize: 16, padding: "10px 12px" }} />
       </label>
       <div className="cp-row" style={{ justifyContent: "flex-end" }}>
-        {title && <Left left={left} />}
+        {title && <Left left={left} what="for the title" />}
         <button className="cp-btn" disabled={!doc || !title.trim() || left < 0 || !topicOk(topic)} onClick={() => doc && c.startKeep(title.trim(), topic, undefined, () => { setDoc(null); setTitle(""); }, doc)}>Publish it</button>
       </div>
     </div>

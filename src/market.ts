@@ -124,6 +124,12 @@ export async function quotes(spend: bigint, skip: Set<string> = new Set()): Prom
   return out.sort((a, b) => (b.csd > a.csd ? 1 : b.csd < a.csd ? -1 : 0));
 }
 
+// What a little CSD costs right now: the best maker's price for a small buy, in dollars per CSD
+export async function usdPerCsd(): Promise<number | null> {
+  const q = (await quotes(5n * USDC_UNIT))[0];
+  return q && q.csd > 0n ? (Number(q.usdc) / 1e6) / (Number(q.csd) / 1e8) : null;
+}
+
 // ── the buyer's side ────────────────────────────────────────────────────────
 export type TopUp = { authHash: Hex; aonHash: string; maker: string; csd: string; total: string; at: number; auth: Record<string, string>; status: "waiting" | "locked" | "done" | "refunded" | "failed"; receipt?: string };
 
