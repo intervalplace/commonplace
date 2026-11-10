@@ -257,7 +257,7 @@ export default function Page() {
         <a href="#/about">About</a>
         <span>Node: {base.replace(/^https?:\/\//, "")}</span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
-        {height > 0 && <span title="The chain ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
+        {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
       {keeping && (
         <KeepDialog
@@ -506,7 +506,7 @@ function Topics(c: Ctx) {
         <h1 className="cp-topic-title" style={{ fontSize: 44 }}>Topics</h1>
         <p className="cp-hint" style={{ fontSize: 15, marginTop: 10 }}>Anyone can start one by writing under it. Most recently written in first.</p>
       </div>
-      {!c.loaded ? <p className="cp-empty">Reading the chain…</p> : ts.length === 0 ? <p className="cp-empty">No topics yet. Whatever you write first names the first one.</p> : (
+      {!c.loaded ? <p className="cp-empty">Reading the network…</p> : ts.length === 0 ? <p className="cp-empty">No topics yet. Whatever you write first names the first one.</p> : (
         <nav aria-label="Topics" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {ts.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count.toLocaleString("en-US")} {t.count === 1 ? "entry" : "entries"}{t.last ? `, ${when(t.last)}` : ""}</span></a>)}
         </nav>
@@ -564,7 +564,7 @@ function Topic(c: Ctx & { topic: string }) {
               <h2 id="now" className="cp-h2">{topEpoch === epochOf(c.height) - 1 ? "Resonated most last epoch" : "Resonating this epoch"}</h2>
               <p className="cp-hint" style={{ margin: "0 0 4px" }}>
                 {(() => { const ep = topEpoch ?? epochOf(c.height); return `Epoch ${ep.toLocaleString("en-US")}, blocks ${(ep * EPOCH_LEN).toLocaleString("en-US")} to ${(ep * EPOCH_LEN + EPOCH_LEN - 1).toLocaleString("en-US")}${ep === epochOf(c.height) ? `, ends in ${epochEnds(c.height)}` : ""}. `; })()}
-                The chain ranks each topic anew every epoch (30 blocks, about an hour), by what was paid to resonate.
+                The network ranks each topic anew every epoch (30 blocks, about an hour), by what was paid to resonate.
                 {nowEntries.length === 0 ? " Nothing here has been resonated with this epoch or the last." : ""}
               </p>
               {nowEntries.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} showAuthor showTopic={false} />)}
@@ -572,7 +572,7 @@ function Topic(c: Ctx & { topic: string }) {
           )}
           <section className="cp-list" aria-labelledby="all">
             <h2 id="all" className="cp-h2">Newest first</h2>
-            {list.length === 0 ? <p className="cp-empty">{c.loaded ? "Nothing here yet. Write under this topic and you're its first entry." : "Reading the chain…"}</p> :
+            {list.length === 0 ? <p className="cp-empty">{c.loaded ? "Nothing here yet. Write under this topic and you're its first entry." : "Reading the network…"}</p> :
               list.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} showAuthor showTopic={false} />)}
           </section>
         </main>
@@ -596,7 +596,7 @@ function EntryView(c: Ctx & { id: Hex }) {
   const [expires, setExpires] = useState<number | null>(null);
   useEffect(() => { setExpires(null); c.api.proposal(c.id).then(p => p && setExpires(Number(p.expires_epoch))).catch(() => {}); }, [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { c.needAuthors([c.id, ...replies.filter(r => !r.pending).map(r => r.id)]); }, [c.id, replies.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!e) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "This entry isn't on the chain this node follows, or not yet." : "Reading the chain…"}</p></main>;
+  if (!e) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "This entry isn't on the network this node follows, or not yet." : "Reading the network…"}</p></main>;
   const r = c.resonance[e.id], href = e.kind === "link" ? linkHref(e.text) : null;
   const left = room(text.trim(), e.id);
   const mineAlready = !!c.resonated[e.id];
@@ -726,7 +726,7 @@ function Everyone(c: Ctx) {
             {!p.pending && <a href={hrefEntry(p.id)} style={{ fontSize: 14 }}>Open</a>}
           </div>
         )}
-        {shown.length === 0 && <div className="cp-sky-empty">{c.loaded ? (range === "day" ? "Nothing was kept in the last 24 hours. It's quiet tonight." : "The sky is empty. The first entry kept will be its first star.") : "Reading the chain…"}</div>}
+        {shown.length === 0 && <div className="cp-sky-empty">{c.loaded ? (range === "day" ? "Nothing was kept in the last 24 hours. It's quiet tonight." : "The sky is empty. The first entry kept will be its first star.") : "Reading the network…"}</div>}
         <div className="axis"><span>{shown.length ? when(t0) : ""}</span><span>now</span></div>
       </div>
       {topics.length > 0 && (
@@ -810,9 +810,19 @@ function About() {
         else&apos;s under the same topic, and zoomed out, all of it at once.
       </p>
       <section>
+        <h2>How it is different</h2>
+        <p>
+          Most places you write online belong to someone. They decide what is shown and in what order, they can change
+          the rules, and when they close, what you wrote goes with them. Here, entries come in the order they were
+          written, or by how much people resonated with them, in the open. Nothing is ranked for you by anyone&apos;s
+          algorithm, there are no ads and no tracking, and what you write isn&apos;t stored by this site at all, so it
+          has nothing to take with it.
+        </p>
+      </section>
+      <section>
         <h2>What you write is kept for good</h2>
         <p>
-          Each entry is written to Compute Substrate, a proof-of-work chain held by many independent computers, with
+          Each entry is written to Compute Substrate, a proof-of-work network of many independent computers, with
           the time it was written. Nobody can edit it, remove it or backdate it. That includes you, the people who made
           this site, and anyone who asks them to. Write what you would be glad to have kept.
         </p>
@@ -830,8 +840,8 @@ function About() {
         <h2>What it costs</h2>
         <p>
           Keeping an entry costs 0.25 CSD. Resonating with one, a public sign that it meant something to you, costs
-          0.05 CSD. The fees go to the miners who keep the chain running; nobody earns from what you write. Every epoch,
-          about an hour, the chain ranks each topic&apos;s entries by resonance. If you have no CSD, the page can buy a
+          0.05 CSD. The fees go to the miners who keep the network running; nobody earns from what you write. Every epoch,
+          about an hour, the network ranks each topic&apos;s entries by resonance. If you have no CSD, the page can buy a
           little with USDC on the open CSD/USDC market, with no gas.
         </p>
       </section>
@@ -847,7 +857,7 @@ function About() {
         <h2>What this site doesn&apos;t show</h2>
         <p>
           This site hides very few entries: only clearly illegal content, only when someone reports it, and never for
-          words or opinions. Every hidden entry is listed publicly with its reason. Hidden entries stay on the chain,
+          words or opinions. Every hidden entry is listed publicly with its reason. Hidden entries stay on the network,
           and other apps can show them. <a href={HIDDEN_POLICY} target="_blank" rel="noopener">The rules and the list</a>.
         </p>
       </section>
@@ -900,7 +910,7 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
           <input value={name} onChange={e => setName(e.target.value)} maxLength={NAME_MAX} placeholder="Leave empty to go without one" style={{ width: "100%", borderRadius: 8, fontSize: 16, padding: "10px 12px" }} />
         </label>
         <ul>
-          <li>Your picture and name are kept like an entry: public, and on chain for good.</li>
+          <li>Your picture and name are kept like an entry: public, and kept on the network for good.</li>
           <li>You can change them later. The newest one is the one people see, and the old ones stay on the record.</li>
           <li>Names aren&apos;t unique, so your address always shows beside yours.</li>
         </ul>
@@ -969,7 +979,7 @@ function Person(c: Ctx & { addr: Hex }) {
 
       <section className="cp-list" aria-labelledby="kept">
         <h2 id="kept" className="cp-h2">Kept</h2>
-        {kept.length === 0 ? <p className="cp-empty">{acts || failed ? "Nothing kept yet." : "Reading the chain…"}</p> :
+        {kept.length === 0 ? <p className="cp-empty">{acts || failed ? "Nothing kept yet." : "Reading the network…"}</p> :
           kept.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} />)}
       </section>
 
@@ -991,7 +1001,7 @@ function Person(c: Ctx & { addr: Hex }) {
 
       <section className="cp-list" aria-labelledby="liked">
         <h2 id="liked" className="cp-h2">Resonated with</h2>
-        {liked.length === 0 ? <p className="cp-empty">{acts || failed ? "Nothing yet." : "Reading the chain…"}</p> :
+        {liked.length === 0 ? <p className="cp-empty">{acts || failed ? "Nothing yet." : "Reading the network…"}</p> :
           liked.map(e => <EntryItem key={e.id} e={e} showAuthor resonance={c.resonance[e.id]} />)}
       </section>
     </main>

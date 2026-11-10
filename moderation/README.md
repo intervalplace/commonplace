@@ -1,7 +1,7 @@
 # What this site doesn't show
 
 Commonplace is one window onto a record that nobody controls. Nothing here can remove an entry
-from Compute Substrate, edit it, or stop anyone keeping one. Every entry stays on chain, and any
+from Compute Substrate, edit it, or stop anyone keeping one. Every entry stays on the network, and any
 other client can show it.
 
 This window, the site at commonplace.place, does choose not to display a few things. The rules:
