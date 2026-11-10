@@ -44,6 +44,15 @@ function when(t: number): string {
   if (days < 7) return `${d.toLocaleDateString("en-GB", { weekday: "long" })} ${hm}`;
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "long", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
 }
+// Epochs: the chain groups blocks in 30s (about an hour at its 2-minute target). Each topic is
+// ranked anew every epoch, and an entry can be resonated with until its expiry epoch.
+const BLOCK_SECS = 120;
+const epochOf = (height: number) => Math.floor(height / EPOCH_LEN);
+function epochEnds(height: number): string {
+  const blocksLeft = (epochOf(height) + 1) * EPOCH_LEN - height;
+  const mins = Math.max(1, Math.round((blocksLeft * BLOCK_SECS) / 60));
+  return mins < 90 ? `about ${mins} minute${mins === 1 ? "" : "s"}` : `about ${Math.round(mins / 60)} hours`;
+}
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
@@ -229,6 +238,7 @@ export default function Page() {
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
         <span>Node: {base.replace(/^https?:\/\//, "")}</span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
+        {height > 0 && <span title="The chain ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
       {keeping && (
         <KeepDialog
@@ -480,15 +490,18 @@ function Topic(c: Ctx & { topic: string }) {
   const list = c.entries.filter(e => e.topic === c.topic && e.kind !== "reply");
   const all = c.entries.filter(e => e.topic === c.topic);
   const [top, setTop] = useState<Hex[]>([]);
+  const [topEpoch, setTopEpoch] = useState<number | null>(null);
   useEffect(() => { c.needAuthors(list.slice(0, 40).filter(e => !e.pending).map(e => e.id)); }, [c.topic, list.length]); // eslint-disable-line react-hooks/exhaustive-deps
   // what consensus ranks highest in this topic for the current epoch (and the one before, early on)
   useEffect(() => {
     if (!c.height) return;
     const ep = Math.floor(c.height / EPOCH_LEN);
     const api = node(nodeUrl());
+    // this epoch's ranking; early in an epoch, when nobody has resonated yet, the last one's
     Promise.allSettled([ep, ep - 1].filter(e => e >= 0).map(e => api.topk(e, c.topic))).then(rs => {
-      const rows = rs.flatMap(r => (r.status === "fulfilled" ? r.value : []));
-      setTop([...new Set(rows.filter(r => Number(r.score) > 0).map(r => String(r.proposal_id).toLowerCase() as Hex))]);
+      const ids = (i: number) => { const r = rs[i]; return r && r.status === "fulfilled" ? r.value.filter(x => Number(x.score) > 0).map(x => String(x.proposal_id).toLowerCase() as Hex) : []; };
+      const cur = ids(0), prev = ids(1);
+      if (cur.length) { setTop(cur); setTopEpoch(ep); } else if (prev.length) { setTop(prev); setTopEpoch(ep - 1); } else { setTop([]); setTopEpoch(null); }
     });
   }, [c.height, c.topic]);
   const now = list.map(e => e.id).filter(id => top.includes(id));
@@ -515,9 +528,14 @@ function Topic(c: Ctx & { topic: string }) {
               <figcaption className="cp-strip-cap"><span>{t0 ? when(t0) : ""}</span><span>now</span></figcaption>
             </figure>
           )}
-          {nowEntries.length > 0 && now.length >= 0 && (
+          {list.length > 0 && c.height > 0 && (
             <section className="cp-list" aria-labelledby="now">
-              <h2 id="now" className="cp-h2">Resonating this hour</h2>
+              <h2 id="now" className="cp-h2">{topEpoch === epochOf(c.height) - 1 ? "Resonated most last epoch" : "Resonating this epoch"}</h2>
+              <p className="cp-hint" style={{ margin: "0 0 4px" }}>
+                {(() => { const ep = topEpoch ?? epochOf(c.height); return `Epoch ${ep.toLocaleString("en-US")}, blocks ${(ep * EPOCH_LEN).toLocaleString("en-US")} to ${(ep * EPOCH_LEN + EPOCH_LEN - 1).toLocaleString("en-US")}${ep === epochOf(c.height) ? `, ends in ${epochEnds(c.height)}` : ""}. `; })()}
+                The chain ranks each topic anew every epoch (30 blocks, about an hour), by what was paid to resonate.
+                {nowEntries.length === 0 ? " Nothing here has been resonated with this epoch or the last." : ""}
+              </p>
               {nowEntries.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} showAuthor showTopic={false} />)}
             </section>
           )}
@@ -544,11 +562,19 @@ function EntryView(c: Ctx & { id: Hex }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [expires, setExpires] = useState<number | null>(null);
+  useEffect(() => { setExpires(null); c.api.proposal(c.id).then(p => p && setExpires(Number(p.expires_epoch))).catch(() => {}); }, [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { c.needAuthors([c.id, ...replies.filter(r => !r.pending).map(r => r.id)]); }, [c.id, replies.length]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!e) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "This entry isn't on the chain this node follows, or not yet." : "Reading the chain…"}</p></main>;
   const r = c.resonance[e.id], href = e.kind === "link" ? linkHref(e.text) : null;
   const left = room(text.trim(), e.id);
   const mineAlready = !!c.resonated[e.id];
+  const ep = epochOf(c.height);
+  const closed = expires !== null && c.height > 0 && ep > expires;
+  const openLine = expires === null || !c.height ? "" : closed
+    ? `Resonance closed after epoch ${expires.toLocaleString("en-US")}, when this entry expired.`
+    : expires - ep > 100_000 ? "Open for resonance for good."
+    : `Open for resonance until the end of epoch ${expires.toLocaleString("en-US")}, about ${when(Math.floor(Date.now() / 1000) + ((expires + 1) * EPOCH_LEN - c.height) * BLOCK_SECS)}.`;
   return (
     <main className="cp-main">
       {parent && <a className="cp-hint" href={hrefEntry(parent.id)}>In reply to: {parent.text.slice(0, 90)}{parent.text.length > 90 ? "…" : ""}</a>}
@@ -568,10 +594,10 @@ function EntryView(c: Ctx & { id: Hex }) {
         </>}
         {!e.pending && (
           <div className="cp-row" style={{ justifyContent: "flex-start" }}>
-            <button className="cp-btn-line" disabled={busy || !c.me || mineAlready} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
+            <button className="cp-btn-line" disabled={busy || !c.me || mineAlready || closed} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
               {mineAlready ? "You resonated" : busy ? "Sending…" : "Resonate"}
             </button>
-            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{c.me ? "Each costs 0.05 CSD, about half a cent, and is public." : "Connect a wallet to resonate."}</span>
+            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? "Each costs 0.05 CSD, about half a cent, and is public. " : "Connect a wallet to resonate. "}{openLine}</span>
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}

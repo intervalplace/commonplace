@@ -176,7 +176,7 @@ export function node(base: string) {
     proposals: async (limit = 500): Promise<ProposalItem[]> => (await get(`/proposals/${limit}`)).proposals ?? [],
     proposal: async (id: Hex) => {
       const j = await get(`/proposal/${strip(id)}`);
-      return j.ok ? (j.proposal as { proposer: Hex; fee: number; created_height: number; domain: string; uri: string }) : null;
+      return j.ok ? (j.proposal as { proposer: Hex; fee: number; created_height: number; created_epoch: number; expires_epoch: number; domain: string; uri: string }) : null;
     },
     // every attestation ever, summed per proposal
     resonance: async (): Promise<Record<string, { count: number; weight: number }>> => {
