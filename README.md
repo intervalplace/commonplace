@@ -47,6 +47,12 @@ themselves stay on the network, and other clients can show them.
   against the entry's fingerprint before showing it. Text only, by design: Markdown and plain text.
 - **A guestbook** is the entries under the topic `cp.guestbook.<address, 40 hex>`, so every key
   has one without doing anything. Topics starting `cp.` belong to the app and aren't listed.
+- **A page style** is an entry under the topic `cp.style` with `uri`
+  `cp:style:<background>:<typeface>:<pinned entry id, or nothing>:<a few lines about you>`. The
+  newest one from a key is how that key's page looks. Backgrounds are `paper`, `night`, `grid`,
+  `notebook`, `kraft`, `print`, `moss` and `tiles`; typefaces `serif`, `mono` and `sans`. It is a
+  fixed vocabulary rather than CSS, so no page can restyle the site into something it isn't (a
+  fake wallet prompt, say). A client that doesn't know a name shows its own default.
 - **Resonating** is a CSD attestation on the entry. Its fee is its weight, and it is public.
   The network ranks each topic's entries by that weight every epoch (30 blocks, about an hour).
 - **Costs**, set by the network: 0.25 CSD to keep an entry, 0.05 CSD to resonate. The fees go to

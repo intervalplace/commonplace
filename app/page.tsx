@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
-import { DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, cleanName, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
+import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
@@ -204,6 +204,16 @@ export default function Page() {
     return out;
   }, [all]);
   useEffect(() => { needAuthors(chain.filter(e => e.kind === "profile").map(e => e.id)); }, [chain, needAuthors]);
+  // each key's newest page style, not counting any this site hides
+  const styles = useMemo(() => {
+    const best: Record<string, Entry> = {};
+    for (const e of all) if (e.kind === "style" && e.style && e.author && e.hidden === undefined) {
+      const b = best[e.author];
+      if (!b || (e.pending && !b.pending) || (!!e.pending === !!b.pending && e.height > b.height)) best[e.author] = e;
+    }
+    return Object.fromEntries(Object.entries(best).map(([a, e]) => [a, e.style!])) as Record<string, PageStyle>;
+  }, [all]);
+  useEffect(() => { needAuthors(all.filter(e => e.kind === "style" && !e.pending).map(e => e.id)); }, [all, needAuthors]);
   const byId = useMemo(() => new Map(entries.map(e => [e.id, e])), [entries]);
 
   // which topics to count: those with a Commonplace entry and, by /domains, any attestations;
@@ -260,6 +270,13 @@ export default function Page() {
     const p: Pending = { id, topic: PROFILE_TOPIC, text: cleanName(name), kind: "profile", pic, name: cleanName(name), height: t.height + 1, time: Math.floor(Date.now() / 1000), pending: true, author: key.addr20, sentAt: Date.now() };
     setPending(prev => { const next = [p, ...prev]; save(K_PENDING, next); return next; });
   };
+  const keepStyle = async (st: PageStyle) => {
+    if (!key) throw new Error("Connect a wallet first.");
+    const t = await api.tip();
+    const id = await send(styleArgs(st, t.height), MIN_FEE_PROPOSE);
+    const p: Pending = { id, topic: STYLE_TOPIC, text: st.bio, kind: "style", style: st, height: t.height + 1, time: Math.floor(Date.now() / 1000), pending: true, author: key.addr20, sentAt: Date.now() };
+    setPending(prev => { const next = [p, ...prev]; save(K_PENDING, next); return next; });
+  };
   const [editingProfile, setEditingProfile] = useState(false);
   const [eth, setEth] = useState<EthWallet | null>(null);
   const resonate = async (id: Hex) => {
@@ -267,7 +284,7 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
 
   return (
     <Pay.Provider value={{ eth, setEth, api, refresh: () => { refreshBalance(); setTimeout(refreshBalance, 90_000); } }}>
@@ -336,6 +353,7 @@ type Ctx = {
   editProfile: () => void;
   all: Entry[]; api: ReturnType<typeof node>; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
+  styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
@@ -1186,6 +1204,21 @@ function Person(c: Ctx & { addr: Hex }) {
   const [text, setText] = useState("");
   const left = room(text.trim());
   const [copied, setCopied] = useState(false);
+
+  // how the page looks: the key's newest style entry, or while its owner edits, the draft
+  useEffect(() => { c.loadTopic(STYLE_TOPIC); c.loadTopic(PROFILE_TOPIC); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [styling, setStyling] = useState(false);
+  const [draft, setDraft] = useState<PageStyle | null>(null);
+  const style = (styling && draft) || c.styles[c.addr];
+  usePageStyle(style);
+  const pinned = style?.pin ? c.byId.get(style.pin) : undefined;
+  useEffect(() => {
+    // a pinned entry from a topic that isn't loaded yet: find its topic and read it
+    if (!style?.pin || pinned) return;
+    c.api.proposal(style.pin).then(p => { if (p?.domain && !p.domain.startsWith("cp.")) c.loadTopic(p.domain); }).catch(() => {});
+  }, [style?.pin, !!pinned]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showPin = pinned && pinned.hidden === undefined && pinned.kind !== "link";
+
   return (
     <main className="cp-main">
       <header style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
@@ -1208,7 +1241,23 @@ function Person(c: Ctx & { addr: Hex }) {
           </div>
         </div>
       </header>
-      {isMe && <p className="cp-notice" style={{ margin: 0 }}>This is your page as everyone sees it. <a href="#/">Back to writing</a></p>}
+      {style?.bio && <p className="cp-bio">{style.bio}</p>}
+      {showPin && (
+        <section className="cp-pin" aria-labelledby="pinned">
+          <h2 id="pinned" className="cp-h2">Pinned</h2>
+          <EntryItem e={pinned} showAuthor={pinned.author !== c.addr} resonance={c.resonance[pinned.id]} />
+        </section>
+      )}
+      {isMe && (
+        <p className="cp-notice cp-row" style={{ margin: 0 }}>
+          <span>This is your page as everyone sees it. <a href="#/">Back to writing</a></span>
+          <button className="cp-btn-ghost" onClick={() => { setDraft(c.styles[c.addr] ?? { bg: "paper", type: "serif", bio: "" }); setStyling(true); }}>Style your page</button>
+        </p>
+      )}
+      {styling && draft && c.me && (
+        <StyleDialog me={c.me.addr20} balance={c.balance} draft={draft} setDraft={setDraft} current={c.styles[c.addr]} kept={kept.filter(e => !e.pending && e.hidden === undefined && e.kind !== "link")}
+          onKeep={async st => { await c.keepStyle(st); setStyling(false); }} onClose={() => setStyling(false)} />
+      )}
       {failed && <p className="cp-notice" style={{ margin: 0 }}>The node didn't answer for this page. It may be busy; it tries again in a minute.</p>}
 
       <section className="cp-list" aria-labelledby="kept">
@@ -1239,6 +1288,89 @@ function Person(c: Ctx & { addr: Hex }) {
           liked.map(e => <EntryItem key={e.id} e={e} showAuthor resonance={c.resonance[e.id]} />)}
       </section>
     </main>
+  );
+}
+
+// A page's look is a few names from a fixed list, applied as classes on the body for as long as
+// the page is open (globals.css has each one). Names this version doesn't know show as the default.
+function usePageStyle(st?: PageStyle) {
+  const bg = st && (BACKGROUNDS as readonly string[]).includes(st.bg) ? st.bg : "paper";
+  const type = st && (TYPEFACES as readonly string[]).includes(st.type) ? st.type : "serif";
+  useEffect(() => {
+    const cls = [`st-${bg}`, `ty-${type}`];
+    document.body.classList.add(...cls);
+    return () => document.body.classList.remove(...cls);
+  }, [bg, type]);
+}
+
+const BG_NAMES: Record<string, string> = { paper: "Paper", night: "Night sky", grid: "Graph paper", notebook: "Notebook", kraft: "Kraft", print: "Faded print", moss: "Moss", tiles: "Tiles" };
+const TYPE_NAMES: Record<string, string> = { serif: "Serif", mono: "Typewriter", sans: "Plain" };
+
+// ── styling your page: shown beside the page, which changes as you choose ───
+function StyleDialog({ me, balance, draft, setDraft, current, kept, onKeep, onClose }: {
+  me: Hex; balance: bigint | null; draft: PageStyle; setDraft: (s: PageStyle) => void; current?: PageStyle; kept: Entry[];
+  onKeep: (s: PageStyle) => Promise<void>; onClose: () => void;
+}) {
+  const price = usePrice();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEscape(onClose, busy);
+  const set = (p: Partial<PageStyle>) => setDraft({ ...draft, ...p });
+  const left = styleRoom({ ...draft, bio: draft.bio.trim() });
+  const low = balance !== null && balance < MIN_FEE_PROPOSE;
+  const clean = { ...draft, bio: draft.bio.trim() };
+  const same = current ? current.bg === clean.bg && current.type === clean.type && (current.pin ?? "") === (clean.pin ?? "") && current.bio === clean.bio
+    : clean.bg === "paper" && clean.type === "serif" && !clean.pin && !clean.bio;
+  return (
+    <div className="cp-backdrop cp-side">
+      <section className="cp-dialog" role="dialog" aria-modal="false" aria-labelledby="st-title">
+        <h2 id="st-title">Your page</h2>
+        <fieldset className="cp-fs">
+          <legend className="cp-h2">Background</legend>
+          <div className="cp-swatches">
+            {BACKGROUNDS.map(b => (
+              <label key={b} className="cp-swatch" data-on={draft.bg === b || undefined}>
+                <input type="radio" name="bg" value={b} checked={draft.bg === b} onChange={() => set({ bg: b })} />
+                <span className={`sw sw-${b}`} aria-hidden="true" />
+                <span>{BG_NAMES[b]}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset className="cp-fs">
+          <legend className="cp-h2">Typeface</legend>
+          <div className="cp-modes">
+            {TYPEFACES.map(t => <button key={t} type="button" aria-pressed={draft.type === t} className={`tf-${t}`} onClick={() => set({ type: t })}>{TYPE_NAMES[t]}</button>)}
+          </div>
+        </fieldset>
+        <label className="cp-field">
+          <span className="cp-h2">Pinned at the top</span>
+          <select value={draft.pin ?? ""} onChange={e => set({ pin: (e.target.value || undefined) as Hex | undefined })}>
+            <option value="">Nothing pinned</option>
+            {draft.pin && !kept.some(e => e.id === draft.pin) && <option value={draft.pin}>The entry pinned now</option>}
+            {kept.map(e => <option key={e.id} value={e.id}>{(e.kind === "doc" ? "Document: " : "") + (e.text.length > 70 ? e.text.slice(0, 70).trimEnd() + "…" : e.text)}</option>)}
+          </select>
+        </label>
+        <label className="cp-field">
+          <span className="cp-h2">A few lines about you</span>
+          <textarea value={draft.bio} rows={4} onChange={e => set({ bio: e.target.value })} placeholder="Who you are, what you write about. Or leave it empty." />
+          {draft.bio && <Left left={left} />}
+        </label>
+        <ul>
+          <li>Your page&apos;s look is kept like an entry: public, and on the network for good. The newest one is the one people see.</li>
+        </ul>
+        <div className="facts"><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
+        {low && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+          <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <TopUpHereFor addr={me} />
+        </div>}
+        {err && <p className="err">{err}</p>}
+        <div className="actions">
+          <button className="cp-btn" disabled={busy || low || balance === null || same || left < 0} onClick={async () => { setBusy(true); setErr(null); try { await onKeep(clean); } catch (x) { setErr(nice(x)); setBusy(false); } }}>{busy ? "Keeping…" : "Keep it"}</button>
+          <button className="cp-btn-ghost" disabled={busy} onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Not now</button>
+        </div>
+      </section>
+    </div>
   );
 }
 
