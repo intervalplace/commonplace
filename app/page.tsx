@@ -89,6 +89,19 @@ export default function Page() {
   const [loaded, setLoaded] = useState(false);
   const [netError, setNetError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
+  // every topic on chain with its count (the newest-500 list can't hold them all), and entries
+  // read per topic beyond that list
+  const [domains, setDomains] = useState<{ domain: string; proposals: number; attestations: number }[]>([]);
+  const [older, setOlder] = useState<Map<string, Entry>>(new Map());
+  const reading = useRef(new Set<string>());
+  const loadTopic = useCallback(async (d: string) => {
+    if (reading.current.has(d)) return;
+    reading.current.add(d);
+    try {
+      const es = (await api.proposalsIn(d, 500)).map(parseEntry);
+      setOlder(prev => { const next = new Map(prev); for (const e of es) next.set(e.id, e); return next; });
+    } catch { reading.current.delete(d); }
+  }, [api]);
   const [authors, setAuthors] = useState<Record<string, Hex>>({});
   useEffect(() => { setPending(load(K_PENDING, [])); setAuthors(load(K_AUTHORS, {})); }, []);
 
@@ -96,6 +109,7 @@ export default function Page() {
     try {
       const [t, ps] = await Promise.all([api.tip(), api.proposals(500)]);
       setHeight(t.height);
+      api.domains().then(setDomains).catch(() => {});
       const es = ps.map(parseEntry).sort((a, b) => b.height - a.height || (a.id < b.id ? -1 : 1));
       setChain(es);
       api.resonance().then(setResonance).catch(() => {});
@@ -169,12 +183,14 @@ export default function Page() {
   useEffect(() => { refreshBalance(); const t = setInterval(refreshBalance, 30_000); return () => clearInterval(t); }, [refreshBalance]);
 
   const all: Entry[] = useMemo(() => {
-    const withAuthor = chain.map(e => HIDDEN.has(e.id)
+    const ids = new Set(chain.map(e => e.id));
+    const merged = [...chain, ...[...older.values()].filter(e => !ids.has(e.id))];
+    const withAuthor = merged.map(e => HIDDEN.has(e.id)
       ? { ...e, author: authors[e.id], hidden: HIDDEN.get(e.id) || "listed in this site's hidden entries", text: "", docId: undefined }
       : { ...e, author: authors[e.id] });
     const mine = pending.map(p => ({ ...p, author: key?.addr20 ?? p.author }));
     return [...mine, ...withAuthor];
-  }, [chain, pending, authors, key]);
+  }, [chain, older, pending, authors, key]);
   const entries = useMemo(() => all.filter(e => e.kind !== "profile" && !isReserved(e.topic)), [all]);
   // each key's newest profile entry (pending ones first, so a change shows at once)
   const profiles = useMemo(() => {
@@ -221,7 +237,7 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
 
   return (
     <Pay.Provider value={{ eth, setEth, api, refresh: () => { refreshBalance(); setTimeout(refreshBalance, 90_000); } }}>
@@ -287,6 +303,7 @@ type Ctx = {
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
   editProfile: () => void;
   all: Entry[]; api: ReturnType<typeof node>; learnAuthors: (m: Record<string, Hex>) => void;
+  domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
@@ -468,8 +485,18 @@ function topicStats(entries: Entry[]) {
   return [...m.values()].sort((a, b) => b.last - a.last);
 }
 
+// every topic: from the node's list of all of them, with what has been read so far for the dates
+function allTopics(c: Ctx) {
+  const seen = new Map(topicStats(c.entries).map(t => [t.topic, t]));
+  for (const d of c.domains) if (!isReserved(d.domain)) {
+    const s = seen.get(d.domain);
+    seen.set(d.domain, { topic: d.domain, count: Math.max(d.proposals, s?.count ?? 0), last: s?.last ?? 0 });
+  }
+  return [...seen.values()];
+}
+
 function Topics(c: Ctx) {
-  const ts = topicStats(c.entries);
+  const ts = allTopics(c).sort((a, b) => b.last - a.last || b.count - a.count);
   return (
     <main className="cp-main">
       <div>
@@ -478,7 +505,7 @@ function Topics(c: Ctx) {
       </div>
       {!c.loaded ? <p className="cp-empty">Reading the chain…</p> : ts.length === 0 ? <p className="cp-empty">No topics yet. Whatever you write first names the first one.</p> : (
         <nav aria-label="Topics" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {ts.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count} {t.count === 1 ? "entry" : "entries"}, {when(t.last)}</span></a>)}
+          {ts.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count.toLocaleString("en-US")} {t.count === 1 ? "entry" : "entries"}{t.last ? `, ${when(t.last)}` : ""}</span></a>)}
         </nav>
       )}
       {c.netError && <p className="cp-notice">{c.netError}</p>}
@@ -506,7 +533,8 @@ function Topic(c: Ctx & { topic: string }) {
   }, [c.height, c.topic]);
   const now = list.map(e => e.id).filter(id => top.includes(id));
   const nowEntries = top.map(id => c.byId.get(id)).filter((e): e is Entry => !!e && e.kind !== "reply");
-  const others = topicStats(c.entries).filter(t => t.topic !== c.topic).slice(0, 12);
+  useEffect(() => { c.loadTopic(c.topic); }, [c.topic]); // eslint-disable-line react-hooks/exhaustive-deps
+  const others = allTopics(c).filter(t => t.topic !== c.topic).sort((a, b) => b.count - a.count);
   const t0 = all.length ? Math.min(...all.map(e => e.time)) : 0, t1 = Date.now() / 1000;
   return (
     <div className="cp-wide">
@@ -628,11 +656,22 @@ function EntryView(c: Ctx & { id: Hex }) {
 function Everyone(c: Ctx) {
   const [range, setRange] = useState<"day" | "all">("all");
   const [picked, setPicked] = useState<string | null>(null);
+  // since the first entry means every topic, not just the newest entries: read each one
+  useEffect(() => {
+    if (range !== "all") return;
+    let live = true;
+    (async () => {
+      const ds = c.domains.filter(d => !isReserved(d.domain)).map(d => d.domain);
+      for (let i = 0; i < ds.length && live; i += 4) await Promise.all(ds.slice(i, i + 4).map(d => c.loadTopic(d)));
+    })();
+    return () => { live = false; };
+  }, [range, c.domains.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
   const shown = c.entries.filter(e => range === "all" || now - e.time < 86400);
   const topics = topicStats(shown).sort((a, b) => b.count - a.count);
-  const bands = topics.slice(0, 6).map(t => t.topic);
-  const hasElse = topics.length > 6;
+  const BANDS = 8;
+  const bands = topics.slice(0, BANDS).map(t => t.topic);
+  const hasElse = topics.length > BANDS;
   const rows = bands.length + (hasElse ? 1 : 0) || 1;
   const t0 = shown.length ? Math.min(...shown.map(e => e.time)) : now - 86400, t1 = now;
   const H = 560, top = 32, rowH = H / rows;
@@ -687,6 +726,12 @@ function Everyone(c: Ctx) {
         {shown.length === 0 && <div className="cp-sky-empty">{c.loaded ? (range === "day" ? "Nothing was kept in the last 24 hours. It's quiet tonight." : "The sky is empty. The first entry kept will be its first star.") : "Reading the chain…"}</div>}
         <div className="axis"><span>{shown.length ? when(t0) : ""}</span><span>now</span></div>
       </div>
+      {topics.length > 0 && (
+        <nav aria-label="Every topic in the sky" style={{ marginTop: 20, display: "flex", flexWrap: "wrap", gap: "8px 18px", fontSize: 14 }}>
+          <span style={{ color: "var(--night-muted)" }}>{shown.length.toLocaleString("en-US")} entries in {topics.length} topics{hasElse ? `; the ${BANDS} largest have their own row, the rest share "elsewhere"` : ""}:</span>
+          {topics.map(t => <a key={t.topic} href={hrefTopic(t.topic)} style={{ color: "var(--star)", textDecoration: "none" }}>{t.topic} <span style={{ color: "var(--night-muted)" }}>{t.count.toLocaleString("en-US")}</span></a>)}
+        </nav>
+      )}
       {c.netError && <p className="cp-notice" style={{ marginTop: 16, background: "transparent", color: "var(--night-muted)", borderColor: "#3A4260" }}>{c.netError}</p>}
     </div>
   );

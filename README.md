@@ -93,7 +93,8 @@ either at mainnet: what they write is permanent.
 
 ## Not yet
 
-- Entries are read from the node's `/proposals` list, which walks the chain and returns the
-  newest 500. A larger memory needs a lighter index.
+- Entries are read from the node's `/proposals` list (the newest 500 across all topics), and
+  each topic's own `/proposals/<topic>` list (its newest 500) when that topic or the whole sky
+  is opened. Topic counts come from `/domains`. A larger memory needs a lighter index.
 - Resonance counts come from `/top/all-time`, which lists the 50 most resonated entries.
 - Pending entries from other people (in the mempool, not yet in a block) are not shown yet.

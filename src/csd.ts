@@ -173,7 +173,9 @@ export function node(base: string) {
     // coins at the address; by default only those not already being spent in the mempool
     utxos: async (addr20: Hex, includeSpending = false): Promise<Utxo[]> =>
       ((await get(`/utxos/${strip(addr20)}${includeSpending ? "" : "?available=true"}`)).utxos ?? []).map((u: any) => ({ txid: String(u.txid).toLowerCase() as Hex, vout: Number(u.vout), value: BigInt(u.value) })),
+    // the newest proposals across all topics (the node returns at most 500), and per topic
     proposals: async (limit = 500): Promise<ProposalItem[]> => (await get(`/proposals/${limit}`)).proposals ?? [],
+    proposalsIn: async (domain: string, limit = 500): Promise<ProposalItem[]> => (await get(`/proposals/${encodeURIComponent(domain)}/${limit}`)).proposals ?? [],
     proposal: async (id: Hex) => {
       const j = await get(`/proposal/${strip(id)}`);
       return j.ok ? (j.proposal as { proposer: Hex; fee: number; created_height: number; created_epoch: number; expires_epoch: number; domain: string; uri: string }) : null;
