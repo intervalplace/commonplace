@@ -53,6 +53,13 @@ themselves stay on the network, and other clients can show them.
   `notebook`, `kraft`, `print`, `moss` and `tiles`; typefaces `serif`, `mono` and `sans`. It is a
   fixed vocabulary rather than CSS, so no page can restyle the site into something it isn't (a
   fake wallet prompt, say). A client that doesn't know a name shows its own default.
+- **Remembering someone** is a private note to yourself, kept as an entry under the topic
+  `cp.remember` with `uri` `cp:remember:<base64url(nonce + sealed)>` (`src/remember.ts`). The
+  sealed part is AES-256-GCM over one byte (1 remember, 0 forget) and the person's address, with
+  a key derived from your writing key, so only your wallet can read it. Every one has the same
+  length: anyone can see that a key kept something encrypted, and when, but not who or how many,
+  or whether it was remembering or forgetting. Nobody is told. Replaying your own entries oldest
+  first gives your list, on any device and in any client that knows the format.
 - **Resonating** is a CSD attestation on the entry. Its fee is its weight, and it is public.
   The network ranks each topic's entries by that weight every epoch (30 blocks, about an hour).
 - **Costs**, set by the network: 0.25 CSD to keep an entry, 0.05 CSD to resonate. The fees go to
@@ -110,4 +117,5 @@ either at mainnet: what they write is permanent.
 - Resonance counts come from `/top/all-time`, which lists the network's 50 most resonated
   proposals, and from each Commonplace topic's `/recent/attestations/<topic>/200`, which only
   looks back over the last 10,000 blocks. An older entry outside the top 50 shows no count.
+- The people you remember are read from the newest 500 things your key has done on the network.
 - Pending entries from other people (in the mempool, not yet in a block) are not shown yet.

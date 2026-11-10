@@ -10,7 +10,7 @@ import { EPOCH_LEN, MAX_DOMAIN_BYTES, MAX_URI_BYTES, sha256d, utf8, type Hex, ty
 
 export const PREFIX = "cp:";
 export const DEFAULT_TOPIC = "thoughts";
-const KEEP_EPOCHS = 10_000_000n; // far beyond any reader's lifetime
+export const KEEP_EPOCHS = 10_000_000n; // far beyond any reader's lifetime
 
 export type Entry = {
   id: Hex;

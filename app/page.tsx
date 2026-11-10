@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
+import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
@@ -277,6 +278,32 @@ export default function Page() {
     const p: Pending = { id, topic: STYLE_TOPIC, text: st.bio, kind: "style", style: st, height: t.height + 1, time: Math.floor(Date.now() / 1000), pending: true, author: key.addr20, sentAt: Date.now() };
     setPending(prev => { const next = [p, ...prev]; save(K_PENDING, next); return next; });
   };
+  // the people this key remembers: its own encrypted entries, read back and opened here
+  const [remembered, setRemembered] = useState<Set<string> | null>(null);
+  const unread = useRef(new Map<string, { who: Hex; yes: boolean }>()); // sent, not seen in a block yet
+  const readRemembered = useCallback(async () => {
+    if (!key) { setRemembered(null); return; }
+    try {
+      const acts = await api.activity(key.addr20, 500);
+      const ours = acts.filter(a => a.kind === "proposal" && a.domain === REMEMBER_TOPIC && a.uri).sort((a, b) => a.height - b.height);
+      const set = new Set<string>();
+      for (const a of ours) {
+        unread.current.delete(String(a.proposal_id).toLowerCase());
+        const r = await openRemember(key, a.uri!);
+        if (r) { if (r.remember) set.add(r.who); else set.delete(r.who); }
+      }
+      for (const { who, yes } of unread.current.values()) { if (yes) set.add(who); else set.delete(who); }
+      setRemembered(set);
+    } catch {}
+  }, [api, key]);
+  useEffect(() => { setRemembered(null); unread.current.clear(); readRemembered(); const t = setInterval(readRemembered, 120_000); return () => clearInterval(t); }, [readRemembered]);
+  const rememberPerson = async (who: Hex, yes: boolean) => {
+    if (!key) throw new Error("Connect a wallet first.");
+    const t = await api.tip();
+    const id = await send(rememberArgs(await sealRemember(key, who, yes), t.height), MIN_FEE_PROPOSE);
+    unread.current.set(id.toLowerCase(), { who: who.toLowerCase() as Hex, yes });
+    setRemembered(prev => { const next = new Set(prev ?? []); if (yes) next.add(who.toLowerCase()); else next.delete(who.toLowerCase()); return next; });
+  };
   const [editingProfile, setEditingProfile] = useState(false);
   const [eth, setEth] = useState<EthWallet | null>(null);
   const resonate = async (id: Hex) => {
@@ -284,7 +311,7 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
 
   return (
     <Pay.Provider value={{ eth, setEth, api, refresh: () => { refreshBalance(); setTimeout(refreshBalance, 90_000); } }}>
@@ -354,6 +381,7 @@ type Ctx = {
   all: Entry[]; api: ReturnType<typeof node>; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
   styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
+  remembered: Set<string> | null; rememberPerson: (who: Hex, yes: boolean) => Promise<void>;
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
@@ -686,8 +714,53 @@ function Me(c: Ctx) {
         ) : mine.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} />)}
       </section>
 
+      {c.me && c.remembered && c.remembered.size > 0 && <Remembered c={c} people={[...c.remembered]} />}
+
       <a className="cp-out" href="#/everyone">Zoom out and see your page among everyone's</a>
     </main>
+  );
+}
+
+// the people you remember, each with the last thing they kept, newest first
+function Remembered({ c, people }: { c: Ctx; people: string[] }) {
+  const [latest, setLatest] = useState<Record<string, Entry | null>>({});
+  const key = people.slice().sort().join();
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      for (let i = 0; i < people.length && live; i += 4) {
+        const got = await Promise.all(people.slice(i, i + 4).map(async a => {
+          try {
+            const acts = await c.api.activity(a as Hex, 50);
+            const es = acts.filter(x => x.kind === "proposal" && x.proposal_id && x.domain && !isReserved(x.domain))
+              .map(x => parseEntry({ proposal_id: x.proposal_id!, height: x.height, time: x.time, domain: x.domain!, payload_hash: x.payload_hash ?? ("0x" as Hex), uri: x.uri ?? "" }))
+              .filter(e => e.kind !== "link" && !HIDDEN.has(e.id))
+              .sort((x, y) => y.height - x.height);
+            return [a, es[0] ?? null] as const;
+          } catch { return [a, null] as const; }
+        }));
+        if (live) setLatest(prev => ({ ...prev, ...Object.fromEntries(got) }));
+      }
+    })();
+    return () => { live = false; };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = people.map(a => ({ a, e: latest[a] })).sort((x, y) => (y.e?.time ?? 0) - (x.e?.time ?? 0));
+  return (
+    <section className="cp-list" aria-labelledby="remembered">
+      <h2 id="remembered" className="cp-h2">People you remember</h2>
+      {rows.map(({ a, e }) => (
+        <div key={a} className="cp-remembered">
+          <Who addr={a} />
+          {e ? (
+            <a className="cp-lately" href={hrefEntry(e.id)}>
+              {e.kind === "doc" ? "Published " : e.kind === "reply" ? "Replied: " : ""}{e.text.length > 160 ? e.text.slice(0, 160).trimEnd() + "…" : e.text}
+              <span className="when">{when(e.time)}</span>
+            </a>
+          ) : e === null ? <span className="cp-hint">Nothing kept lately.</span> : <span className="cp-hint">Reading…</span>}
+        </div>
+      ))}
+      <p className="cp-hint" style={{ margin: "12px 0 0" }}>Only you can see this list. Nobody on it has been told.</p>
+    </section>
   );
 }
 
@@ -1208,6 +1281,8 @@ function Person(c: Ctx & { addr: Hex }) {
   // how the page looks: the key's newest style entry, or while its owner edits, the draft
   useEffect(() => { c.loadTopic(STYLE_TOPIC); c.loadTopic(PROFILE_TOPIC); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [styling, setStyling] = useState(false);
+  const [remembering, setRemembering] = useState(false);
+  const known = !!c.remembered?.has(c.addr);
   const [draft, setDraft] = useState<PageStyle | null>(null);
   const style = (styling && draft) || c.styles[c.addr];
   usePageStyle(style);
@@ -1238,6 +1313,9 @@ function Person(c: Ctx & { addr: Hex }) {
             {acts && <span>{liked.length} resonated with</span>}
             {guestbook.length > 0 && <span>{guestbook.length} in the guestbook</span>}
             <button className="cp-btn-ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { navigator.clipboard?.writeText(window.location.href); setCopied(true); }}>{copied ? "Link copied" : "Copy link to this page"}</button>
+            {c.me && !isMe && c.remembered && (
+              <button className="cp-btn-ghost" style={{ padding: "6px 10px", fontSize: 12 }} aria-pressed={known} onClick={() => setRemembering(true)}>{known ? "You remember them" : "Remember"}</button>
+            )}
           </div>
         </div>
       </header>
@@ -1253,6 +1331,10 @@ function Person(c: Ctx & { addr: Hex }) {
           <span>This is your page as everyone sees it. <a href="#/">Back to writing</a></span>
           <button className="cp-btn-ghost" onClick={() => { setDraft(c.styles[c.addr] ?? { bg: "paper", type: "serif", bio: "" }); setStyling(true); }}>Style your page</button>
         </p>
+      )}
+      {remembering && c.me && (
+        <RememberDialog who={c.addr} name={prof?.name} known={known} balance={c.balance}
+          onKeep={async () => { await c.rememberPerson(c.addr, !known); setRemembering(false); }} onClose={() => setRemembering(false)} />
       )}
       {styling && draft && c.me && (
         <StyleDialog me={c.me.addr20} balance={c.balance} draft={draft} setDraft={setDraft} current={c.styles[c.addr]} kept={kept.filter(e => !e.pending && e.hidden === undefined && e.kind !== "link")}
@@ -1288,6 +1370,49 @@ function Person(c: Ctx & { addr: Hex }) {
           liked.map(e => <EntryItem key={e.id} e={e} showAuthor resonance={c.resonance[e.id]} />)}
       </section>
     </main>
+  );
+}
+
+// ── remembering someone: kept encrypted, so only you can read who ──────────
+function RememberDialog({ who, name, known, balance, onKeep, onClose }: {
+  who: Hex; name?: string; known: boolean; balance: bigint | null; onKeep: () => Promise<void>; onClose: () => void;
+}) {
+  const price = usePrice();
+  const me = useContext(KeyCtx);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEscape(onClose, busy);
+  const low = balance !== null && balance < MIN_FEE_PROPOSE;
+  const them = name || short(who);
+  return (
+    <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="rm-title">
+        <h2 id="rm-title">{known ? `Forget ${them}?` : `Remember ${them}`}</h2>
+        {known ? (
+          <ul>
+            <li>They leave your list of people you remember. They won&apos;t know, as they didn&apos;t know you remembered them.</li>
+            <li>Forgetting is kept the same way, encrypted, so it looks no different from remembering to anyone but you.</li>
+          </ul>
+        ) : (
+          <ul>
+            <li>They go on your list of people you remember, and what they keep shows on your page for you.</li>
+            <li>Only you can read it. It is kept encrypted with a key made from your wallet, the same way your writing key is.</li>
+            <li>They aren&apos;t told, and nobody can see who you remember or how many. Anyone can see that you kept something encrypted, and when.</li>
+            <li>It is kept on the network for good, so it comes back on any device where you connect this wallet, with or without this site.</li>
+          </ul>
+        )}
+        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Who addr={who} /></span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
+        {low && me && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+          <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <TopUpHereFor addr={me.addr20} />
+        </div>}
+        {err && <p className="err">{err}</p>}
+        <div className="actions">
+          <button className="cp-btn" disabled={busy || low || balance === null} onClick={async () => { setBusy(true); setErr(null); try { await onKeep(); } catch (x) { setErr(nice(x)); setBusy(false); } }}>{busy ? "Keeping…" : known ? "Forget them" : "Remember them"}</button>
+          <button className="cp-btn-ghost" disabled={busy} onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Not now</button>
+        </div>
+      </section>
+    </div>
   );
 }
 

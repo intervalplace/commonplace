@@ -218,3 +218,4 @@ body.ty-sans .cp-entry p, body.ty-sans .cp-entry .text { font-size: 19px; }
 .cp-field select, .cp-field textarea { font: inherit; font-size: 15px; color: var(--ink); border: 1px solid var(--edge); border-radius: 10px; padding: 10px 12px; background: var(--card); width: 100%; box-sizing: border-box; }
 .cp-field textarea { font-family: var(--serif); font-size: 16px; line-height: 1.5; resize: vertical; }
 body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
+.cp-remembered { display: flex; flex-direction: column; gap: 4px; padding: 16px 0; border-top: 1px solid var(--rule); }

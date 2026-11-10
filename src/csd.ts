@@ -226,7 +226,7 @@ export function node(base: string) {
       return j.items ?? j.topk ?? j.rows ?? [];
     },
     // what an address has done: entries it made ("proposal"), resonances ("attestation"), coins in
-    activity: async (addr20: Hex, limit = 200): Promise<{ kind: string; txid: Hex; height: number; time: number; domain?: string; proposal_id?: Hex; uri?: string }[]> =>
+    activity: async (addr20: Hex, limit = 200): Promise<{ kind: string; txid: Hex; height: number; time: number; domain?: string; proposal_id?: Hex; payload_hash?: Hex; uri?: string }[]> =>
       (await get(`/address/${strip(addr20)}/activity?limit=${limit}`)).activity ?? [],
     domains: async (): Promise<{ domain: string; proposals: number; attestations: number }[]> => (await get("/domains")).domains ?? [],
     mempoolTxids: async (): Promise<Hex[]> => ((await get("/mempool/txids")).txids ?? []).map((t: any) => t.txid),
