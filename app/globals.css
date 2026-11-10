@@ -169,3 +169,6 @@ body.night .cp-foot a { color: var(--night-muted); }
 .cp-lately:hover { color: var(--ink); }
 .cp-lately .label { font-family: var(--sans); font-style: normal; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-right: 10px; }
 .cp-lately .when { font-family: var(--sans); font-style: normal; font-size: 12px; color: var(--muted); margin-left: 10px; white-space: nowrap; }
+.cp-apps summary { cursor: pointer; font-size: 14px; color: var(--muted); }
+.cp-apps summary:hover { color: var(--ink); }
+.cp-apps[open] summary { margin-bottom: 4px; }

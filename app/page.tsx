@@ -656,17 +656,23 @@ function topicStats(entries: Entry[]) {
 }
 
 // every topic: from the node's list of all of them, with what has been read so far for the dates
+// Other apps write to the same network. A topic is Commonplace's once any entry in it is one
+// (its uri starts "cp:"); a topic that has only ever held other apps' proposals is theirs.
+const fromHere = (e: Entry) => e.kind !== "link";
 function allTopics(c: Ctx) {
-  const seen = new Map(topicStats(c.entries).map(t => [t.topic, t]));
+  const ours = new Set(c.entries.filter(fromHere).map(e => e.topic));
+  const seen = new Map(topicStats(c.entries).map(t => [t.topic, { ...t, ours: ours.has(t.topic) }]));
   for (const d of c.domains) if (!isReserved(d.domain)) {
     const s = seen.get(d.domain);
-    seen.set(d.domain, { topic: d.domain, count: Math.max(d.proposals, s?.count ?? 0), last: s?.last ?? 0 });
+    seen.set(d.domain, { topic: d.domain, count: Math.max(d.proposals, s?.count ?? 0), last: s?.last ?? 0, ours: ours.has(d.domain) });
   }
   return [...seen.values()];
 }
 
 function Topics(c: Ctx) {
-  const ts = allTopics(c).sort((a, b) => b.last - a.last || b.count - a.count);
+  const every = allTopics(c);
+  const ts = every.filter(t => t.ours).sort((a, b) => b.last - a.last || b.count - a.count);
+  const apps = every.filter(t => !t.ours).sort((a, b) => b.count - a.count);
   return (
     <main className="cp-main">
       <div>
@@ -677,6 +683,15 @@ function Topics(c: Ctx) {
         <nav aria-label="Topics" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {ts.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count.toLocaleString("en-US")} {t.count === 1 ? "entry" : "entries"}{t.last ? `, ${when(t.last)}` : ""}</span></a>)}
         </nav>
+      )}
+      {c.loaded && apps.length > 0 && (
+        <details className="cp-apps">
+          <summary>Other apps on Compute Substrate: {apps.length} {apps.length === 1 ? "topic" : "topics"}</summary>
+          <p className="cp-hint" style={{ margin: "10px 0 14px" }}>The network is shared. These topics hold what other apps have written to it, shown as they are. Write in one here and it becomes a Commonplace topic too.</p>
+          <nav aria-label="Topics from other apps" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {apps.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count.toLocaleString("en-US")}</span></a>)}
+          </nav>
+        </details>
       )}
       {c.netError && <p className="cp-notice">{c.netError}</p>}
     </main>
@@ -704,7 +719,9 @@ function Topic(c: Ctx & { topic: string }) {
   const now = list.map(e => e.id).filter(id => top.includes(id));
   const nowEntries = top.map(id => c.byId.get(id)).filter((e): e is Entry => !!e && e.kind !== "reply");
   useEffect(() => { c.loadTopic(c.topic); }, [c.topic]); // eslint-disable-line react-hooks/exhaustive-deps
-  const others = allTopics(c).filter(t => t.topic !== c.topic).sort((a, b) => b.count - a.count);
+  const everyOther = allTopics(c).filter(t => t.topic !== c.topic);
+  const others = everyOther.filter(t => t.ours).sort((a, b) => b.count - a.count);
+  const appTopics = everyOther.length - others.length;
   const t0 = all.length ? Math.min(...all.map(e => e.time)) : 0, t1 = Date.now() / 1000;
   return (
     <div className="cp-wide">
@@ -746,6 +763,7 @@ function Topic(c: Ctx & { topic: string }) {
         <aside aria-labelledby="near">
           <h2 id="near" className="cp-h2">Other topics</h2>
           {others.length === 0 ? <p className="cp-hint">None yet.</p> : others.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count}</span></a>)}
+          {appTopics > 0 && <a className="cp-hint" href="#/topics" style={{ display: "block", marginTop: 14 }}>And {appTopics} {appTopics === 1 ? "topic" : "topics"} from other apps</a>}
         </aside>
       </div>
     </div>
@@ -827,18 +845,21 @@ function EntryView(c: Ctx & { id: Hex }) {
 function Everyone(c: Ctx) {
   const [range, setRange] = useState<"day" | "all">("all");
   const [picked, setPicked] = useState<string | null>(null);
+  const [apps, setApps] = useState(false);
+  const ours = useMemo(() => new Set(c.entries.filter(fromHere).map(e => e.topic)), [c.entries]);
   // since the first entry means every topic, not just the newest entries: read each one
+  // (only Commonplace's own, unless other apps are asked for too)
   useEffect(() => {
     if (range !== "all") return;
     let live = true;
     (async () => {
-      const ds = c.domains.filter(d => !isReserved(d.domain)).map(d => d.domain);
+      const ds = c.domains.filter(d => !isReserved(d.domain) && (apps || ours.has(d.domain))).map(d => d.domain);
       for (let i = 0; i < ds.length && live; i += 4) await Promise.all(ds.slice(i, i + 4).map(d => c.loadTopic(d)));
     })();
     return () => { live = false; };
-  }, [range, c.domains.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [range, apps, c.domains.length, ours.size]); // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
-  const shown = c.entries.filter(e => range === "all" || now - e.time < 86400);
+  const shown = c.entries.filter(e => (apps || fromHere(e)) && (range === "all" || now - e.time < 86400));
   const topics = topicStats(shown).sort((a, b) => b.count - a.count);
   const BANDS = 8;
   const bands = topics.slice(0, BANDS).map(t => t.topic);
@@ -867,6 +888,10 @@ function Everyone(c: Ctx) {
               {r === "day" ? "Last 24 hours" : "Since the first entry"}
             </button>
           ))}
+          <button aria-pressed={apps} onClick={() => { setApps(a => !a); setPicked(null); }} title="Other apps write to the same network. Off, the sky shows only what people kept here."
+            style={{ fontSize: 13, padding: "8px 12px", borderRadius: 8, background: "transparent", color: apps ? "var(--star)" : "var(--night-muted)", border: `1px solid ${apps ? "var(--star)" : "#3A4260"}` }}>
+            Other apps too
+          </button>
         </div>
       </div>
       <div className="cp-sky" role="group" aria-label="All entries, placed by when they were written and their topic">
