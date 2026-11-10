@@ -6,6 +6,7 @@ import { DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, cleanName, docArgs, docRoom, gu
 import { Avatar, PICTURES } from "@/avatars";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
+import hiddenList from "../moderation/hidden.json";
 import { sha256d } from "@/csd";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
@@ -24,6 +25,11 @@ function save(k: string, v: unknown) { try { localStorage.setItem(k, JSON.string
 const K_SESSION = "commonplace.key1", K_DRAFT = "commonplace.draft1", K_PENDING = "commonplace.pending1", K_AUTHORS = "commonplace.authors1", K_MINE = "commonplace.resonated1";
 
 type Pending = Entry & { sentAt: number };
+
+// What this window doesn't display (moderation/README.md): clearly illegal entries, each listed
+// publicly with its reason. The entry stays on chain and other clients can show it.
+const HIDDEN = new Map<string, string>(((hiddenList as any).entries ?? []).map((h: any) => [String(h.id).toLowerCase(), String(h.reason ?? "")]));
+const HIDDEN_POLICY = "https://github.com/intervalplace/commonplace/blob/main/moderation/README.md";
 
 // ── formatting ──────────────────────────────────────────────────────────────
 const short = (a?: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "");
@@ -154,7 +160,9 @@ export default function Page() {
   useEffect(() => { refreshBalance(); const t = setInterval(refreshBalance, 30_000); return () => clearInterval(t); }, [refreshBalance]);
 
   const all: Entry[] = useMemo(() => {
-    const withAuthor = chain.map(e => ({ ...e, author: authors[e.id] }));
+    const withAuthor = chain.map(e => HIDDEN.has(e.id)
+      ? { ...e, author: authors[e.id], hidden: HIDDEN.get(e.id) || "listed in this site's hidden entries", text: "", docId: undefined }
+      : { ...e, author: authors[e.id] });
     const mine = pending.map(p => ({ ...p, author: key?.addr20 ?? p.author }));
     return [...mine, ...withAuthor];
   }, [chain, pending, authors, key]);
@@ -360,7 +368,8 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
   return (
     <article className="cp-entry">
       {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
-      {e.pending ? <p>{e.text}</p> : <a className="text" href={hrefEntry(e.id)}>{e.text}</a>}
+      {e.hidden !== undefined ? <a className="cp-hint" href={hrefEntry(e.id)}>Not shown on this site: {e.hidden}.</a>
+        : e.pending ? <p>{e.text}</p> : <a className="text" href={hrefEntry(e.id)}>{e.text}</a>}
       <div className="cp-meta">
         {showAuthor && e.author && <Who addr={e.author} />}
         {showTopic && <TopicLink topic={e.topic} />}
@@ -550,9 +559,13 @@ function EntryView(c: Ctx & { id: Hex }) {
           {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span></>}
         </div>
         {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
-        <p className="cp-big">{e.text}</p>
-        {href && <a href={href} target="_blank" rel="noreferrer noopener">Open link</a>}
-        {e.kind === "doc" && <DocBody e={e} />}
+        {e.hidden !== undefined ? (
+          <p className="cp-notice" style={{ margin: 0 }}>This site doesn&apos;t show this entry: {e.hidden}. It is still on Compute Substrate, and other clients can show it. <a href={HIDDEN_POLICY} target="_blank" rel="noreferrer noopener">What this site doesn&apos;t show, and why</a></p>
+        ) : <>
+          <p className="cp-big">{e.text}</p>
+          {href && <a href={href} target="_blank" rel="noreferrer noopener">Open link</a>}
+          {e.kind === "doc" && <DocBody e={e} />}
+        </>}
         {!e.pending && (
           <div className="cp-row" style={{ justifyContent: "flex-start" }}>
             <button className="cp-btn-line" disabled={busy || !c.me || mineAlready} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
@@ -636,7 +649,7 @@ function Everyone(c: Ctx) {
         })}
         {p && pp && (
           <div className="card" style={{ left: `min(${pp.x + 1.5}%, calc(100% - 316px))`, top: Math.min(pp.y + 16, H - 140) }}>
-            <p>{p.text}</p>
+            <p>{p.hidden !== undefined ? `Not shown on this site: ${p.hidden}.` : p.text}</p>
             <div className="cp-meta" style={{ fontSize: 12 }}>
               {p.author && <Who addr={p.author} you={p.author === mineId} />}
               <span>{p.topic}</span>

@@ -12,6 +12,14 @@ sit among everyone else's: by topic, and then all of them at once, as a sky.
 There is no server, no account and no owner. The site is a static page. It reads from any CSD
 node and writes with a key made in your browser.
 
+This is a reference app: one way into a memory that doesn't depend on it. It shows what Compute
+Substrate makes possible, and anyone can build another client with the format below. Nobody
+promises to run this one forever.
+
+The site doesn't display a few clearly illegal entries, only when reported, never by words or
+opinions, and each one is listed publicly: [moderation/](moderation/README.md). The entries
+themselves stay on chain, and other clients can show them.
+
 ## How it works
 
 - **Your key.** Your Ethereum wallet signs one fixed message, and that signature becomes your
@@ -36,7 +44,7 @@ node and writes with a key made in your browser.
   it: `cp:doc:ar://<arweave id>:<title>`, `payload_hash` = `sha256d(the file)`. The page signs the
   file as an Arweave data item with the writing key (`src/ans104.ts`) and hands it to Turbo
   (ArDrive's upload service), which stores files up to 105 KiB free. Readers check every file
-  against the entry's fingerprint before showing it. For now: Markdown and plain text.
+  against the entry's fingerprint before showing it. Text only, by design: Markdown and plain text.
 - **A guestbook** is the entries under the topic `cp.guestbook.<address, 40 hex>`, so every key
   has one without doing anything. Topics starting `cp.` belong to the app and aren't listed.
 - **Resonating** is a CSD attestation on the entry. Its fee is its weight, and it is public.

@@ -25,6 +25,7 @@ export type Entry = {
   height: number;
   time: number;          // unix seconds, from the block
   pending?: boolean;     // sent, not in a block yet
+  hidden?: string;       // not displayed on this site, and why (moderation/README.md)
   author?: Hex;
 };
 
