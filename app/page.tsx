@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
+import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
 import { DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, cleanName, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
@@ -329,6 +329,7 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [CsdKey 
 
 function WalletButton({ keyState: [key, setKey], balance }: { keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null }) {
   const [open, setOpen] = useState(false);
+  const [dialog, setDialog] = useState<"send" | "key" | null>(null);
   const box = useRef<HTMLDivElement>(null);
   // closes on Escape or a click anywhere else
   useEffect(() => {
@@ -345,14 +346,16 @@ function WalletButton({ keyState: [key, setKey], balance }: { keyState: [CsdKey 
       </button>
       {open && (
         <div className="cp-menu">
-          {key ? <KeyInfo k={key} balance={balance} onForget={() => { setKey(null); setOpen(false); }} /> : <Connect onKey={k => { setKey(k); }} />}
+          {key ? <KeyInfo k={key} balance={balance} onForget={() => { setKey(null); setOpen(false); }} onSend={() => { setOpen(false); setDialog("send"); }} onShowKey={() => { setOpen(false); setDialog("key"); }} /> : <Connect onKey={k => { setKey(k); }} />}
         </div>
       )}
+      {key && dialog === "send" && <SendDialog k={key} onClose={() => setDialog(null)} />}
+      {key && dialog === "key" && <KeyDialog k={key} onClose={() => setDialog(null)} />}
     </div>
   );
 }
 
-function KeyInfo({ k, balance, onForget }: { k: CsdKey; balance: bigint | null; onForget: () => void }) {
+function KeyInfo({ k, balance, onForget, onSend, onShowKey }: { k: CsdKey; balance: bigint | null; onForget: () => void; onSend: () => void; onShowKey: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
     <>
@@ -363,8 +366,142 @@ function KeyInfo({ k, balance, onForget }: { k: CsdKey; balance: bigint | null; 
       <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
       <TopUpHere me={k} compact />
       <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
+      <button className="choice" onClick={onSend}>Send CSD elsewhere</button>
+      <button className="choice" onClick={onShowKey}>Show writing key</button>
       <button className="choice" onClick={onForget}>Disconnect</button>
     </>
+  );
+}
+
+// ── taking CSD out ──────────────────────────────────────────────────────────
+const exact = (v: bigint) => { const w = v / COIN, f = (v % COIN).toString().padStart(8, "0").replace(/0+$/, ""); return f ? `${w}.${f}` : `${w}`; };
+function parseCsd(s: string): bigint | null {
+  const m = s.trim().replace(",", ".").match(/^(\d*)(?:\.(\d{0,8}))?$/);
+  if (!m || (!m[1] && !m[2])) return null;
+  return BigInt(m[1] || "0") * COIN + BigInt((m[2] ?? "").padEnd(8, "0") || "0");
+}
+const NOT_ETH = "This must be a Compute Substrate address, not an Ethereum one. They look the same, but CSD sent to an Ethereum address is lost for good.";
+
+function useEscape(onClose: () => void, busy = false) {
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [busy, onClose]);
+}
+
+function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
+  const pay = useContext(Pay);
+  const [avail, setAvail] = useState<bigint | null>(null);
+  const [to, setTo] = useState("");
+  const [amt, setAmt] = useState("");
+  const [all, setAll] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState<{ id: string; value: bigint } | null>(null);
+  useEscape(onClose, busy);
+  useEffect(() => { pay.api?.utxos(k.addr20).then(us => setAvail(us.reduce((s, u) => s + u.value, 0n))).catch(() => setAvail(0n)); }, [pay.api, k.addr20]);
+  const dest = to.trim().toLowerCase();
+  const value = all ? (avail === null ? null : avail - SEND_FEE) : parseCsd(amt);
+  const problem =
+    !dest ? null
+    : !/^0x[0-9a-f]{40}$/.test(dest) ? "A Compute Substrate address is 0x followed by 40 letters and digits."
+    : dest === k.addr20.toLowerCase() ? "That's this writing key itself."
+    : pay.eth && dest === pay.eth.account.toLowerCase() ? "That's your Ethereum address, not a Compute Substrate one. CSD sent there would be lost for good."
+    : value === null ? null
+    : value < MIN_SEND ? "The smallest send is 0.01 CSD."
+    : avail !== null && value + SEND_FEE > avail ? `This key has ${exact(avail)} CSD ready to send, and a send costs 0.001 CSD.`
+    : null;
+  const ready = !!dest && value !== null && !problem && avail !== null;
+  const go = async () => {
+    if (!pay.api) return;
+    setBusy(true); setErr(null);
+    try {
+      const tx = buildSendTx(await pay.api.utxos(k.addr20), k, dest as Hex, all ? "all" : value!);
+      const id = await pay.api.submit(tx);
+      setSent({ id, value: tx.outputs[0].value }); pay.refresh();
+    } catch (x) { setErr(nice(x)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="send-title">
+        <h2 id="send-title">{sent ? "Sent" : confirm ? "Send it?" : "Send CSD elsewhere"}</h2>
+        {sent ? (
+          <>
+            <p className="cp-hint" style={{ margin: 0 }}>{exact(sent.value)} CSD is on its way to <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)" }}>{dest}</span>. It arrives once it&apos;s in a block, in a minute or two.</p>
+            <span className="cp-mono" style={{ wordBreak: "break-all" }}>Transaction {sent.id}</span>
+            <div className="actions"><button className="cp-btn" onClick={onClose}>Done</button></div>
+          </>
+        ) : confirm ? (
+          <>
+            <div className="facts" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+              <span>Amount <span style={{ color: "var(--ink)" }}>{exact(value!)} CSD</span>, plus 0.001 CSD for the network</span>
+              <span>To <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)" }}>{dest}</span></span>
+            </div>
+            <p className="cp-notice" style={{ margin: 0 }}>{NOT_ETH} A send can&apos;t be undone.</p>
+            {err && <p className="err">{err}</p>}
+            <div className="actions">
+              <button className="cp-btn" disabled={busy} onClick={go}>{busy ? "Sending…" : "Send it"}</button>
+              <button className="cp-btn-ghost" disabled={busy} onClick={() => setConfirm(false)} style={{ fontSize: 16, padding: "13px 20px" }}>Back</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="cp-hint" style={{ margin: 0 }}>
+              {avail === null ? "Checking what this key holds…" : <>This key has <strong style={{ color: "var(--ink)" }}>{exact(avail)} CSD</strong> ready to send. CSD from a send still being kept is ready once it&apos;s in a block.</>}
+            </p>
+            <label className="cp-field">
+              <span>To a Compute Substrate address</span>
+              <input value={to} onChange={e => setTo(e.target.value)} placeholder="0x…" spellCheck={false} autoComplete="off" className="cp-mono" />
+            </label>
+            <label className="cp-field">
+              <span>Amount in CSD</span>
+              <span style={{ display: "flex", gap: 8 }}>
+                <input value={all ? (value !== null && value > 0n ? exact(value) : "0") : amt} onChange={e => { setAll(false); setAmt(e.target.value); }} inputMode="decimal" placeholder="0.00" style={{ flex: 1 }} />
+                <button type="button" className="cp-btn-ghost" onClick={() => setAll(true)} disabled={!avail} aria-pressed={all}>Send all</button>
+              </span>
+            </label>
+            <p className="cp-hint" style={{ margin: 0 }}>{NOT_ETH}</p>
+            {problem && <p className="err">{problem}</p>}
+            <p className="cp-hint" style={{ margin: 0 }}>To turn CSD back into USDC, send it to your own CSD wallet and sell it on <a href="https://covenant.market" target="_blank" rel="noopener">covenant.market</a>.</p>
+            <div className="actions">
+              <button className="cp-btn" disabled={!ready} onClick={() => setConfirm(true)}>Continue</button>
+              <button className="cp-btn-ghost" onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Cancel</button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function KeyDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
+  const [shown, setShown] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEscape(onClose);
+  const hex = bytesToHex(k.priv);
+  return (
+    <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="key-title">
+        <h2 id="key-title">Your writing key</h2>
+        <ul>
+          <li>Anyone who sees this key can spend its CSD and write as you. Never paste it into a site or send it to anyone.</li>
+          <li>Use it to bring this key into a Compute Substrate wallet you trust, such as the csd command-line wallet (<span className="cp-mono">--privkey</span>).</li>
+          <li>You don&apos;t need to save it: your Ethereum wallet makes the same key again on any device.</li>
+        </ul>
+        {shown ? (
+          <>
+            <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)", fontSize: 13, padding: 12, border: "1px solid var(--line)", borderRadius: 8 }}>{hex}</span>
+            <div className="actions">
+              <button className="cp-btn" onClick={() => { navigator.clipboard?.writeText(hex); setCopied(true); }}>{copied ? "Copied" : "Copy it"}</button>
+              <button className="cp-btn-ghost" onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Done</button>
+            </div>
+          </>
+        ) : (
+          <div className="actions">
+            <button className="cp-btn" onClick={() => setShown(true)}>Show it</button>
+            <button className="cp-btn-ghost" onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Cancel</button>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -746,6 +883,8 @@ function nice(e: any): string {
   if (m.includes("UPLOAD_NOT_FREE")) return "Arweave wants payment for this file. Free storage covers files up to 105 KB, within an allowance per writer.";
   if (m.startsWith("UPLOAD_")) return "Arweave's upload service didn't take the file. Nothing was kept; try again in a moment.";
   if (m.includes("WAIT_FOR_BLOCK")) return "Your last send is still being kept. This one can go once it's in a block, in a minute or two.";
+  if (m.includes("SEND_TOO_SMALL")) return "The smallest send is 0.01 CSD.";
+  if (m.includes("BAD_ADDRESS")) return "That isn't a Compute Substrate address.";
   if (m.includes("NOT_ENOUGH_CSD")) return "Your writing key doesn't hold enough CSD for this.";
   if (/rejected|denied/i.test(m)) return "The wallet didn't sign.";
   if (m.startsWith("NODE_") || /fetch/i.test(m)) return "The CSD node didn't answer. Try again in a moment.";

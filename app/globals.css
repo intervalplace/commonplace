@@ -158,3 +158,7 @@ body.night .cp-foot a { color: var(--night-muted); }
 .cp-modes button { font-size: 13px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--edge); background: transparent; color: var(--muted); }
 .cp-modes button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .cp-file { display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px dashed var(--line); border-radius: 12px; }
+.cp-field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.cp-field input { font-size: 15px; color: var(--ink); border: 1px solid var(--edge); border-radius: 10px; padding: 11px 12px; background: #FFFFFF; min-width: 0; width: 100%; box-sizing: border-box; }
+.cp-field input.cp-mono { font-size: 13px; }
+.cp-field .cp-btn-ghost { flex: none; font-size: 14px; padding: 0 16px; }

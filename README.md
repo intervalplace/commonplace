@@ -63,6 +63,11 @@ the USDC, sends the CSD straight to the writing key, and is paid by the contract
 proves that payment with 20 CSD blocks on top. If it never does, the lock runs out and the USDC
 goes back to the visitor; the wallet menu offers the refund. Any page can use the same market.
 
+CSD can leave the same way it came: the wallet menu sends any amount, or all of it, to another
+Compute Substrate address, and shows the writing key itself for importing into a CSD wallet. A
+CSD address looks exactly like an Ethereum one, so the page refuses the connected Ethereum
+address and warns before every send.
+
 ## Running it
 
 ```

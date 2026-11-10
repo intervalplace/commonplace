@@ -141,6 +141,31 @@ export function buildAppTx(utxos: Utxo[], key: CsdKey, app: AppPayload, fee: big
   return signTx(unsigned, key);
 }
 
+export const SEND_FEE = 100_000n;      // 0.001 CSD; the node asks only for a feerate above zero
+export const MIN_SEND = 1_000_000n;    // 0.01 CSD, well clear of any dust rule
+
+// Sends CSD out of the writing key. `amount` "all" empties every coin into one output, less the fee.
+export function buildSendTx(utxos: Utxo[], key: CsdKey, to: Hex, amount: bigint | "all", fee = SEND_FEE): Tx {
+  if (!/^0x[0-9a-f]{40}$/i.test(to)) throw new Error("BAD_ADDRESS");
+  const dest = to.toLowerCase() as Hex;
+  if (dest === key.addr20.toLowerCase()) throw new Error("SEND_TO_SELF");
+  const sorted = [...utxos].sort((a, b) => (b.value > a.value ? 1 : b.value < a.value ? -1 : 0)).slice(0, 500);
+  let picked: Utxo[], total = 0n, value: bigint;
+  if (amount === "all") {
+    picked = sorted; total = sorted.reduce((s, u) => s + u.value, 0n); value = total - fee;
+  } else {
+    picked = []; value = amount;
+    for (const u of sorted) { if (total >= amount + fee) break; picked.push(u); total += u.value; }
+    if (total < amount + fee) throw new Error("NOT_ENOUGH_CSD");
+  }
+  if (value < MIN_SEND) throw new Error("SEND_TOO_SMALL");
+  const change = total - fee - value;
+  const outputs: TxOut[] = [{ value, addr20: dest }];
+  if (change > 0n) outputs.push({ value: change, addr20: key.addr20 });
+  const unsigned: Tx = { version: 1, inputs: picked.map(u => ({ txid: u.txid, vout: u.vout, scriptSig: new Uint8Array(0) })), outputs, locktime: 0, app: { kind: "none" } };
+  return signTx(unsigned, key);
+}
+
 // The node's /tx/submit JSON: serde's default shapes, byte arrays as number arrays
 export function txToJson(tx: Tx) {
   const a = tx.app;
