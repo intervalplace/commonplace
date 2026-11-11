@@ -103,14 +103,14 @@ try {
   await maker.getByRole("button", { name: "Make invite links" }).click();
   const dlg = maker.getByRole("dialog");
   await dlg.getByRole("button", { name: "0.5 CSD" }).click();
-  await dlg.getByRole("button", { name: "3", exact: true }).click();
-  await dlg.getByRole("button", { name: "Make 3 links" }).waitFor();
+  await dlg.getByRole("button", { name: "1", exact: true }).click();
+  await dlg.getByRole("button", { name: "Make the link" }).waitFor();
   await maker.waitForFunction(() => !document.querySelector("[role=dialog] .cp-btn")?.hasAttribute("disabled"), null, { timeout: 60_000 });
   await maker.screenshot({ path: `${out}/f3-make.png` });
-  await dlg.getByRole("button", { name: "Make 3 links" }).click();
+  await dlg.getByRole("button", { name: "Make the link" }).click();
   await dlg.locator(".cp-links").waitFor({ timeout: 30_000 });
   const links: string[] = (await dlg.locator(".cp-links span").allInnerTexts()).map((s: string) => s.trim());
-  check(links.length === 3 && links.every(l => l.includes("#/invite/")) && new Set(links).size === 3, "three different links are made");
+  check(links.length === 1 && links[0].includes("#/invite/"), "an invite link is made");
   await maker.screenshot({ path: `${out}/f4-links.png` });
   await dlg.getByRole("button", { name: "Back" }).click();
 
@@ -129,14 +129,29 @@ try {
   check(true, "the visitor takes it");
   await page.screenshot({ path: `${out}/f6-taken.png` });
 
-  // 6. the maker takes one of the others back
+  // 6. the maker makes another and takes it back, unused
+  await maker.reload();
+  await maker.locator(".cp-wallet > button .bal").waitFor({ timeout: 60_000 });
   await maker.locator(".cp-wallet > button").click();
   await maker.getByRole("button", { name: "Make invite links" }).click();
-  await dlg.locator(".cp-invite").first().waitFor({ timeout: 60_000 });
-  await dlg.locator(".cp-invite").last().getByRole("button", { name: "Take it back" }).click();
+  await dlg.getByRole("button", { name: "0.5 CSD" }).click();
+  await maker.waitForFunction(() => !document.querySelector("[role=dialog] .cp-btn")?.hasAttribute("disabled"), null, { timeout: 60_000 });
+  await dlg.getByRole("button", { name: "Make the link" }).click();
+  await dlg.locator(".cp-links").waitFor({ timeout: 30_000 });
+  links.push((await dlg.locator(".cp-links span").innerText()).trim());
+  check(links[1] !== links[0], "the next link is a different one");
+  await dlg.getByRole("button", { name: "Back" }).click();
+  await until("the second link is in a block", async () =>
+    (await page.goto(`${SITE}/#/`), await page.goto(links[1]), await page.locator("h1").waitFor(), (await page.locator("h1").innerText()).includes("given")));
+  await dlg.getByRole("button", { name: "Close" }).click();
+  await maker.locator(".cp-wallet > button").click();
+  await maker.getByRole("button", { name: "Make invite links" }).click();
+  const row = dlg.locator(".cp-invite").last();
+  await row.waitFor({ timeout: 60_000 });
+  await maker.screenshot({ path: `${out}/f7-made-before.png` });
+  await row.getByRole("button", { name: "Take it back" }).click();
   await maker.waitForFunction(() => !document.body.innerText.includes("Taking back…"), null, { timeout: 30_000 });
   check(!(await dlg.locator(".err").count()), "an unused link can be taken back");
-  await maker.screenshot({ path: `${out}/f7-made-before.png` });
 
   // 7. the visitor's CSD arrives, and what they wrote first gets kept with it
   await page.goto(`${SITE}/#/`);
@@ -148,8 +163,8 @@ try {
   await until("what they wrote first is on the network", async () =>
     ((await fetch(`${SITE}/node/proposals/first%20steps/20`).then(r => r.json())).proposals ?? []).some((p: any) => p.uri.includes(WORDS)));
   // a taken-back link reads as used
-  await page.goto(links[2]); await page.locator("h1").waitFor();
-  await until("a used or taken-back link says so", async () => { await page.goto(`${SITE}/#/`); await page.goto(links[2]); await page.locator("h1").waitFor(); await page.waitForTimeout(1500); return (await page.locator("h1").innerText()).includes("used"); });
+  await page.goto(links[1]); await page.locator("h1").waitFor();
+  await until("a used or taken-back link says so", async () => { await page.goto(`${SITE}/#/`); await page.goto(links[1]); await page.locator("h1").waitFor(); await page.waitForTimeout(1500); return (await page.locator("h1").innerText()).includes("used"); });
   console.log("done");
 } catch (e) { console.error(e); await page?.screenshot({ path: `${out}/f-failed.png` }); await maker?.screenshot({ path: `${out}/f-failed-maker.png` }); process.exitCode = 1; }
 await browser.close();

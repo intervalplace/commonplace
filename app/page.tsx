@@ -577,14 +577,14 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
               <li>Anyone who sees a link can use it, so share it where you mean to: post a few, or send one to a friend.</li>
               <li>The links are made from your writing key, so you can find them here on any device, and take back any nobody used.</li>
             </ul>
-            <label className="cp-field">
-              <span className="cp-h2">Each link carries</span>
+            <div role="group" aria-label="Each link carries" className="cp-field">
+              <span className="cp-h2" aria-hidden="true">Each link carries</span>
               <div className="cp-modes">{GIFTS.map(g => <button key={String(g)} type="button" aria-pressed={gift === g} onClick={() => setGift(g)}>{csd(g)} CSD</button>)}</div>
-            </label>
-            <label className="cp-field">
-              <span className="cp-h2">How many links</span>
+            </div>
+            <div role="group" aria-label="How many links" className="cp-field">
+              <span className="cp-h2" aria-hidden="true">How many links</span>
               <div className="cp-modes">{[1, 3, 5, 10].map(n => <button key={n} type="button" aria-pressed={count === n} onClick={() => setCount(n)}>{n}</button>)}</div>
-            </label>
+            </div>
             <div className="facts"><span>{count} {count === 1 ? "link" : "links"}, enough for about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"} each</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
             {short_ && <p className="cp-notice" style={{ margin: 0 }}>This writing key has {csd(avail!)} CSD ready, and these take {csd(cost)}.</p>}
             {err && <p className="err">{err}</p>}
