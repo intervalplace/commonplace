@@ -1544,7 +1544,7 @@ function frontierOf(c: Ctx) {
 }
 
 function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
-  if (records.length === 0) return <div className="cp-hint" style={{ padding: small ? 0 : "24px 0" }}>No record yet</div>;
+  if (records.length === 0) return small ? null : <div className="cp-hint" style={{ padding: "24px 0" }}>No record yet</div>;
   const W = small ? 220 : 680, H = small ? 48 : 180, pad = small ? 4 : 28;
   const ts = records.map(r => r.time), now = Math.max(Date.now() / 1000, ...ts);
   const t0 = Math.min(...ts), t1 = now > t0 ? now : t0 + 1;
@@ -1556,7 +1556,7 @@ function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: Res
   records.forEach((r, i) => { d += i === 0 ? `M${x(r.time)},${y(r.result.score)}` : `H${x(r.time)}V${y(r.result.score)}`; });
   d += `H${x(t1)}`;
   return (
-    <svg className="cp-rchart" viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={`Record over time: ${records.map(r => fmt(r.result.score)).join(", then ")}`}>
+    <svg className="cp-rchart" viewBox={`0 0 ${W} ${H}`} width={small ? W : "100%"} height={H} preserveAspectRatio="xMinYMid meet" role="img" aria-label={`Record over time: ${records.map(r => fmt(r.result.score)).join(", then ")}`}>
       <path d={d} fill="none" stroke="var(--accent)" strokeWidth={small ? 2 : 2.5} />
       {records.map(r => <circle key={r.id} cx={x(r.time)} cy={y(r.result.score)} r={small ? 2.5 : 4} fill="var(--accent)" />)}
       {!small && records.map((r, i) => <text key={r.id} x={x(r.time) + 6} y={y(r.result.score) - 8} fontSize="12" fill="var(--ink-2)" fontFamily="var(--sans)" textAnchor={i === records.length - 1 && records.length > 1 ? "end" : "start"}>{fmt(r.result.score)}</text>)}
