@@ -263,3 +263,10 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-code { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 10px 14px; }
 .cp-code code { font-family: var(--mono); font-size: 13px; line-height: 1.5; word-break: break-word; color: var(--ink); }
 @media (max-width: 600px) { .cp-ev { grid-template-columns: 1fr; } .cp-ev .cp-meta { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
+.cp-hiscores { width: 100%; border-collapse: collapse; font-size: 15px; }
+.cp-hiscores th { text-align: left; font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 0 10px 10px 0; border-bottom: 1px solid var(--line); }
+.cp-hiscores td { padding: 12px 10px 12px 0; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.cp-hiscores td.rank { font-family: var(--mono); color: var(--muted); width: 3em; }
+.cp-hiscores tr.top td { color: var(--ink); font-weight: 600; }
+.cp-hiscores tr.top td.rank { color: var(--gold); }
+@media (max-width: 600px) { .cp-hiscores th:nth-child(4), .cp-hiscores td:nth-child(4), .cp-hiscores th:nth-child(6), .cp-hiscores td:nth-child(6) { display: none; } }

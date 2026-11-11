@@ -78,12 +78,13 @@ try {
   if (ROLE === "solver") {
     const list = await tool("frontier_problems");
     if (!Array.isArray(list) || !list.length) { log("no problems"); process.exit(0); }
-    // weighted by what people put behind each problem, and every problem gets a chance
+    // by attention: people's recent weight, eased off for problems whose record stands still, none for solved ones
     const pick = process.env.PROBLEM ? list.find((x: any) => x.slug === process.env.PROBLEM) : (() => {
-      const w = list.map((x: any) => 1 + x.weight), sum = w.reduce((a: number, b: number) => a + b, 0);
+      const w = list.map((x: any) => x.attention ?? 1), sum = w.reduce((a: number, b: number) => a + b, 0);
+      if (sum <= 0) return null;
       let r = Math.random() * sum; for (let i = 0; i < list.length; i++) { r -= w[i]; if (r <= 0) return list[i]; } return list[0];
     })();
-    if (!pick) throw new Error("no such problem");
+    if (!pick) { log("nothing to work on"); process.exit(0); }
     const p = await tool("frontier_problem", { slug: pick.slug });
     log("working on", p.slug, "record", p.record?.score ?? "none");
     let best: { solution: string; score: number; idea: string } | null = null;

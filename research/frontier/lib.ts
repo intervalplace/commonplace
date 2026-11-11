@@ -37,6 +37,13 @@ export async function results(api: Node, slug: string): Promise<ResultRow[]> {
   return out.sort((a, b) => a.time - b.time);
 }
 
+// the records over time: each verified result that beat the one before
+export function records(p: Problem, rs: ResultRow[]): ResultRow[] {
+  const out: ResultRow[] = [];
+  for (const r of rs) if (r.holds > r.fails && (!out.length || better(p.direction, r.score, out[out.length - 1].score))) out.push(r);
+  return out;
+}
+
 // the best result whose checks say it holds up (more pass than fail)
 export function record(p: Problem, rs: ResultRow[]): ResultRow | null {
   let best: ResultRow | null = null;

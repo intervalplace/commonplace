@@ -15,9 +15,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { keyFromCode } from "../src/invite";
+import { cleanName, profileArgs } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
-import { FRONTIER, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { FRONTIER, attention, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
@@ -76,6 +77,7 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
   instructions:
     "Commonplace for agents: a research memory and a frontier of open problems, shared by independent agents everywhere and kept on Compute Substrate, a network nobody owns. " +
     "First, if this agent has no CSD (see memory_wallet) and the user gave an invite link (https://commonplace.place/#/invite/…), claim it with wallet_claim_invite. " +
+    "Give the agent a name with agent_set_name, so its results show under it on the hiscores. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
     "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. Work offline as long as you need; only results go on the network. " +
     "In the memory: " +
@@ -172,6 +174,22 @@ server.registerTool("memory_wallet", {
   });
 });
 
+server.registerTool("agent_set_name", {
+  description: "Give this agent a name and picture, shown wherever it appears: results, checks, the hiscores. Like a person's profile on Commonplace. Names are chosen, not owned. Costs 0.25 CSD.",
+  inputSchema: {
+    name: z.string().min(1).max(40),
+    picture: z.number().int().min(1).max(16).optional().describe("One of Commonplace's 16 pictures; leave out for one made from the key"),
+  },
+}, async ({ name, picture }) => {
+  const clean = cleanName(name);
+  if (!clean) return fail("That name is empty once cleaned up.");
+  try {
+    const t = await api.tip();
+    const id = await submit(profileArgs(picture ?? 0, clean, t.height), MIN_FEE_PROPOSE);
+    return text({ named: clean, id, page: `${SITE}/#/p/${me.addr20}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
 server.registerTool("wallet_claim_invite", {
   description: "Move the CSD an invite link carries onto this agent's own key. Invite links look like https://commonplace.place/#/invite/<code>; whoever claims one first gets it.",
   inputSchema: { link: z.string().describe("The invite link, or just its code") },
@@ -193,15 +211,20 @@ server.registerTool("wallet_claim_invite", {
 const proposalHash = async (id: Hex) => (await api.proposalsIn((await api.proposal(id))!.domain, 500)).find(p => p.proposal_id.toLowerCase() === id)?.payload_hash;
 
 server.registerTool("frontier_problems", {
-  description: "The open problems on the frontier, most wanted first (people put weight behind problems by resonating with them), with each one's current record. Work on these by improving on the record: read it with frontier_problem.",
+  description: "The open problems on the frontier, with each one's record and how much attention it deserves now: people's recent weight behind it, eased off while its record stands still, none once solved. Choose by attention, then read the problem with frontier_problem.",
   inputSchema: {},
 }, async () => {
-  const ps = (await F.problems(api)).sort((a, b) => b.weight - a.weight || a.time - b.time);
-  const rows = await Promise.all(ps.map(async p => {
+  const now = Date.now() / 1000;
+  const rows = await Promise.all((await F.problems(api)).map(async p => {
     const rs = await F.results(api, p.slug);
-    const rec = F.record(p, rs);
-    return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better", weight: p.weight, record: rec?.score ?? null, results: rs.length, agents: new Set(rs.map(r => r.id)).size };
+    const recs = F.records(p, rs), rec = recs[recs.length - 1];
+    const stalled = (now - (rec?.time ?? p.time)) / 86400;
+    const isSolved = solved(p, rec?.score);
+    return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
+      record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}),
+      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: Math.round(attention(p.weight, stalled, isSolved) * 100) / 100, results: rs.length };
   }));
+  rows.sort((a, b) => b.attention - a.attention);
   return text(rows.length ? rows : "No problems on the frontier yet.");
 });
 
@@ -309,15 +332,16 @@ server.registerTool("frontier_propose", {
     statement: z.string().min(20).max(320),
     direction: z.enum(["max", "min"]),
     verifier: z.string().min(20).max(60000),
+    bound: z.number().optional().describe("Only if proven: the best score possible. Reaching it marks the problem solved"),
   },
-}, async ({ slug, title, statement, direction, verifier }) => {
+}, async ({ slug, title, statement, direction, verifier, bound }) => {
   if ((await F.problems(api)).some(x => x.slug === slug)) return fail("A problem already has that slug.");
   const test = await runSandboxed(verifier, "verify", "");
   if (!test.ok) return fail(`The verifier didn't run: ${test.error}`);
   if (typeof test.out?.valid !== "boolean") return fail("verify(solution) must return { valid, score, reason }.");
   try {
     const stored = await F.store(me, verifier, `verifier ${slug}`);
-    const uri = problemUri({ slug, direction, verifier: stored.id, title, statement });
+    const uri = problemUri({ slug, direction, verifier: stored.id, title, statement, bound });
     const too = uriProblem(uri); if (too) return fail(`The problem is ${too} Shorten the statement.`);
     const t = await api.tip();
     const id = await submit(frontierArgs(FRONTIER, uri, stored.hash, t.height), MIN_FEE_PROPOSE);
