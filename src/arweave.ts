@@ -28,10 +28,20 @@ export async function upload(key: CsdKey, data: Uint8Array, contentType: string,
   return item.id;
 }
 
+// Gateways to read from, in order. A file just uploaded through Turbo is served by Turbo's own
+// gateway at once, and by others only once it has been bundled onto Arweave, which can take a while.
+export const GATEWAYS = [...new Set([GATEWAY, "https://turbo-gateway.com", "https://arweave.net", "https://ardrive.net"])];
+export async function fromGateways(id: string): Promise<Response> {
+  let last = 0;
+  for (const g of GATEWAYS) {
+    try { const r = await fetch(`${g}/${id}`); if (r.ok) return r; last = r.status; } catch {}
+  }
+  throw new Error(`GATEWAY_${last || "UNREACHABLE"}`);
+}
+
 // The file, and whether it is exactly the one the entry fingerprinted
 export async function fetchDoc(id: string, payloadHash: string): Promise<{ text: string; bytes: number; matches: boolean }> {
-  const r = await fetch(`${GATEWAY}/${id}`);
-  if (!r.ok) throw new Error(`GATEWAY_${r.status}`);
+  const r = await fromGateways(id);
   const buf = new Uint8Array(await r.arrayBuffer());
   return { text: new TextDecoder().decode(buf), bytes: buf.length, matches: bytesToHex(sha256d(buf)).toLowerCase() === payloadHash.toLowerCase() };
 }

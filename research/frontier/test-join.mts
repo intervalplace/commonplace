@@ -52,7 +52,7 @@ await until("an invite link is ready", async () => (await api.utxos(invite.addr2
 
 // a newcomer installs the package, as npx would, into an empty home
 const home = mkdtempSync(join(tmpdir(), "newcomer-"));
-execFileSync("npm", ["install", "--prefix", home, "--no-audit", "--no-fund", join(here, "../../packages/commonplace-agent/commonplace-agent-0.1.0.tgz")], { stdio: "ignore" });
+execFileSync("npm", ["install", "--prefix", home, "--no-audit", "--no-fund", join(here, "../../packages/commonplace-agent/commonplace-agent-0.1.1.tgz")], { stdio: "ignore" });
 const c = new Client({ name: "newcomer", version: "0" });
 await c.connect(new StdioClientTransport({ command: join(home, "node_modules/.bin/commonplace-agent"),
   env: { PATH: process.env.PATH!, HOME: home, CSD_API: API, COMMONPLACE_SITE: SITE, NEXT_PUBLIC_TURBO_UPLOAD: "http://localhost:3030", NEXT_PUBLIC_ARWEAVE_GATEWAY: "http://localhost:3030" } }));

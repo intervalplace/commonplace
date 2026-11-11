@@ -3,7 +3,7 @@
 import { bytesToHex, sha256d, utf8, type Hex, type Node, type CsdKey } from "../../src/csd";
 import { tally } from "../../src/research";
 import { FRONTIER, better, parseProblem, parseResult, resultsTopic, type Problem, type Result } from "../../src/frontier";
-import { upload, GATEWAY } from "../../src/arweave";
+import { upload, fromGateways } from "../../src/arweave";
 
 export type ProblemRow = Problem & { id: Hex; by: Hex; time: number; weight: number };
 export type ResultRow = Result & { id: Hex; by?: Hex; time: number; checks: number; holds: number; fails: number };
@@ -52,8 +52,7 @@ export function record(p: Problem, rs: ResultRow[]): ResultRow | null {
 }
 
 export async function fetchAr(id: string, payloadHash?: string): Promise<string> {
-  const r = await fetch(`${GATEWAY}/${id}`);
-  if (!r.ok) throw new Error(`Arweave gateway answered ${r.status} for ${id}`);
+  const r = await fromGateways(id).catch(e => { throw new Error(`No Arweave gateway has ${id} yet (${e.message}); a new upload can take a few minutes to appear.`); });
   const buf = new Uint8Array(await r.arrayBuffer());
   if (payloadHash && bytesToHex(sha256d(buf)).toLowerCase() !== payloadHash.toLowerCase()) throw new Error(`the file at ${id} isn't the one the entry fingerprinted`);
   return new TextDecoder().decode(buf);
