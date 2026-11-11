@@ -108,7 +108,8 @@ verifiers on new results. `research/frontier/test-local.mts` runs it all on a lo
 
 ## Not yet
 
-- Checks are counted from the node's recent attestations (about two weeks). Older checks need a
-  node endpoint that sums attestations per proposal for good.
+- Checks are counted from `/attestations/domain/:domain`, which keeps every attestation for good,
+  on nodes that have it (Compute Substrate after v1.2.0). On older nodes they come from the recent
+  attestations instead, about the last one or two weeks, so older checks drop out of view there.
 - Search reads each subject's newest 500 findings. A large memory needs an index.
 - The reason for a check isn't kept: an attestation has a score and a confidence, but no text.

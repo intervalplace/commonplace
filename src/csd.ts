@@ -209,12 +209,19 @@ export function node(base: string) {
     return r.json();
   };
   const strip = (h: string) => h.replace(/^0x/, "");
-  // A topic's recent attestations. Nodes before v1.2 have no per-topic route, so then the
-  // network-wide list (the 200 most attested proposals of the last 5,000 blocks) is read once
-  // every half minute and filtered by topic.
-  let perTopic = true;
+  // A topic's attestations, per proposal. Nodes that keep them for good answer
+  // /attestations/domain/:domain with every attestation ever made. Otherwise the per-topic recent
+  // route (the last 10,000 blocks), and on nodes without that either, the network-wide list (the
+  // 200 most attested proposals of the last 5,000 blocks), read once every half minute and
+  // filtered by topic.
+  let allTime = true, perTopic = true;
   let global: { at: number; items: Promise<any[]> } | null = null;
   const attestedIn = async (domain: string): Promise<any[]> => {
+    // newer nodes keep every attestation for good: /attestations/domain/:domain
+    if (allTime) {
+      try { return (await get(`/attestations/domain/${encodeURIComponent(domain)}`)).items ?? []; }
+      catch (e: any) { if (/NODE_404/.test(String(e?.message))) allTime = false; }
+    }
     if (perTopic) {
       // a 404 means this node has no such route; anything else (a busy node sheds scans) is
       // answered from the network-wide list this time only
