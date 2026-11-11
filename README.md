@@ -29,6 +29,11 @@ themselves stay on the network, and other clients can show them.
   any device, nothing is stored or sent anywhere, and there is nothing to back up. A passkey
   belongs to the site's domain, so its key can only be made again there; the wallet menu shows
   the writing key itself, for keeping elsewhere.
+- **Or Cairn Wallet** ([cairn-substrate.com](https://cairn-substrate.com)), a browser extension
+  that holds Compute Substrate keys itself (`src/cairn.ts`). Then the Cairn account is the writing
+  key: the page never sees a private key, and Cairn asks before each entry and resonance. What
+  needs the private key in the page isn't offered with Cairn: documents, remembering, invite links
+  and buying CSD with USDC.
 - **Before you sign in** you can write and save entries to keep later. They wait in your browser,
   seen by nobody, until you keep them.
 - **An entry** is a CSD proposal (`src/entries.ts`):

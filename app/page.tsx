@@ -14,6 +14,11 @@ import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
 import { NoPrf, makePasskey, passkeysHere, signInWithPasskey } from "@/passkey";
+import { cairnConnect, cairnSubmit, discoverCairn, type CairnMe, type CairnProvider } from "@/cairn";
+// who is writing: a key this page holds (from a wallet signature or a passkey), or a Cairn account,
+// whose key stays in Cairn
+type Me = CsdKey | CairnMe;
+const local = (k: Me | null | undefined): k is CsdKey => !!k && "priv" in k;
 
 // ── settings and small stores ───────────────────────────────────────────────
 const DEFAULT_NODE = process.env.NEXT_PUBLIC_CSD_API ?? "https://csd.aon.network";
@@ -160,12 +165,33 @@ export default function Page() {
   // the writing key
   // kept for this tab only (sessionStorage), so a reload doesn't ask the wallet again; closing
   // the tab forgets it
-  const [key, setKeyState] = useState<CsdKey | null>(null);
-  const setKey = useCallback((k: CsdKey | null) => {
+  const [key, setKeyState] = useState<Me | null>(null);
+  const setKey = useCallback((k: Me | null) => {
     setKeyState(k);
-    try { k ? sessionStorage.setItem(K_SESSION, bytesToHex(k.priv)) : sessionStorage.removeItem(K_SESSION); } catch {}
+    try { k ? sessionStorage.setItem(K_SESSION, local(k) ? bytesToHex(k.priv) : `cairn:${k.addr20}`) : sessionStorage.removeItem(K_SESSION); } catch {}
   }, []);
-  useEffect(() => { try { const h = sessionStorage.getItem(K_SESSION); if (h) setKeyState(keyFromPrivate(hexToBytes(h))); } catch {} }, []);
+  useEffect(() => {
+    let h: string | null = null;
+    try { h = sessionStorage.getItem(K_SESSION); } catch {}
+    if (!h) return;
+    if (!h.startsWith("cairn:")) { try { setKeyState(keyFromPrivate(hexToBytes(h))); } catch {} return; }
+    // Cairn answers without asking while it's unlocked and on the same account
+    const want = h.slice(6);
+    let done = false;
+    const stop = discoverCairn(async c => {
+      if (done) return; done = true;
+      try { const a = await cairnConnect(c); if (a === want) setKeyState({ addr20: a, cairn: c }); else setKey(null); } catch { setKey(null); }
+    });
+    const t = setTimeout(stop, 4000);
+    return () => { stop(); clearTimeout(t); };
+  }, [setKey]);
+  // Cairn says when it locks or switches accounts; then this page stops writing as that account
+  useEffect(() => {
+    if (!key || local(key) || !key.cairn.on) return;
+    const c = key.cairn, off = () => setKey(null);
+    c.on!("accountsChanged", off); c.on!("disconnect", off);
+    return () => { c.removeListener?.("accountsChanged", off); c.removeListener?.("disconnect", off); };
+  }, [key, setKey]);
   const [balance, setBalance] = useState<bigint | null>(null);
   // change from our own sends that isn't in a block yet: spendable after the next block, and
   // still ours, so it counts in the balance shown
@@ -181,6 +207,7 @@ export default function Page() {
   }, [api, key]);
   const send = async (app: Parameters<typeof buildAppTx>[2], fee: bigint) => {
     if (!key) throw new Error("Sign in first.");
+    if (!local(key)) { const id = await cairnSubmit(key.cairn, app, fee); setTimeout(refreshBalance, 1500); return id; }
     const utxos = await api.utxos(key.addr20);
     if (utxos.reduce((s, u) => s + u.value, 0n) < fee && inflight.current.length) throw new Error("WAIT_FOR_BLOCK");
     const tx = buildAppTx(utxos, key, app, fee);
@@ -265,7 +292,8 @@ export default function Page() {
     if (!key) throw new Error("Sign in first.");
     // a document: the file goes to Arweave first, then the entry that points at it
     let docId: string | undefined;
-    if (doc) { step?.("Storing the file on Arweave…"); docId = await upload(key, doc.bytes, doc.type, text); step?.("Keeping the entry…"); }
+    if (doc && !local(key)) throw new Error("Documents are signed by the writing key in this page, which Cairn keeps to itself. Sign in with a passkey or wallet to publish one.");
+    if (doc && local(key)) { step?.("Storing the file on Arweave…"); docId = await upload(key, doc.bytes, doc.type, text); step?.("Keeping the entry…"); }
     const t = await api.tip();
     const args = doc && docId ? docArgs(docId, text, topic, sha256d(doc.bytes), t.height) : proposeArgs(text, topic, t.height, replyTo);
     const id = await send(args, MIN_FEE_PROPOSE);
@@ -291,7 +319,7 @@ export default function Page() {
   const [remembered, setRemembered] = useState<Set<string> | null>(null);
   const unread = useRef(new Map<string, { who: Hex; yes: boolean }>()); // sent, not seen in a block yet
   const readRemembered = useCallback(async () => {
-    if (!key) { setRemembered(null); return; }
+    if (!local(key)) { setRemembered(null); return; }
     try {
       const acts = await api.activity(key.addr20, 500);
       const ours = acts.filter(a => a.kind === "proposal" && a.domain === REMEMBER_TOPIC && a.uri).sort((a, b) => a.height - b.height);
@@ -307,7 +335,7 @@ export default function Page() {
   }, [api, key]);
   useEffect(() => { setRemembered(null); unread.current.clear(); readRemembered(); const t = setInterval(readRemembered, 120_000); return () => clearInterval(t); }, [readRemembered]);
   const rememberPerson = async (who: Hex, yes: boolean) => {
-    if (!key) throw new Error("Sign in first.");
+    if (!local(key)) throw new Error("Sign in with a passkey or wallet first.");
     const t = await api.tip();
     const id = await send(rememberArgs(await sealRemember(key, who, yes), t.height), MIN_FEE_PROPOSE);
     unread.current.set(id.toLowerCase(), { who: who.toLowerCase() as Hex, yes });
@@ -391,7 +419,7 @@ function Who({ addr, you, size = 20 }: { addr: string; you?: boolean; size?: num
 
 type Ctx = {
   route: Route; entries: Entry[]; byId: Map<string, Entry>; height: number; loaded: boolean; netError: string | null;
-  resonance: Record<string, { count: number; weight: number }>; me: CsdKey | null; balance: bigint | null;
+  resonance: Record<string, { count: number; weight: number }>; me: Me | null; balance: bigint | null;
   authors: Record<string, Hex>; needAuthors: (ids: Hex[]) => void; resonated: Record<string, true>; resonate: (id: Hex) => Promise<void>;
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
   waiting: Waiting[]; unwait: (at: number) => void; keepWaiting: () => void;
@@ -403,7 +431,7 @@ type Ctx = {
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
-function Header({ route, keyState, balance }: { route: Route; keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null }) {
+function Header({ route, keyState, balance }: { route: Route; keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null }) {
   const level = route.view === "me" ? "me" : route.view === "everyone" ? "everyone" : route.view === "topic" || route.view === "topics" ? "topics" : "";
   return (
     <header className="cp-header">
@@ -420,7 +448,7 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [CsdKey 
   );
 }
 
-function WalletButton({ keyState: [key, setKey], balance }: { keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null }) {
+function WalletButton({ keyState: [key, setKey], balance }: { keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null }) {
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<"send" | "key" | "invite" | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -442,14 +470,20 @@ function WalletButton({ keyState: [key, setKey], balance }: { keyState: [CsdKey 
           {key ? <KeyInfo k={key} balance={balance} onForget={() => { setKey(null); setOpen(false); }} onSend={() => { setOpen(false); setDialog("send"); }} onShowKey={() => { setOpen(false); setDialog("key"); }} onInvite={() => { setOpen(false); setDialog("invite"); }} /> : <Connect onKey={k => { setKey(k); }} />}
         </div>
       )}
-      {key && dialog === "send" && <SendDialog k={key} onClose={() => setDialog(null)} />}
-      {key && dialog === "key" && <KeyDialog k={key} onClose={() => setDialog(null)} />}
-      {key && dialog === "invite" && <InviteDialog k={key} onClose={() => setDialog(null)} />}
+      {local(key) && dialog === "send" && <SendDialog k={key} onClose={() => setDialog(null)} />}
+      {local(key) && dialog === "key" && <KeyDialog k={key} onClose={() => setDialog(null)} />}
+      {local(key) && dialog === "invite" && <InviteDialog k={key} onClose={() => setDialog(null)} />}
     </div>
   );
 }
 
-function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: CsdKey; balance: bigint | null; onForget: () => void; onSend: () => void; onShowKey: () => void; onInvite: () => void }) {
+// buying CSD with USDC needs the writing key to prove it owns the address, which Cairn can't do here
+function TopUpFor({ me }: { me: Me }) {
+  if (local(me)) return <TopUpHere me={me} />;
+  return <span className="cp-hint">Add CSD to your Cairn account from Cairn or another wallet, or open an invite link someone made for you.</span>;
+}
+
+function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: Me; balance: bigint | null; onForget: () => void; onSend: () => void; onShowKey: () => void; onInvite: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
     <>
@@ -458,12 +492,18 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: Csd
       <span className="addr">{k.addr20}</span>
       <button className="choice" onClick={() => { navigator.clipboard?.writeText(k.addr20); setCopied(true); }}>{copied ? "Copied" : "Copy address"}</button>
       <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
-      <TopUpHere me={k} compact />
-      <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
-      <button className="choice" onClick={onInvite}>Make invite links</button>
-      <button className="choice" onClick={onSend}>Send CSD elsewhere</button>
-      <button className="choice" onClick={onShowKey}>Show writing key</button>
-      <button className="choice" onClick={onForget}>Disconnect</button>
+      {local(k) ? (
+        <>
+          <TopUpHere me={k} compact />
+          <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
+          <button className="choice" onClick={onInvite}>Make invite links</button>
+          <button className="choice" onClick={onSend}>Send CSD elsewhere</button>
+          <button className="choice" onClick={onShowKey}>Show writing key</button>
+        </>
+      ) : (
+        <span className="cp-hint">This is your Cairn account. Cairn keeps its key and asks you to approve each entry and resonance. Sending CSD and making invite links happen in Cairn.</span>
+      )}
+      <button className="choice" onClick={onForget}>{local(k) ? "Disconnect" : "Sign out"}</button>
     </>
   );
 }
@@ -613,7 +653,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
 }
 
 // someone opened an invite link
-function Invite({ code, keyState }: { code: string; keyState: [CsdKey | null, (k: CsdKey | null) => void] }) {
+function Invite({ code, keyState }: { code: string; keyState: [Me | null, (k: Me | null) => void] }) {
   const pay = useContext(Pay);
   const [me, setMe] = keyState;
   const ik = useMemo(() => keyFromCode(code), [code]);
@@ -796,12 +836,21 @@ function KeyDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
   );
 }
 
-function Connect({ onKey }: { onKey: (k: CsdKey) => void }) {
+function Connect({ onKey }: { onKey: (k: Me) => void }) {
   const pay = useContext(Pay);
   const [wallets, setWallets] = useState<WalletInfo[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => discoverWallets(setWallets), []);
+  const [cairn, setCairn] = useState<CairnProvider | null>(null);
+  useEffect(() => discoverCairn(setCairn), []);
+  const useCairn = async () => {
+    if (!cairn) return;
+    setBusy("cairn"); setErr(null);
+    try { onKey({ addr20: await cairnConnect(cairn), cairn }); }
+    catch (e: any) { setErr(String(e?.message ?? e)); }
+    finally { setBusy(null); }
+  };
   const go = async (w: WalletInfo) => {
     setBusy(w.id); setErr(null);
     try { const r = await deriveKey(w); pay.setEth({ wallet: w, account: r.account }); try { sessionStorage.setItem(K_PAYER, w.id); } catch {} onKey(r.key); } catch (e: any) { setErr(e?.message?.includes("rejected") ? "The wallet didn't sign." : String(e?.message ?? e)); } finally { setBusy(null); }
@@ -820,6 +869,13 @@ function Connect({ onKey }: { onKey: (k: CsdKey) => void }) {
   };
   return (
     <>
+      {cairn && (
+        <>
+          <span>Cairn Wallet is installed. Write as your Cairn account: Cairn keeps the key and asks before each entry.</span>
+          <button className="choice" disabled={!!busy} onClick={useCairn}>{busy === "cairn" ? "Approve in Cairn…" : "Cairn Wallet"}</button>
+          <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
+        </>
+      )}
       {canPasskey && (
         <>
           <span>Write with a passkey: Face ID, Touch ID, Windows Hello or your phone. It makes your writing key, and nothing is sent anywhere.</span>
@@ -906,7 +962,7 @@ function Me(c: Ctx) {
           <label htmlFor="draft" className="cp-date">{todayLine()}</label>
           <div className="cp-modes" role="group" aria-label="What to keep">
             <button type="button" aria-pressed={mode === "write"} onClick={() => setMode("write")}>Write</button>
-            <button type="button" aria-pressed={mode === "doc"} onClick={() => setMode("doc")}>Publish a document</button>
+            {(!c.me || local(c.me)) && <button type="button" aria-pressed={mode === "doc"} onClick={() => setMode("doc")}>Publish a document</button>}
           </div>
         </div>
         {mode === "write"
@@ -1322,7 +1378,7 @@ function nice(e: any): string {
 }
 
 function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLater, onClose }: {
-  text: string; topic: string; replyTo?: Hex; doc?: Doc; keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null;
+  text: string; topic: string; replyTo?: Hex; doc?: Doc; keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null;
   onKeep: (step: (s: string) => void) => Promise<void>; onLater?: () => void; onClose: () => void;
 }) {
   const [step, setStep] = useState<string | null>(null);
@@ -1351,7 +1407,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLa
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
             <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and an entry takes 0.25. Your draft stays here while you add some.</span>
-            <TopUpHere me={key} />
+            <TopUpFor me={key} />
             <span className="cp-hint">Or send CSD from any CSD wallet to <span className="cp-mono" style={{ wordBreak: "break-all" }}>{key.addr20}</span>.</span>
           </div>
         ) : null}
@@ -1375,7 +1431,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLa
 
 // keeping everything that has been waiting, one entry after another
 function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
-  waiting: Waiting[]; keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null;
+  waiting: Waiting[]; keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null;
   onKeepOne: (w: Waiting, step: (s: string) => void) => Promise<void>; onClose: () => void;
 }) {
   const [key, setKey] = keyState;
@@ -1403,7 +1459,7 @@ function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
             <span>Your writing key holds {csd(balance!)} CSD and these take {csd(cost)}. They keep waiting while you add some.</span>
-            <TopUpHere me={key} />
+            <TopUpFor me={key} />
           </div>
         ) : null}
         {err && <p className="err">{err}</p>}
@@ -1820,9 +1876,9 @@ function TopicLink({ topic }: { topic: string }) {
 function TopUpHereFor({ addr }: { addr: Hex }) {
   // the profile dialog has the address; the key is the connected one
   const k = useContext(KeyCtx);
-  return k && k.addr20 === addr ? <TopUpHere me={k} /> : null;
+  return k && k.addr20 === addr ? <TopUpFor me={k} /> : null;
 }
-const KeyCtx = createContext<CsdKey | null>(null);
+const KeyCtx = createContext<Me | null>(null);
 
 // ── documents ───────────────────────────────────────────────────────────────
 type Doc = { bytes: Uint8Array; type: string; name: string };
