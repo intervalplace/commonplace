@@ -216,8 +216,10 @@ export function node(base: string) {
   let global: { at: number; items: Promise<any[]> } | null = null;
   const attestedIn = async (domain: string): Promise<any[]> => {
     if (perTopic) {
+      // a 404 means this node has no such route; anything else (a busy node sheds scans) is
+      // answered from the network-wide list this time only
       try { return (await get(`/recent/attestations/${encodeURIComponent(domain)}/200`)).items ?? []; }
-      catch (e: any) { if (!/NODE_404/.test(String(e?.message))) throw e; perTopic = false; }
+      catch (e: any) { if (/NODE_404/.test(String(e?.message))) perTopic = false; }
     }
     if (!global || Date.now() - global.at > 30_000) global = { at: Date.now(), items: get("/recent/attestations/200").then(j => j.items ?? []).catch(() => []) };
     return (await global.items).filter((r: any) => r.domain === domain);
