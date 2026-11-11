@@ -166,6 +166,23 @@ export function buildSendTx(utxos: Utxo[], key: CsdKey, to: Hex, amount: bigint 
   return signTx(unsigned, key);
 }
 
+// One payment to each of several addresses, in one transaction
+export function buildSplitTx(utxos: Utxo[], key: CsdKey, pays: { to: Hex; value: bigint }[], fee = SEND_FEE): Tx {
+  for (const p of pays) {
+    if (!/^0x[0-9a-f]{40}$/i.test(p.to)) throw new Error("BAD_ADDRESS");
+    if (p.value < MIN_SEND) throw new Error("SEND_TOO_SMALL");
+  }
+  const need = pays.reduce((s, p) => s + p.value, 0n) + fee;
+  const sorted = [...utxos].sort((a, b) => (b.value > a.value ? 1 : b.value < a.value ? -1 : 0)).slice(0, 500);
+  const picked: Utxo[] = []; let total = 0n;
+  for (const u of sorted) { if (total >= need) break; picked.push(u); total += u.value; }
+  if (total < need) throw new Error("NOT_ENOUGH_CSD");
+  const outputs: TxOut[] = pays.map(p => ({ value: p.value, addr20: p.to.toLowerCase() as Hex }));
+  if (total > need) outputs.push({ value: total - need, addr20: key.addr20 });
+  const unsigned: Tx = { version: 1, inputs: picked.map(u => ({ txid: u.txid, vout: u.vout, scriptSig: new Uint8Array(0) })), outputs, locktime: 0, app: { kind: "none" } };
+  return signTx(unsigned, key);
+}
+
 // The node's /tx/submit JSON: serde's default shapes, byte arrays as number arrays
 export function txToJson(tx: Tx) {
   const a = tx.app;

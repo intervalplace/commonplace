@@ -48,7 +48,7 @@ page.on("pageerror", (e: any) => console.log("page error:", e.message));
 const shot = (n: string) => page.screenshot({ path: `${out}/${n}.png`, fullPage: true });
 try {
   await page.goto(`${SITE}/#/`);
-  await page.getByRole("button", { name: "Connect wallet" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await page.getByRole("button", { name: "Test Wallet" }).click();
   await page.locator(".cp-menu .addr").waitFor();
   await page.getByText(/^About .* CSD, enough for about/).waitFor({ timeout: 30_000 });

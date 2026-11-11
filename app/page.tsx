@@ -1,10 +1,11 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
+import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, buildSplitTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
+import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
@@ -12,6 +13,7 @@ import { sha256d } from "@/csd";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
+import { NoPrf, makePasskey, passkeysHere, signInWithPasskey } from "@/passkey";
 
 // ── settings and small stores ───────────────────────────────────────────────
 const DEFAULT_NODE = process.env.NEXT_PUBLIC_CSD_API ?? "https://csd.aon.network";
@@ -24,7 +26,9 @@ function nodeUrl(): string {
 }
 function load<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } }
 function save(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
-const K_SESSION = "commonplace.key1", K_DRAFT = "commonplace.draft1", K_PENDING = "commonplace.pending1", K_AUTHORS = "commonplace.authors1", K_MINE = "commonplace.resonated1";
+const K_SESSION = "commonplace.key1", K_DRAFT = "commonplace.draft1", K_PENDING = "commonplace.pending1", K_AUTHORS = "commonplace.authors1", K_MINE = "commonplace.resonated1", K_WAITING = "commonplace.waiting1";
+// written but not kept yet: stays in this browser until there is a key with CSD to keep it with
+type Waiting = { text: string; topic: string; replyTo?: Hex; at: number };
 
 type Pending = Entry & { sentAt: number };
 
@@ -58,7 +62,7 @@ function epochEnds(height: number): string {
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -66,6 +70,7 @@ function parseRoute(h: string): Route {
   if (p[0] === "e" && /^0x[0-9a-f]{64}$/i.test(p[1] ?? "")) return { view: "entry", id: p[1].toLowerCase() as Hex };
   if (p[0] === "everyone") return { view: "everyone" };
   if (p[0] === "about") return { view: "about" };
+  if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
   return { view: "me" };
 }
@@ -175,7 +180,7 @@ export default function Page() {
     } catch {}
   }, [api, key]);
   const send = async (app: Parameters<typeof buildAppTx>[2], fee: bigint) => {
-    if (!key) throw new Error("Connect a wallet first.");
+    if (!key) throw new Error("Sign in first.");
     const utxos = await api.utxos(key.addr20);
     if (utxos.reduce((s, u) => s + u.value, 0n) < fee && inflight.current.length) throw new Error("WAIT_FOR_BLOCK");
     const tx = buildAppTx(utxos, key, app, fee);
@@ -249,11 +254,15 @@ export default function Page() {
 
   // keeping an entry, or resonating with one
   const [keeping, setKeeping] = useState<null | { text: string; topic: string; replyTo?: Hex; doc?: Doc; done: () => void }>(null);
+  const [waiting, setWaiting] = useState<Waiting[]>([]);
+  useEffect(() => { setWaiting(load(K_WAITING, [] as Waiting[])); }, []);
+  const putWaiting = (f: (w: Waiting[]) => Waiting[]) => setWaiting(prev => { const next = f(prev); save(K_WAITING, next); return next; });
+  const [keepingWaiting, setKeepingWaiting] = useState(false);
   const [resonated, setResonated] = useState<Record<string, true>>({});
   useEffect(() => setResonated(load(K_MINE, {})), []);
 
   const keep = async (text: string, topic: string, replyTo?: Hex, doc?: Doc, step?: (s: string) => void) => {
-    if (!key) throw new Error("Connect a wallet first.");
+    if (!key) throw new Error("Sign in first.");
     // a document: the file goes to Arweave first, then the entry that points at it
     let docId: string | undefined;
     if (doc) { step?.("Storing the file on Arweave…"); docId = await upload(key, doc.bytes, doc.type, text); step?.("Keeping the entry…"); }
@@ -265,14 +274,14 @@ export default function Page() {
     return id;
   };
   const keepProfile = async (pic: number, name: string) => {
-    if (!key) throw new Error("Connect a wallet first.");
+    if (!key) throw new Error("Sign in first.");
     const t = await api.tip();
     const id = await send(profileArgs(pic, name, t.height), MIN_FEE_PROPOSE);
     const p: Pending = { id, topic: PROFILE_TOPIC, text: cleanName(name), kind: "profile", pic, name: cleanName(name), height: t.height + 1, time: Math.floor(Date.now() / 1000), pending: true, author: key.addr20, sentAt: Date.now() };
     setPending(prev => { const next = [p, ...prev]; save(K_PENDING, next); return next; });
   };
   const keepStyle = async (st: PageStyle) => {
-    if (!key) throw new Error("Connect a wallet first.");
+    if (!key) throw new Error("Sign in first.");
     const t = await api.tip();
     const id = await send(styleArgs(st, t.height), MIN_FEE_PROPOSE);
     const p: Pending = { id, topic: STYLE_TOPIC, text: st.bio, kind: "style", style: st, height: t.height + 1, time: Math.floor(Date.now() / 1000), pending: true, author: key.addr20, sentAt: Date.now() };
@@ -298,7 +307,7 @@ export default function Page() {
   }, [api, key]);
   useEffect(() => { setRemembered(null); unread.current.clear(); readRemembered(); const t = setInterval(readRemembered, 120_000); return () => clearInterval(t); }, [readRemembered]);
   const rememberPerson = async (who: Hex, yes: boolean) => {
-    if (!key) throw new Error("Connect a wallet first.");
+    if (!key) throw new Error("Sign in first.");
     const t = await api.tip();
     const id = await send(rememberArgs(await sealRemember(key, who, yes), t.height), MIN_FEE_PROPOSE);
     unread.current.set(id.toLowerCase(), { who: who.toLowerCase() as Hex, yes });
@@ -311,7 +320,8 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }), editProfile: () => setEditingProfile(true) };
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+    waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
     <Pay.Provider value={{ eth, setEth, api, refresh: () => { refreshBalance(); setTimeout(refreshBalance, 90_000); } }}>
@@ -325,6 +335,7 @@ export default function Page() {
       {route.view === "everyone" && <Everyone {...ctx} />}
       {route.view === "person" && <Person {...ctx} addr={route.addr} />}
       {route.view === "about" && <About />}
+      {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
         <a href="#/about">About</a>
@@ -336,8 +347,14 @@ export default function Page() {
         <KeepDialog
           {...keeping} keyState={[key, setKey]} balance={balance}
           onKeep={async step => { await keep(keeping.text, keeping.topic, keeping.replyTo, keeping.doc, step); keeping.done(); setKeeping(null); }}
+          onLater={keeping.doc ? undefined : () => { putWaiting(w => [...w, { text: keeping.text, topic: normTopic(keeping.topic), replyTo: keeping.replyTo, at: Date.now() }]); keeping.done(); setKeeping(null); }}
           onClose={() => setKeeping(null)}
         />
+      )}
+      {keepingWaiting && (
+        <WaitingDialog waiting={waiting} keyState={[key, setKey]} balance={balance}
+          onKeepOne={async (w, step) => { await keep(w.text, w.topic, w.replyTo, undefined, step); putWaiting(ws => ws.filter(x => x.at !== w.at)); }}
+          onClose={() => setKeepingWaiting(false)} />
       )}
       {editingProfile && key && (
         <ProfileDialog addr={key.addr20} current={profiles[key.addr20]} balance={balance}
@@ -377,6 +394,7 @@ type Ctx = {
   resonance: Record<string, { count: number; weight: number }>; me: CsdKey | null; balance: bigint | null;
   authors: Record<string, Hex>; needAuthors: (ids: Hex[]) => void; resonated: Record<string, true>; resonate: (id: Hex) => Promise<void>;
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
+  waiting: Waiting[]; unwait: (at: number) => void; keepWaiting: () => void;
   editProfile: () => void;
   all: Entry[]; api: ReturnType<typeof node>; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
@@ -404,7 +422,7 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [CsdKey 
 
 function WalletButton({ keyState: [key, setKey], balance }: { keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null }) {
   const [open, setOpen] = useState(false);
-  const [dialog, setDialog] = useState<"send" | "key" | null>(null);
+  const [dialog, setDialog] = useState<"send" | "key" | "invite" | null>(null);
   const box = useRef<HTMLDivElement>(null);
   // closes on Escape or a click anywhere else
   useEffect(() => {
@@ -417,20 +435,21 @@ function WalletButton({ keyState: [key, setKey], balance }: { keyState: [CsdKey 
   return (
     <div className="cp-wallet" ref={box}>
       <button aria-expanded={open} onClick={() => setOpen(o => !o)}>
-        {key ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><WalletPic addr={key.addr20} />{short(key.addr20)}{balance !== null && <span className="bal">{csd(balance)} CSD</span>}</span> : "Connect wallet"}
+        {key ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><WalletPic addr={key.addr20} />{short(key.addr20)}{balance !== null && <span className="bal">{csd(balance)} CSD</span>}</span> : "Sign in"}
       </button>
       {open && (
         <div className="cp-menu">
-          {key ? <KeyInfo k={key} balance={balance} onForget={() => { setKey(null); setOpen(false); }} onSend={() => { setOpen(false); setDialog("send"); }} onShowKey={() => { setOpen(false); setDialog("key"); }} /> : <Connect onKey={k => { setKey(k); }} />}
+          {key ? <KeyInfo k={key} balance={balance} onForget={() => { setKey(null); setOpen(false); }} onSend={() => { setOpen(false); setDialog("send"); }} onShowKey={() => { setOpen(false); setDialog("key"); }} onInvite={() => { setOpen(false); setDialog("invite"); }} /> : <Connect onKey={k => { setKey(k); }} />}
         </div>
       )}
       {key && dialog === "send" && <SendDialog k={key} onClose={() => setDialog(null)} />}
       {key && dialog === "key" && <KeyDialog k={key} onClose={() => setDialog(null)} />}
+      {key && dialog === "invite" && <InviteDialog k={key} onClose={() => setDialog(null)} />}
     </div>
   );
 }
 
-function KeyInfo({ k, balance, onForget, onSend, onShowKey }: { k: CsdKey; balance: bigint | null; onForget: () => void; onSend: () => void; onShowKey: () => void }) {
+function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: CsdKey; balance: bigint | null; onForget: () => void; onSend: () => void; onShowKey: () => void; onInvite: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
     <>
@@ -441,6 +460,7 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey }: { k: CsdKey; balan
       <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
       <TopUpHere me={k} compact />
       <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
+      <button className="choice" onClick={onInvite}>Make invite links</button>
       <button className="choice" onClick={onSend}>Send CSD elsewhere</button>
       <button className="choice" onClick={onShowKey}>Show writing key</button>
       <button className="choice" onClick={onForget}>Disconnect</button>
@@ -476,6 +496,185 @@ const NOT_ETH = "This must be a Compute Substrate address, not an Ethereum one. 
 
 function useEscape(onClose: () => void, busy = false) {
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [busy, onClose]);
+}
+
+// ── invite links: CSD in a link, for whoever opens it first ─────────────────
+const GIFTS = [50_000_000n, 100_000_000n, 200_000_000n, 500_000_000n]; // 0.5, 1, 2 and 5 CSD
+const K_INVITES = "commonplace.invites1"; // per writing key, the next invite number, in case the network hasn't shown the last ones yet
+type InviteRow = { n: number; link: string; holds: bigint; used: boolean };
+
+function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
+  const pay = useContext(Pay);
+  const price = usePrice();
+  const [gift, setGift] = useState(GIFTS[1]);
+  const [count, setCount] = useState(1);
+  const [rows, setRows] = useState<InviteRow[] | null>(null);
+  const [next, setNext] = useState(0);
+  const [made, setMade] = useState<string[] | null>(null);
+  const [avail, setAvail] = useState<bigint | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  useEscape(onClose, !!busy);
+  const stored = () => (load(K_INVITES, {} as Record<string, number>))[k.addr20] ?? 0;
+  // the invites this key has made: numbered from 0, until one the network has never seen
+  const scan = useCallback(async () => {
+    if (!pay.api) return;
+    const out: InviteRow[] = [];
+    const upto = stored();
+    for (let n = 0; n < 200; n++) {
+      const ik = inviteKey(k, n);
+      const [acts, us] = await Promise.all([pay.api.activity(ik.addr20, 5).catch(() => []), pay.api.utxos(ik.addr20, true).catch(() => [])]);
+      if (!acts.length && !us.length && n >= upto) break;
+      const holds = us.reduce((s, u) => s + u.value, 0n);
+      out.push({ n, link: inviteLink(ik), holds, used: holds === 0n && acts.length > 0 });
+    }
+    setRows(out); setNext(out.length);
+    pay.api.utxos(k.addr20).then(us => setAvail(us.reduce((s, u) => s + u.value, 0n))).catch(() => setAvail(0n));
+  }, [pay.api, k]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { scan(); }, [scan]);
+  const cost = fundFor(gift) * BigInt(count) + SEND_FEE;
+  const short_ = avail !== null && avail < cost;
+  const copy = (t: string, what: string) => { navigator.clipboard?.writeText(t); setCopied(what); };
+  const make = async () => {
+    if (!pay.api || rows === null) return;
+    setBusy("make"); setErr(null);
+    try {
+      const keys = Array.from({ length: count }, (_, i) => inviteKey(k, next + i));
+      const tx = buildSplitTx(await pay.api.utxos(k.addr20), k, keys.map(ik => ({ to: ik.addr20, value: fundFor(gift) })));
+      await pay.api.submit(tx);
+      const all = load(K_INVITES, {} as Record<string, number>); all[k.addr20] = next + count; save(K_INVITES, all);
+      setMade(keys.map(inviteLink)); pay.refresh(); scan();
+    } catch (x) { setErr(nice(x)); } finally { setBusy(null); }
+  };
+  const takeBack = async (r: InviteRow) => {
+    if (!pay.api) return;
+    setBusy(`back${r.n}`); setErr(null);
+    try {
+      const ik = inviteKey(k, r.n);
+      await pay.api.submit(buildSendTx(await pay.api.utxos(ik.addr20), ik, k.addr20, "all"));
+      pay.refresh(); setRows(rs => rs && rs.map(x => x.n === r.n ? { ...x, holds: 0n, used: true } : x));
+    } catch (x) { setErr(nice(x)); } finally { setBusy(null); }
+  };
+  const open_ = (rows ?? []).filter(r => r.holds > 0n);
+  return (
+    <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="inv-title">
+        <h2 id="inv-title">{made ? (made.length === 1 ? "Your invite link" : "Your invite links") : "Make invite links"}</h2>
+        {made ? (
+          <>
+            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own writing key and start writing. It works once the CSD is in a block, in a minute or two.</p>
+            <div className="cp-links">{made.map(l => <span key={l} className="cp-mono">{l}</span>)}</div>
+            <div className="actions">
+              <button className="cp-btn" onClick={() => copy(made.join("\n"), "made")}>{copied === "made" ? "Copied" : made.length === 1 ? "Copy the link" : `Copy all ${made.length} links`}</button>
+              <button className="cp-btn-ghost" onClick={() => setMade(null)} style={{ fontSize: 16, padding: "13px 20px" }}>Back</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <ul>
+              <li>Each link carries some CSD. Whoever opens it first can move it to their own writing key and keep entries with it, with nothing to buy.</li>
+              <li>Anyone who sees a link can use it, so share it where you mean to: post a few, or send one to a friend.</li>
+              <li>The links are made from your writing key, so you can find them here on any device, and take back any nobody used.</li>
+            </ul>
+            <label className="cp-field">
+              <span className="cp-h2">Each link carries</span>
+              <div className="cp-modes">{GIFTS.map(g => <button key={String(g)} type="button" aria-pressed={gift === g} onClick={() => setGift(g)}>{csd(g)} CSD</button>)}</div>
+            </label>
+            <label className="cp-field">
+              <span className="cp-h2">How many links</span>
+              <div className="cp-modes">{[1, 3, 5, 10].map(n => <button key={n} type="button" aria-pressed={count === n} onClick={() => setCount(n)}>{n}</button>)}</div>
+            </label>
+            <div className="facts"><span>{count} {count === 1 ? "link" : "links"}, enough for about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"} each</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
+            {short_ && <p className="cp-notice" style={{ margin: 0 }}>This writing key has {csd(avail!)} CSD ready, and these take {csd(cost)}.</p>}
+            {err && <p className="err">{err}</p>}
+            <div className="actions">
+              <button className="cp-btn" disabled={!!busy || rows === null || avail === null || short_} onClick={make}>{busy === "make" ? "Making…" : count === 1 ? "Make the link" : `Make ${count} links`}</button>
+              <button className="cp-btn-ghost" disabled={!!busy} onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Close</button>
+            </div>
+            {rows && rows.length > 0 && (
+              <div className="cp-invites">
+                <span className="cp-h2">Links you have made</span>
+                <span className="cp-hint">{rows.length - open_.length} used or taken back, {open_.length} still waiting{open_.length ? ":" : "."}</span>
+                {open_.map(r => (
+                  <div key={r.n} className="cp-invite">
+                    <span>{csd(r.holds)} CSD</span>
+                    <button type="button" className="cp-linkbtn" onClick={() => copy(r.link, `l${r.n}`)}>{copied === `l${r.n}` ? "Copied" : "Copy link"}</button>
+                    <button type="button" className="cp-linkbtn" disabled={!!busy} onClick={() => takeBack(r)}>{busy === `back${r.n}` ? "Taking back…" : "Take it back"}</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// someone opened an invite link
+function Invite({ code, keyState }: { code: string; keyState: [CsdKey | null, (k: CsdKey | null) => void] }) {
+  const pay = useContext(Pay);
+  const [me, setMe] = keyState;
+  const ik = useMemo(() => keyFromCode(code), [code]);
+  const [holds, setHolds] = useState<bigint | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [taken, setTaken] = useState<bigint | null>(null);
+  const look = useCallback(() => {
+    if (!pay.api || !ik) return;
+    pay.api.utxos(ik.addr20).then(us => setHolds(us.reduce((s, u) => s + u.value, 0n))).catch(() => setHolds(0n));
+  }, [pay.api, ik]);
+  useEffect(() => { look(); }, [look]);
+  const gift = holds !== null && holds > SEND_FEE ? holds - SEND_FEE : 0n;
+  const take = async () => {
+    if (!pay.api || !ik || !me) return;
+    setBusy(true); setErr(null);
+    try {
+      const tx = buildSendTx(await pay.api.utxos(ik.addr20), ik, me.addr20, "all");
+      await pay.api.submit(tx);
+      setTaken(tx.outputs[0].value); pay.refresh();
+    } catch (x) { setErr(nice(x)); look(); } finally { setBusy(false); }
+  };
+  return (
+    <main className="cp-main cp-invitepage">
+      {!ik ? (
+        <p className="cp-empty">This link isn&apos;t a working invite. Check it was copied whole.</p>
+      ) : taken !== null ? (
+        <>
+          <h1 className="cp-topic-title">It&apos;s yours</h1>
+          <p className="lead">{csd(taken)} CSD is on its way to your writing key, and arrives in a minute or two. That&apos;s enough to keep about {Number(taken / MIN_FEE_PROPOSE)} {taken / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"}.</p>
+          <a className="cp-btn" style={{ alignSelf: "flex-start", textDecoration: "none" }} href="#/">Start writing</a>
+        </>
+      ) : holds === null ? (
+        <p className="cp-empty">Opening the invite…</p>
+      ) : gift === 0n ? (
+        <>
+          <h1 className="cp-topic-title">This invite has been used</h1>
+          <p className="lead">Someone opened it first, or it was taken back. If it was made a moment ago, it may not be in a block yet: <button type="button" className="cp-linkbtn" onClick={look}>look again</button> in a minute.</p>
+          <a className="cp-out" style={{ textAlign: "left" }} href="#/about">What is Commonplace?</a>
+        </>
+      ) : (
+        <>
+          <h1 className="cp-topic-title">You&apos;ve been given {csd(gift)} CSD</h1>
+          <p className="lead">
+            Someone made this link so you could try Commonplace without buying anything. It&apos;s enough to keep about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"}: things you write that stay
+            on the network for good, with the time you wrote them, and that nobody can edit or remove.
+          </p>
+          <p className="cp-hint" style={{ margin: 0 }}>Whoever opens a link first can take what it carries, so take it now if you mean to use it. <a href="#/about">What is Commonplace?</a></p>
+          {!me ? (
+            <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setMe} /></div>
+          ) : (
+            <div className="actions" style={{ display: "flex", gap: 12 }}>
+              <button className="cp-btn" disabled={busy} onClick={take}>{busy ? "Taking it…" : "Take it"}</button>
+            </div>
+          )}
+          {me && <p className="cp-hint" style={{ margin: 0 }}>It goes to your writing key, <span className="cp-mono">{short(me.addr20)}</span>.</p>}
+          {err && <p className="err">{err}</p>}
+        </>
+      )}
+    </main>
+  );
 }
 
 function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
@@ -607,9 +806,31 @@ function Connect({ onKey }: { onKey: (k: CsdKey) => void }) {
     setBusy(w.id); setErr(null);
     try { const r = await deriveKey(w); pay.setEth({ wallet: w, account: r.account }); try { sessionStorage.setItem(K_PAYER, w.id); } catch {} onKey(r.key); } catch (e: any) { setErr(e?.message?.includes("rejected") ? "The wallet didn't sign." : String(e?.message ?? e)); } finally { setBusy(null); }
   };
+  const [canPasskey, setCanPasskey] = useState(false);
+  useEffect(() => { setCanPasskey(passkeysHere()); }, []);
+  const passkey = async (make: boolean) => {
+    setBusy(make ? "make" : "passkey"); setErr(null);
+    try { onKey(make ? await makePasskey() : await signInWithPasskey()); }
+    catch (e: any) {
+      setErr(e instanceof NoPrf ? "This browser or passkey can't make a writing key yet. Recent Chrome, Safari, Edge and Firefox can, with a passkey saved in their password manager. Or use a wallet."
+        : e?.name === "NotAllowedError" || e?.name === "AbortError" ? "The passkey wasn't used."
+        : e?.name === "InvalidStateError" ? "That passkey already exists. Choose Use your passkey."
+        : String(e?.message ?? e));
+    } finally { setBusy(null); }
+  };
   return (
     <>
-      <span>Your wallet signs one message (twice, to check it's stable). That signature becomes your writing key. Nothing is sent anywhere.</span>
+      {canPasskey && (
+        <>
+          <span>Write with a passkey: Face ID, Touch ID, Windows Hello or your phone. It makes your writing key, and nothing is sent anywhere.</span>
+          <button className="choice" disabled={!!busy} onClick={() => passkey(false)}>{busy === "passkey" ? "Check your passkey…" : "Use your passkey"}</button>
+          <button className="choice" disabled={!!busy} onClick={() => passkey(true)}>{busy === "make" ? "Check your passkey…" : "New here? Make a passkey"}</button>
+          <span className="cp-hint">Make one once; after that, use it. Each passkey is its own writing key, and it works on this site. Your writing key can also be shown and kept elsewhere, from the wallet menu.</span>
+          <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
+          <span>Or with an Ethereum wallet.</span>
+        </>
+      )}
+      <span>Your wallet signs one message (twice, to check it&apos;s stable). That signature becomes your writing key. Nothing is sent anywhere.</span>
       {wallets === null ? <span>Looking for wallets…</span> : wallets.length === 0 ? <span>No browser wallet has answered yet. If one is installed, check that it&apos;s unlocked and allowed on this site, then <button type="button" className="cp-linkbtn" onClick={() => location.reload()}>reload the page</button>. Otherwise install one, such as MetaMask or Rabby.</span> :
         wallets.map(w => (
           <button key={w.id} className="choice" disabled={!!busy} onClick={() => go(w)}>
@@ -706,9 +927,29 @@ function Me(c: Ctx) {
 
       {c.netError && <p className="cp-notice">{c.netError}</p>}
 
+      {c.waiting.length > 0 && (
+        <section className="cp-list cp-waiting" aria-labelledby="waiting">
+          <div className="cp-row">
+            <h2 id="waiting" className="cp-h2">Waiting to be kept</h2>
+            <button className="cp-btn" onClick={c.keepWaiting}>{c.waiting.length === 1 ? "Keep it" : `Keep all ${c.waiting.length}`}</button>
+          </div>
+          {c.waiting.map(w => (
+            <article key={w.at} className="cp-entry">
+              <p className="text">{w.text}</p>
+              <div className="cp-meta">
+                <span>{guestbookOwner(w.topic) ? `In ${short(guestbookOwner(w.topic)!)}'s guestbook` : w.replyTo ? `A reply in ${w.topic}` : w.topic}</span>
+                <span>Written {when(Math.floor(w.at / 1000))}</span>
+                <button type="button" className="cp-linkbtn" onClick={() => c.unwait(w.at)}>Remove</button>
+              </div>
+            </article>
+          ))}
+          <p className="cp-hint" style={{ margin: 0 }}>Only in this browser until you keep {c.waiting.length === 1 ? "it" : "them"}. Nobody else can see {c.waiting.length === 1 ? "it" : "them"} yet.</p>
+        </section>
+      )}
+
       <section className="cp-list" aria-label="Your page">
         {!c.me ? (
-          <p className="cp-empty">Your page is everything you have kept. Connect a wallet to see it, or just start writing: the draft stays in this browser until you choose to keep it.</p>
+          <p className="cp-empty">Your page is everything you have kept. Just start writing: you can keep what you write now, or save it here and keep it later.</p>
         ) : mine.length === 0 ? (
           <p className="cp-empty">Nothing kept yet. The first thing you keep starts your page, and it stays there for as long as the network runs.</p>
         ) : mine.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} />)}
@@ -792,18 +1033,32 @@ function Topics(c: Ctx) {
   const every = allTopics(c);
   const ts = every.filter(t => t.ours).sort((a, b) => b.last - a.last || b.count - a.count);
   const apps = every.filter(t => !t.ours).sort((a, b) => b.count - a.count);
+  const [q, setQ] = useState("");
+  const find = q.trim().toLowerCase();
+  // every topic whose name holds the words typed, Commonplace's first, closest first
+  const found = !find ? [] : every.filter(t => find.split(/\s+/).every(w => t.topic.includes(w)))
+    .sort((a, b) => Number(b.ours) - Number(a.ours) || Number(b.topic.startsWith(find)) - Number(a.topic.startsWith(find)) || b.count - a.count);
+  const start = normTopic(q);
+  const exact = every.some(t => t.topic === start);
   return (
     <main className="cp-main">
       <div>
         <h1 className="cp-topic-title" style={{ fontSize: 44 }}>Topics</h1>
         <p className="cp-hint" style={{ fontSize: 15, marginTop: 10 }}>Anyone can start one by writing under it. Most recently written in first.</p>
       </div>
-      {!c.loaded ? <p className="cp-empty">Reading the network…</p> : ts.length === 0 ? <p className="cp-empty">No topics yet. Whatever you write first names the first one.</p> : (
+      <input className="cp-search" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a topic" aria-label="Find a topic" autoComplete="off" spellCheck={false} />
+      {find ? (
+        <nav aria-label="Topics found" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {found.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count.toLocaleString("en-US")} {t.count === 1 ? "entry" : "entries"}{!t.ours ? ", another app" : t.last ? `, ${when(t.last)}` : ""}</span></a>)}
+          {found.length === 0 && <p className="cp-empty" style={{ margin: 0 }}>No topic by that name yet.</p>}
+          {!exact && start && !isReserved(start) && topicOk(start) && <a className="cp-out" style={{ textAlign: "left" }} href={hrefTopic(start)}>Start “{start}” by writing the first entry in it</a>}
+        </nav>
+      ) : !c.loaded ? <p className="cp-empty">Reading the network…</p> : ts.length === 0 ? <p className="cp-empty">No topics yet. Whatever you write first names the first one.</p> : (
         <nav aria-label="Topics" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {ts.map(t => <a key={t.topic} className="cp-topiclink" href={hrefTopic(t.topic)}>{t.topic}<span>{t.count.toLocaleString("en-US")} {t.count === 1 ? "entry" : "entries"}{t.last ? `, ${when(t.last)}` : ""}</span></a>)}
         </nav>
       )}
-      {c.loaded && apps.length > 0 && (
+      {!find && c.loaded && apps.length > 0 && (
         <details className="cp-apps">
           <summary>Other apps on Compute Substrate: {apps.length} {apps.length === 1 ? "topic" : "topics"}</summary>
           <p className="cp-hint" style={{ margin: "10px 0 14px" }}>The network is shared. These topics hold what other apps have written to it, shown as they are. Write in one here and it becomes a Commonplace topic too.</p>
@@ -933,7 +1188,7 @@ function EntryView(c: Ctx & { id: Hex }) {
             <button className="cp-btn-line" disabled={busy || !c.me || mineAlready || closed} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
               {mineAlready ? "You resonated" : busy ? "Sending…" : "Resonate"}
             </button>
-            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? `Each costs 0.05 CSD${inUsd(MIN_FEE_ATTEST, price)}, and is public. ` : "Connect a wallet to resonate. "}{openLine}</span>
+            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? `Each costs 0.05 CSD${inUsd(MIN_FEE_ATTEST, price)}, and is public. ` : "Sign in to resonate. "}{openLine}</span>
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}
@@ -1066,9 +1321,9 @@ function nice(e: any): string {
   return m;
 }
 
-function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onClose }: {
+function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLater, onClose }: {
   text: string; topic: string; replyTo?: Hex; doc?: Doc; keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null;
-  onKeep: (step: (s: string) => void) => Promise<void>; onClose: () => void;
+  onKeep: (step: (s: string) => void) => Promise<void>; onLater?: () => void; onClose: () => void;
 }) {
   const [step, setStep] = useState<string | null>(null);
   const [key, setKey] = keyState;
@@ -1105,6 +1360,61 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onCl
           <button ref={first} className="cp-btn" disabled={!key || busy || short_ || balance === null} onClick={async () => { setBusy(true); setErr(null); try { await onKeep(setStep); } catch (x) { setErr(nice(x)); setBusy(false); setStep(null); } }}>
             {busy ? (step ?? "Keeping…") : doc ? "Publish it forever" : "Keep it forever"}
           </button>
+          <button className="cp-btn-ghost" disabled={busy} onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Not yet</button>
+        </div>
+        {onLater && (!key || short_) && !busy && (
+          <p className="cp-hint" style={{ margin: 0 }}>
+            Not ready to connect or pay? <button type="button" className="cp-linkbtn" onClick={onLater}>Save it to keep later</button>. It waits on your page,
+            in this browser only, and nothing is public until you keep it.
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// keeping everything that has been waiting, one entry after another
+function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
+  waiting: Waiting[]; keyState: [CsdKey | null, (k: CsdKey | null) => void]; balance: bigint | null;
+  onKeepOne: (w: Waiting, step: (s: string) => void) => Promise<void>; onClose: () => void;
+}) {
+  const [key, setKey] = keyState;
+  const price = usePrice();
+  const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [list] = useState(waiting); // what was waiting when this opened
+  useEscape(onClose, busy);
+  const cost = MIN_FEE_PROPOSE * BigInt(list.length);
+  const short_ = balance !== null && balance < cost;
+  const n = list.length;
+  return (
+    <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="wait-title">
+        <h2 id="wait-title">Keep {n === 1 ? "it" : `all ${n}`} forever?</h2>
+        <ul>
+          <li>Anyone, anywhere, will be able to read {n === 1 ? "it" : "them"}.</li>
+          <li>Nobody can edit or remove {n === 1 ? "it" : "them"}, including you.</li>
+          <li>Each is kept with the time it is kept now, not when you wrote it.</li>
+        </ul>
+        <div className="facts"><span>{n} {n === 1 ? "entry" : "entries"}</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
+        {!key ? (
+          <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
+        ) : short_ ? (
+          <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+            <span>Your writing key holds {csd(balance!)} CSD and these take {csd(cost)}. They keep waiting while you add some.</span>
+            <TopUpHere me={key} />
+          </div>
+        ) : null}
+        {err && <p className="err">{err}</p>}
+        <div className="actions">
+          <button className="cp-btn" disabled={!key || busy || short_ || balance === null} onClick={async () => {
+            setBusy(true); setErr(null);
+            try {
+              for (let i = 0; i < n; i++) await onKeepOne(list[i], s => setStep(n > 1 ? `${i + 1} of ${n}: ${s}` : s));
+              onClose();
+            } catch (x) { setErr(nice(x)); setBusy(false); setStep(null); }
+          }}>{busy ? (step ?? "Keeping…") : n === 1 ? "Keep it forever" : `Keep all ${n} forever`}</button>
           <button className="cp-btn-ghost" disabled={busy} onClick={onClose} style={{ fontSize: 16, padding: "13px 20px" }}>Not yet</button>
         </div>
       </section>
@@ -1146,9 +1456,9 @@ function About() {
         <h2>Nobody runs it</h2>
         <p>
           There is no account, no server and no company. This site is a single static page. It reads from a Compute
-          Substrate node, and it writes with a key your browser makes from one signature by your wallet. The same
-          wallet makes the same key on any device, so there is nothing to back up, and the signature never leaves the
-          page.
+          Substrate node, and it writes with a key your browser makes from your passkey or from one signature by your
+          wallet. The same passkey or wallet makes the same key on any device, so there is nothing to back up, and
+          nothing leaves the page.
         </p>
       </section>
       <section>
@@ -1156,8 +1466,8 @@ function About() {
         <p>
           Keeping an entry costs 0.25 CSD. Resonating with one, a public sign that it meant something to you, costs
           0.05 CSD. The fees go to the miners who keep the network running; nobody earns from what you write. Every epoch,
-          about an hour, the network ranks each topic&apos;s entries by resonance. If you have no CSD, the page can buy a
-          little with USDC on the open CSD/USDC market, with no gas.
+          about an hour, the network ranks each topic&apos;s entries by resonance. If you have no CSD, someone can give you
+          some with an invite link, or the page can buy a little with USDC on the open CSD/USDC market, with no gas.
         </p>
       </section>
       <section>

@@ -22,9 +22,15 @@ themselves stay on the network, and other clients can show them.
 
 ## How it works
 
-- **Your key.** Your Ethereum wallet signs one fixed message, and that signature becomes your
-  CSD writing key (`src/csd.ts`, `keyFromSignature`). The same wallet makes the same key on any
-  device, so there is nothing to back up. The signature never leaves the page.
+- **Your key.** Either your Ethereum wallet signs one fixed message and that signature becomes
+  your CSD writing key (`src/csd.ts`, `keyFromSignature`), or a passkey (Face ID, Touch ID,
+  Windows Hello, a phone) gives the same secret every time through WebAuthn's PRF extension and
+  that becomes it (`src/passkey.ts`). Either way the same wallet or passkey makes the same key on
+  any device, nothing is stored or sent anywhere, and there is nothing to back up. A passkey
+  belongs to the site's domain, so its key can only be made again there; the wallet menu shows
+  the writing key itself, for keeping elsewhere.
+- **Before you sign in** you can write and save entries to keep later. They wait in your browser,
+  seen by nobody, until you keep them.
 - **An entry** is a CSD proposal (`src/entries.ts`):
 
   | field           | value                                                    |
@@ -75,6 +81,11 @@ visitor's wallet signs an order and a USDC permit, with no transaction and no ga
 the USDC, sends the CSD straight to the writing key, and is paid by the contract only once it
 proves that payment with 20 CSD blocks on top. If it never does, the lock runs out and the USDC
 goes back to the visitor; the wallet menu offers the refund. Any page can use the same market.
+
+Or someone can give it: an **invite link** carries CSD on a key of its own, with that key in the
+link after the `#`, so it never reaches a server (`src/invite.ts`). Whoever opens it first moves
+the CSD to their own writing key. Invite keys are made from the maker's writing key and numbered,
+so the maker can find their links again on any device and take back any nobody used.
 
 CSD can leave the same way it came: the wallet menu sends any amount, or all of it, to another
 Compute Substrate address, and shows the writing key itself for importing into a CSD wallet. A

@@ -219,3 +219,14 @@ body.ty-sans .cp-entry p, body.ty-sans .cp-entry .text { font-size: 19px; }
 .cp-field textarea { font-family: var(--serif); font-size: 16px; line-height: 1.5; resize: vertical; }
 body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-remembered { display: flex; flex-direction: column; gap: 4px; padding: 16px 0; border-top: 1px solid var(--rule); }
+.cp-search { font: inherit; font-size: 17px; color: var(--ink); background: var(--card); border: 1px solid var(--edge); border-radius: 999px; padding: 12px 20px; width: 100%; box-sizing: border-box; }
+.cp-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cp-waiting { border: 1px dashed var(--line); border-radius: 14px; padding: 20px 22px; gap: 4px; }
+.cp-waiting .cp-entry { border-top: 1px solid var(--rule); }
+.cp-invitepage { gap: 22px; }
+.cp-invitepage .lead { margin: 0; font-family: var(--serif); font-size: 22px; line-height: 1.55; color: var(--ink-2); }
+.cp-links { display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow: auto; padding: 12px 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--card); }
+.cp-links span { font-size: 12px; word-break: break-all; color: var(--ink-2); }
+.cp-invites { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--rule); padding-top: 18px; }
+.cp-invite { display: flex; gap: 16px; align-items: center; font-size: 14px; color: var(--ink-2); }
+.cp-invite span { min-width: 64px; }

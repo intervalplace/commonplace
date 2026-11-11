@@ -43,7 +43,7 @@ async function connected() {
   })();`);
   const page = await ctx.newPage();
   await page.goto(`${SITE}/#/`);
-  await page.getByRole("button", { name: "Connect wallet" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await page.getByRole("button", { name: "Test Wallet" }).click();
   await page.locator(".cp-menu .addr").waitFor();
   await page.keyboard.press("Escape");

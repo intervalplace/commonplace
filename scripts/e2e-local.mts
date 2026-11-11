@@ -60,7 +60,7 @@ await page.goto(`${SITE}/#/`);
 await page.waitForTimeout(1500);
 await shot("01-me-signed-out");
 
-await page.getByRole("button", { name: "Connect wallet" }).click();
+await page.getByRole("button", { name: "Sign in" }).click();
 await page.getByRole("button", { name: "Test Wallet" }).click();
 await page.locator(".cp-menu .addr").waitFor(); // the menu now shows the writing key
 const addr = (await page.locator(".cp-menu .addr").textContent())!.trim() as Hex;
