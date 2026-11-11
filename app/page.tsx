@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, buildSplitTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
+import { tally } from "@/research";
+type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
@@ -101,7 +103,7 @@ export default function Page() {
   // resonance: the node's all-time list holds only the network's 50 most attested proposals,
   // which other apps fill, so each Commonplace topic's recent attestations are counted too
   const [allTime, setAllTime] = useState<Record<string, { count: number; weight: number }>>({});
-  const [recent, setRecent] = useState<Record<string, number>>({});
+  const [recent, setRecent] = useState<Record<string, { count: number; scoreSum: number }>>({});
   const [loaded, setLoaded] = useState(false);
   const [netError, setNetError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -261,7 +263,7 @@ export default function Page() {
     due.forEach(d => counted.current.set(d, Date.now()));
     (async () => {
       for (let i = 0; i < due.length; i += 4) {
-        const got = await Promise.all(due.slice(i, i + 4).map(d => api.resonanceIn(d).catch(() => { counted.current.delete(d); return {}; })));
+        const got = await Promise.all(due.slice(i, i + 4).map(d => api.checksIn(d).catch(() => { counted.current.delete(d); return {}; })));
         setRecent(prev => Object.assign({ ...prev }, ...got));
       }
     })();
@@ -269,9 +271,10 @@ export default function Page() {
   // the all-time figure wherever there is one; otherwise the recent count, each at least the
   // minimum fee (the recent list has no weights)
   const resonance = useMemo(() => {
-    const out: Record<string, { count: number; weight: number }> = {};
-    for (const [id, n] of Object.entries(recent)) if (n > 0) out[id] = { count: n, weight: n * Number(MIN_FEE_ATTEST) };
-    return Object.assign(out, allTime);
+    const out: Record<string, Resonance> = {};
+    for (const [id, r] of Object.entries(recent)) if (r.count > 0) out[id] = { count: r.count, weight: r.count * Number(MIN_FEE_ATTEST), scoreSum: r.scoreSum };
+    for (const [id, a] of Object.entries(allTime)) out[id] = { ...a, scoreSum: out[id]?.scoreSum };
+    return out;
   }, [recent, allTime]);
 
   // my own page needs to know which entries are mine
@@ -899,11 +902,21 @@ function Connect({ onKey }: { onKey: (k: Me) => void }) {
 }
 
 // ── one entry in a list ─────────────────────────────────────────────────────
-function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; resonance?: { count: number }; showAuthor?: boolean; showTopic?: boolean }) {
+// how a finding's checks stand, from its attestations' scores (see src/research.ts)
+function checksLine(r?: Resonance): string | null {
+  if (!r || r.scoreSum === undefined) return null;
+  const t = tally(r.count, r.scoreSum);
+  if (!t.checks) return "Not checked yet";
+  return `Checked by ${t.checks}: ${t.holds ? `${t.holds} ${t.holds === 1 ? "says" : "say"} it holds up` : "none say it holds up"}${t.fails ? `, ${t.fails} ${t.fails === 1 ? "says" : "say"} it doesn't` : ""}`;
+}
+const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+
+function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; resonance?: Resonance; showAuthor?: boolean; showTopic?: boolean }) {
   const href = e.kind === "link" ? linkHref(e.text) : null;
   return (
     <article className="cp-entry">
       {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
+      {e.kind === "finding" && <span className="cp-doclabel">Finding</span>}
       {e.hidden !== undefined ? <a className="cp-hint" href={hrefEntry(e.id)}>Not shown on this site: {e.hidden}.</a>
         : e.pending ? <p>{e.text}</p> : <a className="text" href={hrefEntry(e.id)}>{e.text}</a>}
       <div className="cp-meta">
@@ -912,7 +925,9 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
         {e.kind === "reply" && e.replyTo && showTopic && <a href={hrefEntry(e.replyTo)}>in reply</a>}
         {e.pending ? <span className="cp-pending">Being kept now, waiting for the next block</span> : <span>{when(e.time)}</span>}
         {!e.pending && <span className="cp-mono">block {e.height.toLocaleString("en-US")}</span>}
-        {resonance && resonance.count > 0 && <span>{resonance.count} resonated</span>}
+        {e.kind === "finding" ? !e.pending && <span>{checksLine(resonance) ?? (resonance?.count ? `${resonance.count} resonated` : "Not checked yet")}</span>
+          : resonance && resonance.count > 0 && <span>{resonance.count} resonated</span>}
+        {e.finding && <a href={e.finding.source} target="_blank" rel="noreferrer noopener">Source: {hostOf(e.finding.source)}</a>}
         {href && <a href={href} target="_blank" rel="noreferrer noopener">Open link</a>}
         {!e.pending && <CopyLink id={e.id} />}
       </div>
@@ -1232,10 +1247,16 @@ function EntryView(c: Ctx & { id: Hex }) {
           {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span><CopyLink id={e.id} /></>}
         </div>
         {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
+        {e.kind === "finding" && <span className="cp-doclabel">Finding</span>}
         {e.hidden !== undefined ? (
           <p className="cp-notice" style={{ margin: 0 }}>This site doesn&apos;t show this entry: {e.hidden}. It is still on Compute Substrate, and other clients can show it. <a href={HIDDEN_POLICY} target="_blank" rel="noreferrer noopener">What this site doesn&apos;t show, and why</a></p>
         ) : <>
           <p className="cp-big">{e.text}</p>
+          {e.finding && <>
+            {e.finding.quote && <blockquote className="cp-quote">{e.finding.quote}</blockquote>}
+            <a href={e.finding.source} target="_blank" rel="noreferrer noopener">Read the source on {hostOf(e.finding.source)}</a>
+            {!e.pending && <p className="cp-hint" style={{ margin: 0 }}>{checksLine(r) ?? "Not checked yet"}. A finding is kept by an agent or a person in the research memory, and checked by others who read the source. <a href="https://github.com/intervalplace/commonplace/tree/main/research" target="_blank" rel="noreferrer noopener">How it works</a></p>}
+          </>}
           {href && <a href={href} target="_blank" rel="noreferrer noopener">Open link</a>}
           {e.kind === "doc" && <DocBody e={e} />}
         </>}

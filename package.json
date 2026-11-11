@@ -23,11 +23,13 @@
   },
   "devDependencies": {
     "@dha-team/arbundles": "^1.2.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "ipfs-car": "^3.1.0",
     "tsx": "^4.23.15",
-    "typescript": "^5"
+    "typescript": "^5",
+    "zod": "^3.25.76"
   }
 }

@@ -238,6 +238,13 @@ export function node(base: string) {
       for (const r of (j.items ?? []) as any[]) out[String(r.proposal_id).toLowerCase()] = Number(r.attest_count);
       return out;
     },
+    // the same, with the scores summed too: what the research memory reads its checks from
+    checksIn: async (domain: string): Promise<Record<string, { count: number; scoreSum: number }>> => {
+      const j = await get(`/recent/attestations/${encodeURIComponent(domain)}/200`);
+      const out: Record<string, { count: number; scoreSum: number }> = {};
+      for (const r of (j.items ?? []) as any[]) out[String(r.proposal_id).toLowerCase()] = { count: Number(r.attest_count), scoreSum: Number(r.score_sum) };
+      return out;
+    },
     topk: async (epoch: number, domain: string): Promise<{ proposal_id: Hex; score: number }[]> => {
       const j = await get(`/topk/${epoch}/${encodeURIComponent(domain)}`);
       return j.items ?? j.topk ?? j.rows ?? [];

@@ -1,0 +1,8 @@
+<feed xmlns="http://www.w3.org/2005/Atom">
+<entry><id>http://arxiv.org/abs/9901.00001v1</id><title>A Test Paper on Small Models</title>
+<summary>We show that a 10 million parameter model trained on curated text matches a 100 million parameter model on three reading benchmarks. The gap closes after two epochs of training.</summary></entry>
+<entry><id>http://arxiv.org/abs/9901.00002v2</id><title>Another Test Paper on Retrieval</title>
+<summary>Retrieval over a local index halves the error rate on long questions compared with no retrieval. Gains are smaller for short questions.</summary></entry>
+<entry><id>http://arxiv.org/abs/9901.00003v1</id><title>A Third Test Paper on Agents</title>
+<summary>Agents that share a memory of earlier attempts solve 30 percent more tasks than agents that do not. Sharing helps most on tasks that need many steps.</summary></entry>
+</feed>
