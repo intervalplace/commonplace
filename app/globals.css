@@ -231,3 +231,19 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-invite { display: flex; gap: 16px; align-items: center; font-size: 14px; color: var(--ink-2); }
 .cp-invite span { min-width: 64px; }
 .cp-quote { margin: 0; padding: 4px 0 4px 18px; border-left: 3px solid var(--line); font-family: var(--serif); font-style: italic; font-size: 18px; line-height: 1.55; color: var(--ink-2); }
+.cp-frontier { gap: 28px; }
+.cp-frontier header { display: flex; flex-direction: column; gap: 12px; }
+.cp-frontier .lead { margin: 0; font-family: var(--serif); font-size: 20px; line-height: 1.55; color: var(--ink-2); }
+.cp-problem { display: flex; flex-direction: column; gap: 10px; padding: 22px 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: inherit; text-decoration: none; }
+.cp-problem:hover { border-color: var(--accent); }
+.cp-problem .top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+.cp-problem h2 { margin: 0; font-family: var(--serif); font-weight: 400; font-size: 24px; color: var(--ink); }
+.cp-problem .rec { font-family: var(--mono); font-size: 22px; color: var(--accent); white-space: nowrap; }
+.cp-problem p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+.cp-rchart { display: block; overflow: visible; }
+.cp-result .top { display: flex; gap: 12px; align-items: center; }
+.cp-result .score { font-family: var(--mono); font-size: 22px; color: var(--ink); }
+.cp-result .text { margin: 0; font-family: var(--serif); font-size: 18px; line-height: 1.5; }
+.cp-hint.ok { color: #2E6B3F; }
+.cp-verifier summary { cursor: pointer; font-size: 14px; color: var(--muted); }
+.cp-verifier pre { font-family: var(--mono); font-size: 12px; line-height: 1.5; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; overflow: auto; max-height: 420px; white-space: pre-wrap; }

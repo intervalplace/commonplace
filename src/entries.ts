@@ -8,6 +8,7 @@
 
 import { EPOCH_LEN, MAX_DOMAIN_BYTES, MAX_URI_BYTES, sha256d, utf8, type Hex, type ProposalItem } from "./csd";
 import { parseFinding, type Finding } from "./research";
+import { FRONTIER, fmt, parseProblem, parseResult, type Problem, type Result } from "./frontier";
 
 export const PREFIX = "cp:";
 export const DEFAULT_TOPIC = "thoughts";
@@ -17,13 +18,15 @@ export type Entry = {
   id: Hex;
   topic: string;
   text: string;          // the words, or the link for an outside proposal
-  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding";
+  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result";
   docId?: string;
   hash?: string;         // payload_hash: the fingerprint of the text or file        // a document entry: its Arweave id (the title is `text`)
   pic?: number;          // a profile entry: its picture (0: the one made from the key) and name
   name?: string;
   style?: PageStyle;     // a style entry: how its key's page looks
   finding?: Finding;     // a finding in the research memory: its source, claim and quote
+  problem?: Problem;     // an open problem on the frontier
+  result?: Result;       // a result on a frontier problem
   replyTo?: Hex;
   height: number;
   time: number;          // unix seconds, from the block
@@ -71,6 +74,10 @@ export function parseEntry(p: ProposalItem): Entry {
     const bio = u.slice(st[0].length);
     return { ...base, kind: "style", text: bio, style: { bg: st[1], type: st[2], pin: st[3] ? (`0x${st[3]}` as Hex) : undefined, bio } };
   }
+  const pb = p.domain === FRONTIER ? parseProblem(u) : null;
+  if (pb) return { ...base, kind: "problem", text: pb.title, problem: pb };
+  const rs = p.domain.startsWith(FRONTIER + ".") ? parseResult(u) : null;
+  if (rs) return { ...base, kind: "result", text: `Score ${fmt(rs.score)}${rs.note ? `: ${rs.note}` : ""}`, result: rs };
   const f = parseFinding(u);
   if (f) return { ...base, kind: "finding", text: f.claim, finding: f };
   if (u.startsWith(PREFIX)) return { ...base, kind: "note", text: u.slice(PREFIX.length) };

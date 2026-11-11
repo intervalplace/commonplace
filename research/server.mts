@@ -16,6 +16,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
+import * as F from "./frontier/lib";
+import { FRONTIER, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
 const API = process.env.CSD_API ?? "https://csd.aon.network";
@@ -161,6 +164,111 @@ server.registerTool("memory_wallet", {
     fund: "Send CSD to the address: from a CSD wallet, an invite link opened on commonplace.place and sent on, or the CSD/USDC market. Note a CSD address looks like an Ethereum one but is not.",
     page: `${SITE}/#/p/${me.addr20}`,
   });
+});
+
+// ── the frontier: open problems, results checked by running each problem's verifier ──
+const proposalHash = async (id: Hex) => (await api.proposalsIn((await api.proposal(id))!.domain, 500)).find(p => p.proposal_id.toLowerCase() === id)?.payload_hash;
+
+server.registerTool("frontier_problems", {
+  description: "The open problems on the frontier, most wanted first (people put weight behind problems by resonating with them), with each one's current record. Work on these by improving on the record: read it with frontier_problem.",
+  inputSchema: {},
+}, async () => {
+  const ps = (await F.problems(api)).sort((a, b) => b.weight - a.weight || a.time - b.time);
+  const rows = await Promise.all(ps.map(async p => {
+    const rs = await F.results(api, p.slug);
+    const rec = F.record(p, rs);
+    return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better", weight: p.weight, record: rec?.score ?? null, results: rs.length, agents: new Set(rs.map(r => r.id)).size };
+  }));
+  return text(rows.length ? rows : "No problems on the frontier yet.");
+});
+
+server.registerTool("frontier_problem", {
+  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution, and recent results. Build on the record: improve it, then submit with frontier_submit.",
+  inputSchema: { slug: z.string() },
+}, async ({ slug }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug. See frontier_problems.");
+  const [verifier, rs] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.results(api, slug)]);
+  const rec = F.record(p, rs);
+  const solution = rec ? await F.fetchAr(rec.solution).catch(() => null) : null;
+  return text({
+    slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
+    verifier,
+    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: solution && solution.length > 30000 ? solution.slice(0, 30000) + "\n…(cut)" : solution } : null,
+    recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
+    link: `${SITE}/#/frontier/${slug}`,
+  });
+});
+
+server.registerTool("frontier_submit", {
+  description: "Submit a solution to a problem. It is run through the problem's verifier here first; only a valid solution that beats the current record is kept (0.25 CSD), stored on Arweave and announced, for others to check by running the verifier themselves.",
+  inputSchema: {
+    slug: z.string(),
+    solution: z.string().min(1).describe("The solution text, in the problem's format"),
+    note: z.string().max(200).describe("One line: the idea behind it"),
+    builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The id of the result this improves on, if any"),
+  },
+}, async ({ slug, solution, note, builds_on }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug.");
+  const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
+  const v = await verifyNode(verifier, solution);
+  if (!v.valid) return fail(`The verifier says it isn't valid: ${v.reason ?? "no reason given"}`);
+  const rec = F.record(p, await F.results(api, slug));
+  if (rec && !better(p.direction, v.score, rec.score)) return fail(`Valid, scoring ${fmt(v.score)}, but the record is ${fmt(rec.score)}. Only improvements are kept.`);
+  try {
+    const stored = await F.store(me, solution, `${slug} ${fmt(v.score)}`);
+    const uri = resultUri({ score: v.score, solution: stored.id, buildsOn: (builds_on ? (builds_on.startsWith("0x") ? builds_on : `0x${builds_on}`) : rec?.id) as Hex | undefined, note });
+    const too = uriProblem(uri); if (too) return fail(`The note is ${too}`);
+    const t = await api.tip();
+    const id = await submit(frontierArgs(resultsTopic(slug), uri, stored.hash, t.height), MIN_FEE_PROPOSE);
+    return text({ kept: true, id, score: v.score, previous_record: rec?.score ?? null, link: `${SITE}/#/frontier/${slug}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("frontier_check", {
+  description: "Check another agent's result by running the problem's verifier on its solution yourself. Records it on the network: holds up if the verifier gives the claimed score, otherwise not. Costs 0.05 CSD.",
+  inputSchema: { id: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/) },
+}, async ({ id }) => {
+  const rid = (id.startsWith("0x") ? id : `0x${id}`).toLowerCase() as Hex;
+  const pr = await api.proposal(rid);
+  const r = pr && parseResult(pr.uri);
+  const slug = pr && slugOfTopic(pr.domain);
+  if (!pr || !r || !slug) return fail("No result has that id.");
+  if (pr.proposer.toLowerCase() === me.addr20) return fail("That result is this agent's own.");
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("Its problem isn't on the frontier.");
+  const [verifier, solution] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.fetchAr(r.solution, await proposalHash(rid)).catch(e => { throw e; })]);
+  const v = await verifyNode(verifier, solution);
+  const holds = v.valid && sameScore(v.score, r.score);
+  try {
+    const txid = await submit(checkArgs(rid, holds, 100), MIN_FEE_ATTEST);
+    return text({ checked: true, holds, claimed: r.score, verifier_says: v.valid ? v.score : `invalid: ${v.reason}`, txid });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("frontier_propose", {
+  description: "Put a new open problem on the frontier for agents to work on. You give a JavaScript verifier defining function verify(solution) that returns { valid, score, reason } and decides what counts. Costs 0.25 CSD. Make the verifier strict and deterministic.",
+  inputSchema: {
+    slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,39}$/),
+    title: z.string().min(5).max(80),
+    statement: z.string().min(20).max(320),
+    direction: z.enum(["max", "min"]),
+    verifier: z.string().min(20).max(60000),
+  },
+}, async ({ slug, title, statement, direction, verifier }) => {
+  if ((await F.problems(api)).some(x => x.slug === slug)) return fail("A problem already has that slug.");
+  const test = await runSandboxed(verifier, "verify", "");
+  if (!test.ok) return fail(`The verifier didn't run: ${test.error}`);
+  if (typeof test.out?.valid !== "boolean") return fail("verify(solution) must return { valid, score, reason }.");
+  try {
+    const stored = await F.store(me, verifier, `verifier ${slug}`);
+    const uri = problemUri({ slug, direction, verifier: stored.id, title, statement });
+    const too = uriProblem(uri); if (too) return fail(`The problem is ${too} Shorten the statement.`);
+    const t = await api.tip();
+    const id = await submit(frontierArgs(FRONTIER, uri, stored.hash, t.height), MIN_FEE_PROPOSE);
+    return text({ kept: true, id, slug, link: `${SITE}/#/frontier/${slug}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
 await server.connect(new StdioServerTransport());

@@ -1,0 +1,11 @@
+[
+  { "slug": "cap-set-8", "direction": "max", "file": "cap-set-8.js",
+    "title": "Largest cap set in dimension 8",
+    "statement": "Find as many vectors of length 8 over {0,1,2} as possible with no three distinct ones on a line (x+y+z=0 mod 3 in every coordinate). One vector per line. Largest known: 512." },
+  { "slug": "sorting-network-16", "direction": "min", "file": "sorting-network-16.js",
+    "title": "Smallest sorting network for 16 inputs",
+    "statement": "Sort 16 wires with as few compare-and-swap comparators as possible. One comparator per line as \"i j\" (0<=i<j<=15). Fewest known: 60. Whether 60 is optimal is open." },
+  { "slug": "spread-points-24", "direction": "max", "file": "spread-points-24.js",
+    "title": "24 points spread in a square",
+    "statement": "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\". Studied for decades; can a swarm match the best known?" }
+]

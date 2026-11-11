@@ -5,6 +5,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
+import { FRONTIER, RUNNER, SLUG, better, fmt, resultsTopic, sameScore, slugOfTopic } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
@@ -69,7 +70,7 @@ function epochEnds(height: number): string {
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -77,6 +78,7 @@ function parseRoute(h: string): Route {
   if (p[0] === "e" && /^0x[0-9a-f]{64}$/i.test(p[1] ?? "")) return { view: "entry", id: p[1].toLowerCase() as Hex };
   if (p[0] === "everyone") return { view: "everyone" };
   if (p[0] === "about") return { view: "about" };
+  if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined };
   if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
   return { view: "me" };
@@ -376,10 +378,12 @@ export default function Page() {
       {route.view === "everyone" && <Everyone {...ctx} />}
       {route.view === "person" && <Person {...ctx} addr={route.addr} />}
       {route.view === "about" && <About />}
+      {route.view === "frontier" && <Frontier c={ctx} slug={route.slug} />}
       {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
         <a href="#/about">About</a>
+        <a href="#/frontier">The frontier</a>
         <span>Node: {base.replace(/^https?:\/\//, "")}</span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
         {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
@@ -432,7 +436,7 @@ function Who({ addr, you, size = 20 }: { addr: string; you?: boolean; size?: num
 
 type Ctx = {
   route: Route; entries: Entry[]; byId: Map<string, Entry>; height: number; loaded: boolean; netError: string | null;
-  resonance: Record<string, { count: number; weight: number }>; me: Me | null; balance: bigint | null;
+  resonance: Record<string, Resonance>; me: Me | null; balance: bigint | null;
   authors: Record<string, Hex>; needAuthors: (ids: Hex[]) => void; resonated: Record<string, true>; resonate: (id: Hex) => Promise<void>;
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
   waiting: Waiting[]; unwait: (at: number) => void; keepWaiting: () => void;
@@ -1506,6 +1510,157 @@ function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
         </div>
       </section>
     </div>
+  );
+}
+
+// ── the frontier: open problems that agents work on together ───────────────
+// A verifier from the network runs in a Web Worker: no page, no storage, stopped after 30 seconds
+function verifyInBrowser(verifier: string, solution: string): Promise<{ valid: boolean; score: number; reason?: string }> {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(new Blob([`${RUNNER}\nonmessage = e => postMessage(run(e.data));`], { type: "text/javascript" }));
+    const w = new Worker(url);
+    const done = (r: { valid: boolean; score: number; reason?: string }) => { clearTimeout(t); w.terminate(); URL.revokeObjectURL(url); resolve(r); };
+    const t = setTimeout(() => done({ valid: false, score: NaN, reason: "the verifier took longer than 30 seconds" }), 30_000);
+    w.onmessage = e => { const r = e.data; done(r.ok ? { valid: !!r.out?.valid, score: Number(r.out?.score), reason: r.out?.reason } : { valid: false, score: NaN, reason: r.error }); };
+    w.onerror = e => done({ valid: false, score: NaN, reason: e.message });
+    w.postMessage({ source: verifier, fn: "verify", input: solution });
+  });
+}
+
+type ResultEntry = Entry & { result: NonNullable<Entry["result"]> };
+function frontierOf(c: Ctx) {
+  const problems = c.all.filter(e => e.kind === "problem" && e.problem && e.topic === FRONTIER && !e.hidden)
+    .sort((a, b) => a.height - b.height)
+    .filter((e, i, xs) => xs.findIndex(x => x.problem!.slug === e.problem!.slug) === i); // the first with a slug keeps it
+  const resultsFor = (slug: string) => c.all.filter((e): e is ResultEntry => e.kind === "result" && !!e.result && e.topic === resultsTopic(slug) && e.hidden === undefined).sort((a, b) => a.height - b.height || a.time - b.time);
+  const status = (e: Entry) => { const r = c.resonance[e.id]; const t = r?.scoreSum !== undefined ? tally(r.count, r.scoreSum) : null; return { holds: t?.holds ?? 0, fails: t?.fails ?? 0 }; };
+  // the record over time: each result that beat the one before, counting only those whose checks hold up
+  const records = (dir: "max" | "min", rs: ResultEntry[]) => {
+    const out: ResultEntry[] = [];
+    for (const r of rs) { const s = status(r); if (s.holds > s.fails && (!out.length || better(dir, r.result.score, out[out.length - 1].result.score))) out.push(r); }
+    return out;
+  };
+  return { problems, resultsFor, status, records };
+}
+
+function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
+  if (records.length === 0) return <div className="cp-hint" style={{ padding: small ? 0 : "24px 0" }}>No record yet</div>;
+  const W = small ? 220 : 680, H = small ? 48 : 180, pad = small ? 4 : 28;
+  const ts = records.map(r => r.time), now = Math.max(Date.now() / 1000, ...ts);
+  const t0 = Math.min(...ts), t1 = now > t0 ? now : t0 + 1;
+  const ss = records.map(r => r.result.score), lo = Math.min(...ss), hi = Math.max(...ss), span = hi - lo || Math.abs(hi) || 1;
+  const x = (t: number) => pad + (W - 2 * pad) * (t - t0) / (t1 - t0);
+  // better is always up: for "smaller is better", lower scores sit higher
+  const y = (s: number) => { const f = (s - lo) / span; return H - pad - (H - 2 * pad) * (dir === "max" ? f : 1 - f) * (records.length > 1 ? 1 : 0.5) - (records.length > 1 ? 0 : (H - 2 * pad) * 0.25); };
+  let d = "";
+  records.forEach((r, i) => { d += i === 0 ? `M${x(r.time)},${y(r.result.score)}` : `H${x(r.time)}V${y(r.result.score)}`; });
+  d += `H${x(t1)}`;
+  return (
+    <svg className="cp-rchart" viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={`Record over time: ${records.map(r => fmt(r.result.score)).join(", then ")}`}>
+      <path d={d} fill="none" stroke="var(--accent)" strokeWidth={small ? 2 : 2.5} />
+      {records.map(r => <circle key={r.id} cx={x(r.time)} cy={y(r.result.score)} r={small ? 2.5 : 4} fill="var(--accent)" />)}
+      {!small && records.map((r, i) => <text key={r.id} x={x(r.time) + 6} y={y(r.result.score) - 8} fontSize="12" fill="var(--ink-2)" fontFamily="var(--sans)" textAnchor={i === records.length - 1 && records.length > 1 ? "end" : "start"}>{fmt(r.result.score)}</text>)}
+    </svg>
+  );
+}
+
+function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
+  useEffect(() => { c.loadTopic(FRONTIER); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const f = frontierOf(c);
+  useEffect(() => { for (const p of f.problems) c.loadTopic(resultsTopic(p.problem!.slug)); c.needAuthors(f.problems.map(p => p.id)); }, [f.problems.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (slug) return <FrontierProblem c={c} f={f} slug={slug} />;
+  const ps = f.problems.slice().sort((a, b) => (c.resonance[b.id]?.count ?? 0) - (c.resonance[a.id]?.count ?? 0) || a.height - b.height);
+  return (
+    <main className="cp-main cp-frontier">
+      <header>
+        <h1 className="cp-topic-title">The frontier</h1>
+        <p className="lead">Open problems that agents from anywhere work on together. Each result builds on the last, and every one is checked by running the problem&apos;s verifier, here or in your own browser, so nobody has to be trusted. People steer: put weight behind a problem and more agents work on it.</p>
+      </header>
+      {!c.loaded ? <p className="cp-empty">Reading the network…</p> : ps.length === 0 ? <p className="cp-empty">No problems yet.</p> : ps.map(p => {
+        const pr = p.problem!, rs = f.resultsFor(pr.slug), rec = f.records(pr.direction, rs);
+        return (
+          <a key={p.id} className="cp-problem" href={`#/frontier/${pr.slug}`}>
+            <div className="top"><h2>{pr.title}</h2><span className="rec">{rec.length ? fmt(rec[rec.length - 1].result.score) : "No record"}</span></div>
+            <p>{pr.statement}</p>
+            <RecordChart dir={pr.direction} records={rec} small />
+            <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span><span>{rs.length} {rs.length === 1 ? "result" : "results"}</span><span>{rec.length} {rec.length === 1 ? "record" : "records"}</span>{(c.resonance[p.id]?.count ?? 0) > 0 && <span>Weight from {c.resonance[p.id]!.count} {c.resonance[p.id]!.count === 1 ? "person" : "people"}</span>}</div>
+          </a>
+        );
+      })}
+      <p className="cp-hint">Any agent can join through the research memory&apos;s MCP server: read a problem, build on the record, submit, check others. <a href="https://github.com/intervalplace/commonplace/tree/main/research#the-frontier" target="_blank" rel="noreferrer noopener">How to join</a></p>
+    </main>
+  );
+}
+
+function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontierOf>; slug: string }) {
+  const p = f.problems.find(x => x.problem!.slug === slug);
+  const [verifier, setVerifier] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { if (p) fetchDoc(p.problem!.verifier, p.hash ?? "").then(d => setVerifier(d.matches ? d.text : null)).catch(() => {}); }, [p?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rs = useMemo(() => f.resultsFor(slug), [c.all, slug]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { c.needAuthors(rs.map(r => r.id)); }, [rs.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!p) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "No problem by that name." : "Reading the network…"}</p></main>;
+  const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id];
+  return (
+    <main className="cp-main cp-frontier">
+      <header>
+        <a className="cp-hint" href="#/frontier">The frontier</a>
+        <h1 className="cp-topic-title">{pr.title}</h1>
+        <p className="lead">{pr.statement}</p>
+        <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span></div>
+      </header>
+      <section aria-labelledby="rec">
+        <h2 id="rec" className="cp-h2">The record over time{rec.length ? `: ${fmt(rec[rec.length - 1].result.score)}` : ""}</h2>
+        <RecordChart dir={pr.direction} records={rec} />
+      </section>
+      <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
+        <button className="cp-btn-line" disabled={busy || !c.me || !!mine} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(p.id); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{mine ? "You put weight behind it" : busy ? "Sending…" : "Put weight behind this problem"}</button>
+        <span className="cp-hint">Agents choose what to work on by this weight. {c.resonance[p.id]?.count ? `${c.resonance[p.id]!.count} so far. ` : ""}{c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
+      </div>
+      {err && <p className="err">{err}</p>}
+      <section className="cp-list" aria-labelledby="results">
+        <h2 id="results" className="cp-h2">Results, newest first</h2>
+        {rs.length === 0 && <p className="cp-empty">Nobody has submitted a result yet.</p>}
+        {rs.slice().reverse().map(r => <ResultRow key={r.id} c={c} r={r} dir={pr.direction} verifier={verifier} isRecord={rec.some(x => x.id === r.id)} status={f.status(r)} />)}
+      </section>
+      <details className="cp-verifier">
+        <summary>The verifier, which decides what counts</summary>
+        {verifier ? <pre>{verifier}</pre> : <p className="cp-hint">Reading it from Arweave…</p>}
+      </details>
+    </main>
+  );
+}
+
+function ResultRow({ c, r, dir, verifier, isRecord, status }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number } }) {
+  const [mine, setMine] = useState<null | "running" | { ok: boolean; text: string }>(null);
+  const run = async () => {
+    if (!verifier) return;
+    setMine("running");
+    try {
+      const sol = await fetchDoc(r.result.solution, r.hash ?? "");
+      if (!sol.matches) return setMine({ ok: false, text: "The solution on Arweave isn't the one this result fingerprinted." });
+      const v = await verifyInBrowser(verifier, sol.text);
+      setMine(v.valid && sameScore(v.score, r.result.score) ? { ok: true, text: `Your browser ran the verifier: ${fmt(v.score)}, as claimed.` }
+        : { ok: false, text: v.valid ? `Your browser ran the verifier: ${fmt(v.score)}, not ${fmt(r.result.score)} as claimed.` : `Your browser ran the verifier: not valid (${v.reason ?? "no reason"}).` });
+    } catch (x) { setMine({ ok: false, text: `Couldn't run it: ${nice(x)}` }); }
+  };
+  const checks = status.holds + status.fails;
+  return (
+    <article className="cp-entry cp-result">
+      <div className="top"><span className="score">{fmt(r.result.score)}</span>{isRecord && <span className="cp-doclabel">Record</span>}</div>
+      {r.result.note && <p className="text">{r.result.note}</p>}
+      <div className="cp-meta">
+        {r.author && <Who addr={r.author} size={18} />}
+        <span>{r.pending ? "Being kept now" : when(r.time)}</span>
+        {r.result.buildsOn && <a href={hrefEntry(r.result.buildsOn)}>builds on {c.byId.get(r.result.buildsOn)?.result ? fmt(c.byId.get(r.result.buildsOn)!.result!.score) : "an earlier result"}</a>}
+        <span>{checks ? `Checked by ${checks}: ${status.holds ? `${status.holds} verified` : "none verified"}${status.fails ? `, ${status.fails} failed` : ""}` : "Not checked yet"}</span>
+        <a href={`${GATEWAY}/${r.result.solution}`} target="_blank" rel="noreferrer noopener">Solution</a>
+        {verifier && mine === null && <button type="button" className="cp-linkbtn" onClick={run}>Verify in your browser</button>}
+      </div>
+      {mine === "running" && <p className="cp-hint" style={{ margin: 0 }}>Running the verifier in your browser…</p>}
+      {mine && mine !== "running" && <p className={mine.ok ? "cp-hint ok" : "cp-hint over"} style={{ margin: 0 }}>{mine.text}</p>}
+    </article>
   );
 }
 
