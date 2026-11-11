@@ -461,8 +461,13 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [Me | nu
         <a href="#/topics" aria-current={level === "topics" ? "page" : undefined}>Topics</a>
         <span className="rule" aria-hidden="true" />
         <a href="#/everyone" aria-current={level === "everyone" ? "page" : undefined}>Everyone</a>
+        <a className="cp-frontier-link narrow" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" ? "page" : undefined}>Frontier</a>
       </nav>
-      <WalletButton keyState={keyState} balance={balance} />
+      <div className="cp-right">
+        {/* the frontier is a place of its own, apart from the zoom from you to everyone */}
+        <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" ? "page" : undefined}>Frontier</a>
+        <WalletButton keyState={keyState} balance={balance} />
+      </div>
     </header>
   );
 }
@@ -1106,8 +1111,11 @@ function topicStats(entries: Entry[]) {
 // Other apps write to the same network. A topic is Commonplace's once any entry in it is one
 // (its uri starts "cp:"); a topic that has only ever held other apps' proposals is theirs.
 const fromHere = (e: Entry) => e.kind !== "link";
+// whether an entry makes its topic Commonplace's: a reply doesn't, since a reply to another app's
+// proposal sits in that app's topic (one reply would otherwise pull the whole topic in)
+const ownsTopic = (e: Entry) => e.kind !== "link" && e.kind !== "reply";
 function allTopics(c: Ctx) {
-  const ours = new Set(c.entries.filter(fromHere).map(e => e.topic));
+  const ours = new Set(c.entries.filter(ownsTopic).map(e => e.topic));
   const seen = new Map(topicStats(c.entries).map(t => [t.topic, { ...t, ours: ours.has(t.topic) }]));
   for (const d of c.domains) if (!isReserved(d.domain)) {
     const s = seen.get(d.domain);
@@ -1313,7 +1321,7 @@ function Everyone(c: Ctx) {
   const [range, setRange] = useState<"day" | "all">("all");
   const [picked, setPicked] = useState<string | null>(null);
   const [apps, setApps] = useState(false);
-  const ours = useMemo(() => new Set(c.entries.filter(fromHere).map(e => e.topic)), [c.entries]);
+  const ours = useMemo(() => new Set(c.entries.filter(ownsTopic).map(e => e.topic)), [c.entries]);
   // since the first entry means every topic, not just the newest entries: read each one
   // (only Commonplace's own, unless other apps are asked for too)
   useEffect(() => {
@@ -1634,7 +1642,7 @@ function Hiscores({ c }: { c: Ctx }) {
           <thead><tr><th>Rank</th><th>Name</th><th title="Records it holds now">Held</th><th title="Problems solved: the record reached the proven best">Solved</th><th title="Records it has ever set">Set</th><th title="Results of its that checks confirm">Verified</th></tr></thead>
           <tbody>
             {list.map((r, i) => (
-              <tr key={r.who} className={i === 0 ? "top" : undefined}>
+              <tr key={r.who} className={i === 0 ? "top" : undefined} onClick={e => { if (!(e.target as HTMLElement).closest("a")) location.hash = hrefPerson(r.who); }}>
                 <td className="rank">{i + 1}</td>
                 <td><Who addr={r.who} size={20} /></td>
                 <td>{r.held}</td><td>{r.solved}</td><td>{r.set}</td><td>{r.verified}</td>
