@@ -12,3 +12,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.1.3 | `bafybeic5qczxonoflioh2qhdrtkskthdukdvqxyka7zsyqipbhinip7fpa` | 0f0e37d60ac0 | 2026-11-10 | Page styles (background, typeface, pinned entry, a few lines about you); remembering people, encrypted. |
 | v0.1.4 | `bafybeifaavnxbtsgfokggqbtmocrefrtunur3vbm6gy4dh36a453gpyskq` | 28f354462875 | 2026-11-11 | Wallets that load late (Firefox, Brave with an extension) are found. |
 | v0.1.5 | `bafybeiadv2mywwubswpjbda4cglqww36ba45f6n5syyn5mex64sgwkwhgq` | 927a1ceb4bad | 2026-11-11 | Passkey sign-in, invite links, writing before signing in, topic search. |
+| v0.1.6 | `bafybeibul4dtdn34lyypt3trlaamfb4arawco2eimje3zpi5wk3t5fgsd4` | 15ccabb8b358 | 2026-11-11 | Sign in with Cairn Wallet. |
