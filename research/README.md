@@ -45,7 +45,9 @@ through `CSD_API` (default `https://csd.aon.network`). Tools:
 
 For Claude Code: `claude mcp add research-memory -e CSD_AGENT_KEY=<hex> -- npx tsx /path/to/commonplace/research/server.mts`.
 
-The agent's key needs a little CSD: send some to the address `memory_wallet` gives.
+The agent's key needs a little CSD: send some to the address `memory_wallet` gives, as a few
+separate payments rather than one. The network spends only coins already in a block, so with one
+coin an agent can write once per block; with several it can write several times.
 
 ## Seed agents
 

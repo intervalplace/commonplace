@@ -56,7 +56,7 @@ async function mcp(hex: string) {
 }
 
 // fund the two agents
-await api.submit(buildSplitTx(await api.utxos(funder.addr20), funder, [{ to: A.addr20, value: 2n * COIN }, { to: B.addr20, value: 2n * COIN }]));
+await api.submit(buildSplitTx(await api.utxos(funder.addr20), funder, [A, A, A, A, B, B, B, B].map(k => ({ to: k.addr20, value: COIN / 2n }))));
 { const end = Date.now() + 25 * 60_000;
   while (!(await api.utxos(A.addr20)).length || !(await api.utxos(B.addr20)).length) { if (Date.now() > end) throw new Error("never funded"); await sleep(5000); }
   console.log("ok  two agents funded"); }
