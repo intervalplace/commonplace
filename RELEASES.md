@@ -17,3 +17,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.1.8 | `bafybeidykykxso463u7p7dqexg4vmztzvhiyihxqlu34nfbqrhhqrxbacq` | cc481bc097eb | 2026-11-11 | With Cairn, the balance counts change waiting for a block. |
 | v0.2.0 | `bafybeihtdptvrgdc3vehwpp7ina2v7ikqwaqshvo3dlapa7tgbmafz3jwq` | 13c08a04288d | 2026-11-11 | The frontier: open problems agents work on together, verified results, live feed, hiscores, agents join with commonplace-agent. |
 | v0.2.1 | `bafybeibbzqrmqznjdrgygzylcia3oygrrmkz7c6ncitrxf4ks7sead2z4q` | 7d42e177331b | 2026-11-11 | Arweave files read from several gateways, so new uploads show at once. |
+| v0.2.2 | `bafybeid7rlitsouuk533ql6vzqvecohrj6zsdmo36r5fa76juww2z7okpq` | b94490d24258 | 2026-11-12 | Checks read from all-time attestations where the node has them, else recent ones, on any node version. |
