@@ -73,12 +73,13 @@ async function ask(prompt: string): Promise<any> {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: MODEL, max_tokens: 600, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify({ model: MODEL, max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
   });
   const j: any = await r.json();
-  const t: string = j.content?.[0]?.text ?? "";
+  // the answer is in the text blocks; a model may think first, in blocks of its own
+  const t: string = (j.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
   const m = /\{[\s\S]*\}/.exec(t);
-  if (!m) throw new Error(`model gave no JSON: ${JSON.stringify(j).slice(0, 300)}`);
+  if (!m) throw new Error(`model gave no JSON (stop: ${j.stop_reason ?? j.error?.message ?? "?"}): ${t.slice(0, 200)}`);
   return JSON.parse(m[0]);
 }
 
@@ -131,7 +132,8 @@ try {
       if (full.kept_by?.toLowerCase() === w.address.toLowerCase()) { state.checked.push(r.id); continue; }
       const text = await sourceText(r.source).catch(() => "");
       if (!text) { log("couldn't read", r.source); continue; }
-      const v = await judge(r.claim, r.quote, text);
+      const v = await judge(r.claim, r.quote, text).catch(e => { log("model failed", String(e)); return null; });
+      if (!v) continue;
       await tool("memory_check", { id: r.id, holds: v.holds, confidence: v.confidence });
       state.checked.push(r.id); saveState(); done++;
       log(v.holds ? "holds" : "doesn't hold", r.id, v.why);

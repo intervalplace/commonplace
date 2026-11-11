@@ -209,7 +209,17 @@ export default function Page() {
   }, [api, key]);
   const send = async (app: Parameters<typeof buildAppTx>[2], fee: bigint) => {
     if (!key) throw new Error("Sign in first.");
-    if (!local(key)) { const id = await cairnSubmit(key.cairn, app, fee); setTimeout(refreshBalance, 1500); return id; }
+    if (!local(key)) {
+      // Cairn picks the coins and keeps the change; until the change is in a block the node lists
+      // neither, so count what's left as change the way our own sends do
+      const sum = (us: { value: bigint }[]) => us.reduce((s, u) => s + u.value, 0n);
+      const before = sum(await api.utxos(key.addr20));
+      const id = await cairnSubmit(key.cairn, app, fee);
+      const after = sum(await api.utxos(key.addr20).catch(() => []));
+      if (before - fee > after) inflight.current.push({ txid: id, change: before - fee - after, at: Date.now() });
+      refreshBalance();
+      return id;
+    }
     const utxos = await api.utxos(key.addr20);
     if (utxos.reduce((s, u) => s + u.value, 0n) < fee && inflight.current.length) throw new Error("WAIT_FOR_BLOCK");
     const tx = buildAppTx(utxos, key, app, fee);
