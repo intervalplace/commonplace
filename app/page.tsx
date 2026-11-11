@@ -1265,7 +1265,7 @@ function EntryView(c: Ctx & { id: Hex }) {
             <button className="cp-btn-line" disabled={busy || !c.me || mineAlready || closed} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
               {mineAlready ? "You resonated" : busy ? "Sending…" : "Resonate"}
             </button>
-            <span className="cp-hint">{r?.count ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? `Each costs 0.05 CSD${inUsd(MIN_FEE_ATTEST, price)}, and is public. ` : "Sign in to resonate. "}{openLine}</span>
+            <span className="cp-hint">{r?.count && e.kind !== "finding" ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? `Each costs 0.05 CSD${inUsd(MIN_FEE_ATTEST, price)}, and is public. ` : "Sign in to resonate. "}{openLine}</span>
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}
