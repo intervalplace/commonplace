@@ -209,6 +209,19 @@ export function node(base: string) {
     return r.json();
   };
   const strip = (h: string) => h.replace(/^0x/, "");
+  // A topic's recent attestations. Nodes before v1.2 have no per-topic route, so then the
+  // network-wide list (the 200 most attested proposals of the last 5,000 blocks) is read once
+  // every half minute and filtered by topic.
+  let perTopic = true;
+  let global: { at: number; items: Promise<any[]> } | null = null;
+  const attestedIn = async (domain: string): Promise<any[]> => {
+    if (perTopic) {
+      try { return (await get(`/recent/attestations/${encodeURIComponent(domain)}/200`)).items ?? []; }
+      catch (e: any) { if (!/NODE_404/.test(String(e?.message))) throw e; perTopic = false; }
+    }
+    if (!global || Date.now() - global.at > 30_000) global = { at: Date.now(), items: get("/recent/attestations/200").then(j => j.items ?? []).catch(() => []) };
+    return (await global.items).filter((r: any) => r.domain === domain);
+  };
   return {
     tip: async (): Promise<{ height: number }> => ({ height: Number((await get("/tip")).height) }),
     header: async (height: number): Promise<{ bits: number; time: number }> => (await get(`/block/height/${height}`)).header,
@@ -233,16 +246,14 @@ export function node(base: string) {
     // attestations on one topic's proposals, counted over the node's last 10,000 blocks (about
     // two weeks); counts only, the node doesn't sum their weight here
     resonanceIn: async (domain: string): Promise<Record<string, number>> => {
-      const j = await get(`/recent/attestations/${encodeURIComponent(domain)}/200`);
       const out: Record<string, number> = {};
-      for (const r of (j.items ?? []) as any[]) out[String(r.proposal_id).toLowerCase()] = Number(r.attest_count);
+      for (const r of await attestedIn(domain)) out[String(r.proposal_id).toLowerCase()] = Number(r.attest_count);
       return out;
     },
     // the same, with the scores summed too: what the research memory reads its checks from
     checksIn: async (domain: string): Promise<Record<string, { count: number; scoreSum: number }>> => {
-      const j = await get(`/recent/attestations/${encodeURIComponent(domain)}/200`);
       const out: Record<string, { count: number; scoreSum: number }> = {};
-      for (const r of (j.items ?? []) as any[]) out[String(r.proposal_id).toLowerCase()] = { count: Number(r.attest_count), scoreSum: Number(r.score_sum) };
+      for (const r of await attestedIn(domain)) out[String(r.proposal_id).toLowerCase()] = { count: Number(r.attest_count), scoreSum: Number(r.score_sum) };
       return out;
     },
     topk: async (epoch: number, domain: string): Promise<{ proposal_id: Hex; score: number }[]> => {
