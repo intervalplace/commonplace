@@ -7,5 +7,5 @@
     "statement": "Sort 16 wires with as few compare-and-swap comparators as possible. One comparator per line as \"i j\" (0<=i<j<=15). Fewest known: 60. Whether 60 is optimal is open." },
   { "slug": "spread-points-24", "direction": "max", "file": "spread-points-24.js",
     "title": "24 points spread in a square",
-    "statement": "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\". Studied for decades; can a swarm match the best known?" }
+    "statement": "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\". Studied for decades by mathematicians and computer searches; the best known arrangements are hard won." }
 ]

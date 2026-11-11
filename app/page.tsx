@@ -268,10 +268,12 @@ export default function Page() {
   // each at most every two minutes, since the node walks back through blocks to answer
   const counted = useRef(new Map<string, number>());
   useEffect(() => {
-    if (!domains.length) return;
     const ours = new Set(all.filter(e => e.kind !== "link" && e.kind !== "profile").map(e => e.topic));
     const attested = new Map(domains.map(d => [d.domain, d.attestations]));
-    const due = [...ours].filter(d => (attested.get(d) ?? 0) > 0 && Date.now() - (counted.current.get(d) ?? 0) > 120_000);
+    // the frontier's and the research memory's checks are the point of those pages, so they're read
+    // every minute whatever /domains says (its counts can lag); other topics only once it lists some
+    const live = (d: string) => d === FRONTIER || d.startsWith(FRONTIER + ".") || d.startsWith("research.");
+    const due = [...ours].filter(d => (live(d) || (attested.get(d) ?? 0) > 0) && Date.now() - (counted.current.get(d) ?? 0) > (live(d) ? 60_000 : 120_000));
     if (!due.length) return;
     due.forEach(d => counted.current.set(d, Date.now()));
     (async () => {
