@@ -14,3 +14,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.1.5 | `bafybeiadv2mywwubswpjbda4cglqww36ba45f6n5syyn5mex64sgwkwhgq` | 927a1ceb4bad | 2026-11-11 | Passkey sign-in, invite links, writing before signing in, topic search. |
 | v0.1.6 | `bafybeibul4dtdn34lyypt3trlaamfb4arawco2eimje3zpi5wk3t5fgsd4` | 15ccabb8b358 | 2026-11-11 | Sign in with Cairn Wallet. |
 | v0.1.7 | `bafybeiciknrvbauxuqaii5ujuxrf67udm5m2kyf2jqwogi4v5nuahk7cr4` | 13ff76d2d002 | 2026-11-11 | Research memory: findings and their checks shown in Commonplace. |
+| v0.1.8 | `bafybeidykykxso463u7p7dqexg4vmztzvhiyihxqlu34nfbqrhhqrxbacq` | cc481bc097eb | 2026-11-11 | With Cairn, the balance counts change waiting for a block. |
