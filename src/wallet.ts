@@ -6,12 +6,22 @@ import { WALLET_MESSAGE, keyFromSignature, bytesToHex, utf8, type CsdKey, type H
 export type Provider = { request(args: { method: string; params?: unknown[] }): Promise<any> };
 export type WalletInfo = { id: string; name: string; icon?: string; provider: Provider };
 
+// Wallets announce themselves (EIP-6963) or put themselves on window.ethereum, and some do either
+// only a moment after the page loads (Firefox, and Brave with an extension instead of its own
+// wallet, can be slow), so this asks a few times over several seconds and also takes a
+// window.ethereum that turns up late.
 export function discoverWallets(onChange: (ws: WalletInfo[]) => void): () => void {
   const found = new Map<string, WalletInfo>();
+  let done = false;
   const emit = () => {
+    if (done) return;
     const list = [...found.values()];
-    const eth = (window as any).ethereum as Provider | undefined;
-    if (!list.length && eth) list.push({ id: "injected", name: "Browser wallet", provider: eth });
+    const eth = (window as any).ethereum as (Provider & { providers?: Provider[]; isBraveWallet?: boolean; isMetaMask?: boolean }) | undefined;
+    if (!list.length && eth) {
+      // several extensions sharing window.ethereum list themselves in .providers
+      const all = Array.isArray(eth.providers) && eth.providers.length ? eth.providers : [eth];
+      all.forEach((p: any, i) => list.push({ id: `injected-${i}`, name: p.isBraveWallet ? "Brave Wallet" : p.isRabby ? "Rabby" : p.isMetaMask ? "MetaMask" : "Browser wallet", provider: p }));
+    }
     onChange(list);
   };
   const onAnnounce = (e: any) => {
@@ -20,10 +30,20 @@ export function discoverWallets(onChange: (ws: WalletInfo[]) => void): () => voi
     found.set(d.info.rdns, { id: d.info.rdns, name: String(d.info.name ?? d.info.rdns), icon: d.info.icon, provider: d.provider });
     emit();
   };
+  const ask = () => window.dispatchEvent(new Event("eip6963:requestProvider"));
   window.addEventListener("eip6963:announceProvider", onAnnounce);
-  window.dispatchEvent(new Event("eip6963:requestProvider"));
-  const t = setTimeout(emit, 400);
-  return () => { window.removeEventListener("eip6963:announceProvider", onAnnounce); clearTimeout(t); };
+  window.addEventListener("ethereum#initialized", emit);
+  ask();
+  const timers = [
+    setTimeout(emit, 400),
+    ...[1000, 2500, 5000].map(ms => setTimeout(() => { ask(); emit(); }, ms)),
+  ];
+  return () => {
+    done = true;
+    window.removeEventListener("eip6963:announceProvider", onAnnounce);
+    window.removeEventListener("ethereum#initialized", emit);
+    timers.forEach(clearTimeout);
+  };
 }
 
 // Signs twice: a wallet that signs non-deterministically would make a different key each time,

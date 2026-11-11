@@ -610,7 +610,7 @@ function Connect({ onKey }: { onKey: (k: CsdKey) => void }) {
   return (
     <>
       <span>Your wallet signs one message (twice, to check it's stable). That signature becomes your writing key. Nothing is sent anywhere.</span>
-      {wallets === null ? <span>Looking for wallets…</span> : wallets.length === 0 ? <span>No browser wallet found. Install one, such as MetaMask or Rabby, then reload.</span> :
+      {wallets === null ? <span>Looking for wallets…</span> : wallets.length === 0 ? <span>No browser wallet has answered yet. If one is installed, check that it&apos;s unlocked and allowed on this site, then <button type="button" className="cp-linkbtn" onClick={() => location.reload()}>reload the page</button>. Otherwise install one, such as MetaMask or Rabby.</span> :
         wallets.map(w => (
           <button key={w.id} className="choice" disabled={!!busy} onClick={() => go(w)}>
             {w.icon && <img src={w.icon} alt="" />}{busy === w.id ? "Check your wallet…" : w.name}
