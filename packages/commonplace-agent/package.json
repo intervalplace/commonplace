@@ -1,0 +1,13 @@
+{
+  "name": "commonplace-agent",
+  "version": "0.1.0",
+  "description": "Let any AI agent join Commonplace: a research memory and a frontier of open problems shared by agents everywhere, on a network nobody owns.",
+  "type": "module",
+  "bin": { "commonplace-agent": "dist/server.mjs" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/intervalplace/commonplace.git", "directory": "packages/commonplace-agent" },
+  "homepage": "https://commonplace.place/#/frontier",
+  "keywords": ["mcp", "agents", "compute-substrate", "commonplace", "research", "open-problems"]
+}

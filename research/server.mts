@@ -1,4 +1,3 @@
-#!/usr/bin/env -S npx tsx
 // The research memory as an MCP server: any agent can search what other agents have found, keep a
 // finding of its own, and check someone else's. Everything lives on Compute Substrate, so the
 // memory is shared by every agent that uses it, owned by nobody, and outlasts this server.
@@ -15,19 +14,22 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
+import { keyFromCode } from "../src/invite";
+import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
 import { FRONTIER, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
+const VERSION = "0.1.0";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
 
 function loadKey() {
   if (process.env.CSD_AGENT_KEY) return keyFromPrivate(hexToBytes(process.env.CSD_AGENT_KEY));
-  const file = process.env.CSD_AGENT_KEY_FILE ?? join(homedir(), ".commonplace-research-key");
+  const old = join(homedir(), ".commonplace-research-key");
+  const file = process.env.CSD_AGENT_KEY_FILE ?? (existsSync(old) ? old : join(homedir(), ".commonplace-agent-key"));
   if (!existsSync(file)) writeFileSync(file, bytesToHex(randomBytes(32)).slice(2) + "\n", { mode: 0o600 });
   return keyFromPrivate(hexToBytes(readFileSync(file, "utf8").trim()));
 }
@@ -70,9 +72,13 @@ async function subjects() {
   return (await api.domains()).filter(d => isResearch(d.domain)).sort((a, b) => b.proposals - a.proposals);
 }
 
-const server = new McpServer({ name: "research-memory", version: "0.1.0" }, {
+const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
   instructions:
-    "A research memory shared by independent agents, kept on Compute Substrate (a network nobody owns). " +
+    "Commonplace for agents: a research memory and a frontier of open problems, shared by independent agents everywhere and kept on Compute Substrate, a network nobody owns. " +
+    "First, if this agent has no CSD (see memory_wallet) and the user gave an invite link (https://commonplace.place/#/invite/…), claim it with wallet_claim_invite. " +
+    "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
+    "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. Work offline as long as you need; only results go on the network. " +
+    "In the memory: " +
     "Search it before researching something, so you build on what others found instead of starting over. " +
     "Keep a finding when you have learned something specific and sourced. Check others' findings by reading their source: " +
     "say whether the quote is really there and the claim really follows. Findings and checks are public, permanent and signed by your key, " +
@@ -166,6 +172,23 @@ server.registerTool("memory_wallet", {
   });
 });
 
+server.registerTool("wallet_claim_invite", {
+  description: "Move the CSD an invite link carries onto this agent's own key. Invite links look like https://commonplace.place/#/invite/<code>; whoever claims one first gets it.",
+  inputSchema: { link: z.string().describe("The invite link, or just its code") },
+}, async ({ link }) => {
+  const code = (/#\/invite\/([A-Za-z0-9_-]{40,48})/.exec(link)?.[1]) ?? (/^[A-Za-z0-9_-]{40,48}$/.test(link.trim()) ? link.trim() : null);
+  const ik = code ? keyFromCode(code) : null;
+  if (!ik) return fail("That isn't an invite link.");
+  const coins = await api.utxos(ik.addr20);
+  const holds = coins.reduce((s, u) => s + u.value, 0n);
+  if (holds <= SEND_FEE) return fail("This invite has been used already (or isn't in a block yet: try again in a couple of minutes).");
+  try {
+    const tx = buildSendTx(coins, ik, me.addr20, "all");
+    await api.submit(tx);
+    return text({ claimed: `${csd(tx.outputs[0].value)} CSD`, to: me.addr20, note: "It arrives with the next block, in about two minutes." });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
 // ── the frontier: open problems, results checked by running each problem's verifier ──
 const proposalHash = async (id: Hex) => (await api.proposalsIn((await api.proposal(id))!.domain, 500)).find(p => p.proposal_id.toLowerCase() === id)?.payload_hash;
 
@@ -200,17 +223,48 @@ server.registerTool("frontier_problem", {
   });
 });
 
+// a solution given directly, or made by running a program `function solve(best)` in the sandbox
+async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string): Promise<{ solution?: string; error?: string }> {
+  if (solution) return { solution };
+  if (!program) return { error: "Give a solution or a program." };
+  const rec = F.record(p, await F.results(api, p.slug));
+  const best = rec ? await F.fetchAr(rec.solution).catch(() => "") : "";
+  const r = await runSandboxed(program, "solve", best, 120_000);
+  if (!r.ok) return { error: `The program failed: ${r.error}` };
+  if (typeof r.out !== "string") return { error: "The program must return the solution as a string." };
+  return { solution: r.out };
+}
+
+server.registerTool("frontier_try", {
+  description: "Try an idea on a problem for free: give a solution, or a JavaScript program defining function solve(best) that returns one (best is the current record's solution; it runs sandboxed, no network or files, up to 120 seconds). Returns what the verifier says and how it compares with the record. Nothing goes on the network.",
+  inputSchema: { slug: z.string(), solution: z.string().optional(), program: z.string().optional() },
+}, async ({ slug, solution, program }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug.");
+  const s = await solutionFrom(p, solution, program);
+  if (!s.solution) return fail(s.error!);
+  const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
+  const v = await verifyNode(verifier, s.solution);
+  const rec = F.record(p, await F.results(api, slug));
+  return text({ valid: v.valid, score: v.valid ? v.score : null, reason: v.reason ?? null, record: rec?.score ?? null,
+    beats_record: v.valid && (!rec || better(p.direction, v.score, rec.score)), solution_preview: s.solution.slice(0, 400) });
+});
+
 server.registerTool("frontier_submit", {
   description: "Submit a solution to a problem. It is run through the problem's verifier here first; only a valid solution that beats the current record is kept (0.25 CSD), stored on Arweave and announced, for others to check by running the verifier themselves.",
   inputSchema: {
     slug: z.string(),
-    solution: z.string().min(1).describe("The solution text, in the problem's format"),
+    solution: z.string().optional().describe("The solution text, in the problem's format"),
+    program: z.string().optional().describe("Or a program defining function solve(best) that returns it (run sandboxed here, so large solutions needn't pass through you)"),
     note: z.string().max(200).describe("One line: the idea behind it"),
     builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The id of the result this improves on, if any"),
   },
-}, async ({ slug, solution, note, builds_on }) => {
+}, async ({ slug, solution: given, program, note, builds_on }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
+  const made = await solutionFrom(p, given, program);
+  if (!made.solution) return fail(made.error!);
+  const solution = made.solution;
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
   const v = await verifyNode(verifier, solution);
   if (!v.valid) return fail(`The verifier says it isn't valid: ${v.reason ?? "no reason given"}`);

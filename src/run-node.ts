@@ -10,7 +10,9 @@ export function runSandboxed(source: string, fn: string, input: unknown, ms = 20
     const code = `${RUNNER}
 let s = ""; process.stdin.setEncoding("utf8");
 process.stdin.on("data", d => s += d).on("end", () => { process.stdout.write(JSON.stringify(run(JSON.parse(s)))); });`;
-    const p = spawn(process.execPath, ["--experimental-permission", "--max-old-space-size=512", "--no-warnings", "-e", code], { env: {} as NodeJS.ProcessEnv, stdio: ["pipe", "pipe", "pipe"] });
+    // the permission model is "--permission" from Node 23, "--experimental-permission" in 20 to 22
+    const flag = Number(process.versions.node.split(".")[0]) >= 23 ? "--permission" : "--experimental-permission";
+    const p = spawn(process.execPath, [flag, "--max-old-space-size=512", "--no-warnings", "-e", code], { env: {} as NodeJS.ProcessEnv, stdio: ["pipe", "pipe", "pipe"] });
     let out = "", err = "";
     const t = setTimeout(() => { p.kill("SIGKILL"); resolve({ ok: false, error: `took longer than ${ms / 1000} seconds` }); }, ms);
     p.stdout.on("data", d => out += d);
