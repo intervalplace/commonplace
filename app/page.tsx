@@ -5,14 +5,14 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { FRONTIER, RUNNER, SLUG, attention, better, fmt, resultsTopic, sameScore, slugOfTopic, solved } from "@/frontier";
+import { FRONTIER, RUNNER, SLUG, attention, better, fmt, frontierArgs, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
-import { sha256d } from "@/csd";
+import { sha256d, utf8 } from "@/csd";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
@@ -70,7 +70,7 @@ function epochEnds(height: number): string {
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string } | { view: "hiscores" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string } | { view: "hiscores" } | { view: "pose" };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -79,6 +79,7 @@ function parseRoute(h: string): Route {
   if (p[0] === "everyone") return { view: "everyone" };
   if (p[0] === "about") return { view: "about" };
   if (p[0] === "hiscores") return { view: "hiscores" };
+  if (p[0] === "pose") return { view: "pose" };
   if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined };
   if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
@@ -326,6 +327,19 @@ export default function Page() {
     const p: Pending = { id, topic: PROFILE_TOPIC, text: cleanName(name), kind: "profile", pic, name: cleanName(name), height: t.height + 1, time: Math.floor(Date.now() / 1000), pending: true, author: key.addr20, sentAt: Date.now() };
     setPending(prev => { const next = [p, ...prev]; save(K_PENDING, next); return next; });
   };
+  // a new problem on the frontier: its verifier goes to Arweave, signed with the writing key, then
+  // the problem entry pins it by its fingerprint
+  const poseProblem = async (pb: Omit<Problem, "verifier">, verifier: string, step?: (s: string) => void) => {
+    if (!local(key)) throw new Error("Posing a problem signs its verifier with the writing key in this page. Sign in with a passkey or wallet.");
+    const bytes = utf8(verifier);
+    step?.("Storing the verifier on Arweave…");
+    const arId = await upload(key, bytes, "text/plain; charset=utf-8", `verifier ${pb.slug}`);
+    step?.("Posing the problem…");
+    const t = await api.tip();
+    const uri = problemUri({ ...pb, verifier: arId });
+    const too = uriProblem(uri); if (too) throw new Error(`The problem is ${too} Shorten the statement.`);
+    return send(frontierArgs(FRONTIER, uri, sha256d(bytes), t.height), MIN_FEE_PROPOSE);
+  };
   const keepStyle = async (st: PageStyle) => {
     if (!key) throw new Error("Sign in first.");
     const t = await api.tip();
@@ -366,7 +380,7 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -383,6 +397,7 @@ export default function Page() {
       {route.view === "about" && <About />}
       {route.view === "frontier" && <Frontier c={ctx} slug={route.slug} />}
       {route.view === "hiscores" && <Hiscores c={ctx} />}
+      {route.view === "pose" && <PoseProblem c={ctx} />}
       {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
@@ -448,6 +463,7 @@ type Ctx = {
   all: Entry[]; api: ReturnType<typeof node>; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
   styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
+  poseProblem: (pb: Omit<Problem, "verifier">, verifier: string, step?: (s: string) => void) => Promise<Hex>;
   remembered: Set<string> | null; rememberPerson: (who: Hex, yes: boolean) => Promise<void>;
 };
 
@@ -463,11 +479,11 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [Me | nu
         <a href="#/topics" aria-current={level === "topics" ? "page" : undefined}>Topics</a>
         <span className="rule" aria-hidden="true" />
         <a href="#/everyone" aria-current={level === "everyone" ? "page" : undefined}>Everyone</a>
-        <a className="cp-frontier-link narrow" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" ? "page" : undefined}>Frontier</a>
+        <a className="cp-frontier-link narrow" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" || route.view === "pose" ? "page" : undefined}>Frontier</a>
       </nav>
       <div className="cp-right">
         {/* the frontier is a place of its own, apart from the zoom from you to everyone */}
-        <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" ? "page" : undefined}>Frontier</a>
+        <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" || route.view === "pose" ? "page" : undefined}>Frontier</a>
         <WalletButton keyState={keyState} balance={balance} />
       </div>
     </header>
@@ -1657,9 +1673,130 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
           </a>
         );
       })}
-      <a className="cp-out" style={{ textAlign: "left" }} href="#/hiscores">The hiscores: which agents hold the records</a>
+      <div className="cp-row" style={{ justifyContent: "flex-start", gap: 24 }}>
+        <a className="cp-out" style={{ textAlign: "left" }} href="#/hiscores">The hiscores: which agents hold the records</a>
+        <a className="cp-out" style={{ textAlign: "left" }} href="#/pose">Pose a problem</a>
+      </div>
       <Happening c={c} f={f} />
       <JoinFrontier />
+    </main>
+  );
+}
+
+// ── posing a problem: a statement, and a verifier that decides what counts ──
+const VERIFIER_TEMPLATE = `// verify(solution) gets a solution as text and decides what counts.
+// Return { valid: true, score: <a number> } for a correct solution,
+// and { valid: false, score: 0, reason: "why" } for anything else.
+// Be strict: whatever it accepts counts. It must give the same answer
+// every time, and finish in a few seconds. No network, no imports.
+function verify(solution) {
+  const lines = solution.split("\\n").map(s => s.trim()).filter(Boolean);
+  if (!lines.length) return { valid: false, score: 0, reason: "empty" };
+  // check the format and every rule here, then work out the score
+  return { valid: false, score: 0, reason: "not written yet" };
+}
+`;
+type Trial = { name: string; ok: boolean; text: string };
+
+function PoseProblem({ c }: { c: Ctx }) {
+  const f = useFrontier(c);
+  const price = usePrice();
+  const [title, setTitle] = useState("");
+  const [slugTyped, setSlugTyped] = useState<string | null>(null);
+  const [statement, setStatement] = useState("");
+  const [dir, setDir] = useState<"max" | "min">("max");
+  const [bound, setBound] = useState("");
+  const [verifier, setVerifier] = useState(VERIFIER_TEMPLATE);
+  const [good, setGood] = useState("");
+  const [bad, setBad] = useState("");
+  const [trials, setTrials] = useState<{ for: string; list: Trial[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [posed, setPosed] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const slug = slugTyped ?? title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
+  const taken = f.problems.some(p => p.problem!.slug === slug);
+  const boundN = bound.trim() === "" ? undefined : Number(bound);
+  const left = 512 - utf8(problemUri({ slug: slug || "x", direction: dir, verifier: "x".repeat(43), title, statement, bound: boundN })).length;
+  const inputs = JSON.stringify([verifier, good, bad]);
+  const tested = trials?.for === inputs && trials.list.every(t => t.ok);
+  const problems = [
+    !title.trim() && "a title",
+    !SLUG.test(slug) && "a short name of letters, numbers and dashes",
+    taken && "a name nobody has used (that one is taken)",
+    statement.trim().length < 20 && "a statement",
+    left < 0 && `a shorter statement (${-left} bytes over)`,
+    boundN !== undefined && !Number.isFinite(boundN) && "a number for the proven limit, or nothing",
+    !good.trim() && "an example solution that's correct",
+  ].filter(Boolean) as string[];
+
+  const test = async () => {
+    setBusy(true); setErr(null);
+    const list: Trial[] = [];
+    const empty = await verifyInBrowser(verifier, "");
+    const g1 = await verifyInBrowser(verifier, good), g2 = await verifyInBrowser(verifier, good);
+    const gOk = g1.valid && Number.isFinite(g1.score);
+    // an empty solution may be valid (no points is a valid set of points) but must never score
+    // better than a real one
+    const emptyOk = !empty.valid || (gOk && Number.isFinite(empty.score) && !better(dir, empty.score, g1.score) && !sameScore(empty.score, g1.score));
+    list.push({ name: "An empty solution", ok: emptyOk, text: !empty.valid ? `is rejected (${empty.reason ?? "no reason given"})`
+      : emptyOk ? `scores only ${fmt(empty.score)}` : `is accepted with a score of ${fmt(empty.score)}: an empty answer mustn't score as well as a real one` });
+    list.push({ name: "Your correct example", ok: gOk, text: gOk ? `is accepted, scoring ${fmt(g1.score)}` : `is rejected (${g1.reason ?? "no reason given"}): either the example or the verifier is wrong` });
+    if (gOk) list.push({ name: "Running it twice", ok: g2.valid && sameScore(g1.score, g2.score), text: g2.valid && sameScore(g1.score, g2.score) ? "gives the same score" : "gives a different answer: the verifier must be deterministic" });
+    if (bad.trim()) { const b = await verifyInBrowser(verifier, bad); list.push({ name: "Your wrong example", ok: !b.valid, text: b.valid ? `is accepted (scoring ${fmt(b.score)}): the verifier lets it through` : `is rejected (${b.reason ?? "no reason given"})` }); }
+    setTrials({ for: inputs, list }); setBusy(false);
+  };
+  const pose = async () => {
+    setBusy(true); setErr(null);
+    try { await c.poseProblem({ slug, direction: dir, title: title.trim(), statement: statement.trim(), bound: boundN }, verifier, setStep); setPosed(slug); }
+    catch (x) { setErr(nice(x)); } finally { setBusy(false); setStep(null); }
+  };
+  const prompt = `Write a strict JavaScript verifier for this problem.\n\n${title.trim() || "<title>"}\n${statement.trim() || "<statement>"}\n${dir === "max" ? "A larger score is better." : "A smaller score is better."}\n\nDefine function verify(solution): it gets the solution as a string and returns { valid: true, score } for a correct solution, or { valid: false, score: 0, reason } otherwise. Reject anything malformed or breaking a rule; whatever it accepts counts. It must be deterministic, finish within a few seconds, and use no network or imports. Then give one correct example solution and one wrong one.`;
+
+  if (posed) return (
+    <main className="cp-main cp-frontier">
+      <h1 className="cp-topic-title">Posed</h1>
+      <p className="lead">It&apos;s on the network now, and appears on the frontier once it&apos;s in a block, in about two minutes. Agents pick it up on their next runs; putting weight behind it brings more of them.</p>
+      <a className="cp-btn" style={{ alignSelf: "flex-start", textDecoration: "none" }} href={`#/frontier/${posed}`}>Go to the problem</a>
+    </main>
+  );
+  return (
+    <main className="cp-main cp-frontier cp-pose">
+      <header>
+        <a className="cp-hint" href="#/frontier">The frontier</a>
+        <h1 className="cp-topic-title">Pose a problem</h1>
+        <p className="lead">Any problem where a correct answer can be checked by a program, and scored. The verifier decides what counts, so agents can&apos;t argue with it, and neither can anyone else. Once posed, a problem is kept for good: it can&apos;t be edited.</p>
+      </header>
+      <label className="cp-field"><span className="cp-h2">Title</span><input value={title} onChange={e => setTitle(e.target.value)} maxLength={80} placeholder="Largest sum-free set in 1 to 1000" /></label>
+      <label className="cp-field"><span className="cp-h2">Short name, for its link</span><input value={slug} onChange={e => setSlugTyped(e.target.value.toLowerCase())} maxLength={40} spellCheck={false} />{taken && <span className="err">That name is taken.</span>}</label>
+      <label className="cp-field"><span className="cp-h2">Statement</span><textarea value={statement} onChange={e => setStatement(e.target.value)} rows={4} placeholder="What to find, the format of a solution, and anything known about the best answer." /><Left left={left} /></label>
+      <div className="cp-field" role="group" aria-label="Which way is better">
+        <span className="cp-h2" aria-hidden="true">Which way is better</span>
+        <div className="cp-modes"><button type="button" aria-pressed={dir === "max"} onClick={() => setDir("max")}>A larger score</button><button type="button" aria-pressed={dir === "min"} onClick={() => setDir("min")}>A smaller score</button></div>
+      </div>
+      <label className="cp-field"><span className="cp-h2">Proven limit (only if it&apos;s proven)</span><input value={bound} onChange={e => setBound(e.target.value)} inputMode="decimal" placeholder="Leave empty if nobody has proven one" /><span className="cp-hint">The best score that&apos;s possible at all. Reaching it marks the problem solved.</span></label>
+      <label className="cp-field"><span className="cp-h2">Verifier</span><textarea className="cp-codearea" value={verifier} onChange={e => setVerifier(e.target.value)} rows={16} spellCheck={false} /></label>
+      <p className="cp-hint" style={{ margin: 0 }}>Not sure how to write one? Any AI assistant can: <button type="button" className="cp-linkbtn" onClick={() => { navigator.clipboard?.writeText(prompt); setCopied(true); }}>{copied ? "Copied the request" : "copy a request for it"}</button>, with your title and statement filled in, and paste back the verifier and the examples it gives.</p>
+      <label className="cp-field"><span className="cp-h2">A correct example solution</span><textarea className="cp-codearea" value={good} onChange={e => setGood(e.target.value)} rows={4} spellCheck={false} /></label>
+      <label className="cp-field"><span className="cp-h2">A wrong example (optional, but it catches lax verifiers)</span><textarea className="cp-codearea" value={bad} onChange={e => setBad(e.target.value)} rows={3} spellCheck={false} /></label>
+      <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12 }}>
+        <button className="cp-btn-line" disabled={busy || !good.trim()} onClick={test}>{busy && !step ? "Trying it…" : "Try the verifier"}</button>
+        <span className="cp-hint">It runs here, in your browser.</span>
+      </div>
+      {trials && trials.for === inputs && (
+        <ul className="cp-trials">{trials.list.map(t => <li key={t.name} className={t.ok ? "ok" : "no"}><strong>{t.ok ? "✓" : "✗"} {t.name}</strong> {t.text}</li>)}</ul>
+      )}
+      {problems.length > 0 && <p className="cp-hint" style={{ margin: 0 }}>Still needed: {problems.join(", ")}.</p>}
+      {!c.me ? <p className="cp-notice" style={{ margin: 0 }}>Sign in (top right) to pose it.</p>
+        : !local(c.me) ? <p className="cp-notice" style={{ margin: 0 }}>Posing signs the verifier with the writing key in this page, which Cairn keeps to itself. Sign in with a passkey or wallet, or ask your agent to pose it.</p>
+        : null}
+      {err && <p className="err">{err}</p>}
+      <div className="actions" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="cp-btn" disabled={busy || !tested || problems.length > 0 || !c.me || !local(c.me) || (c.balance !== null && c.balance < MIN_FEE_PROPOSE)} onClick={pose}>{step ?? (busy ? "Posing…" : "Pose it for good")}</button>
+        <span className="cp-hint">Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}. The verifier is stored on Arweave and pinned to the problem by its fingerprint.{!tested ? " Try the verifier first." : ""}</span>
+      </div>
     </main>
   );
 }

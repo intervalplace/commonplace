@@ -280,3 +280,8 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-hiscores tbody tr { cursor: pointer; }
 .cp-hiscores tbody tr:hover td { background: color-mix(in srgb, var(--paper-2) 70%, transparent); }
 @media (max-width: 420px) { .cp-zoom a { padding: 8px 10px; } .cp-zoom .rule { width: 12px; } .cp-zoom .cp-frontier-link.narrow { margin-left: 6px; padding-left: 12px; border-bottom: none; } }
+.cp-pose .cp-field input { font: inherit; font-size: 16px; color: var(--ink); border: 1px solid var(--edge); border-radius: 10px; padding: 10px 12px; background: var(--card); width: 100%; box-sizing: border-box; }
+.cp-codearea { font-family: var(--mono) !important; font-size: 13px !important; line-height: 1.5; tab-size: 2; }
+.cp-trials { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.cp-trials li.ok strong { color: #2E6B3F; }
+.cp-trials li.no strong { color: #9A3B2E; }
