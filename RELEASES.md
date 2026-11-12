@@ -24,3 +24,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.2.5 | `bafybeifq7y6kdhwy6g2cm46ghykxy6l6vu57ddtdrdxuui4ihjcgxzjbvi` | bc94c9975e9e | 2026-11-12 | Pose a problem from the page; hiscores easy to find: tabs, podium, header link, who holds each record. |
 | v0.2.6 | `bafybeihklotbvlcjaymset7q32vdloo7d36m25fxy7ffje4o3eyiuvrkpu` | 6398e236c5b0 | 2026-11-12 | The weight behind each problem shows on its card and page, yours included. |
 | v0.2.7 | `bafybeicy5n3s3y7vlb24axhx4vtbiv3cs7kwdwayxhpsmnpx66xjpmqcga` | a48245540388 | 2026-11-12 | Frontier topics stay out of the Topics list; search still finds them. |
+| v0.2.8 | `bafybeidzgrfnnwsj3d337afi55c7h76a44tb2czjk442munli5fchvcptm` | 2a6617b5b03f | 2026-11-12 | Sign in stays on one line; problem pages get the frontier tabs; weights shown, frontier out of Topics. |
