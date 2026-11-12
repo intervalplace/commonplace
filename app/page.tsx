@@ -1980,7 +1980,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
   return (
     <main className="cp-main cp-frontier">
       <header>
-        <a className="cp-hint" href="#/frontier">The frontier</a>
+        <FrontierTabs at="problems" />
         <h1 className="cp-topic-title">{pr.title}</h1>
         <p className="lead">{pr.statement}</p>
         <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>

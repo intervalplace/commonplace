@@ -52,7 +52,8 @@ body.night :focus-visible { outline-color: var(--star); }
 body.night .cp-zoom a { color: var(--night-muted); }
 body.night .cp-zoom a[aria-current="page"] { background: var(--star); color: var(--night); }
 body.night .cp-zoom .rule { background: #3A4260; }
-.cp-wallet { position: relative; }
+.cp-wallet { position: relative; flex-shrink: 0; }
+.cp-wallet > button { white-space: nowrap; }
 .cp-wallet > button, .cp-btn-ghost { font-size: 13px; padding: 9px 14px; border-radius: 8px; border: 1px solid var(--edge); background: var(--card); color: var(--ink); }
 body.night .cp-wallet > button { background: transparent; color: var(--star); border-color: #3A4260; }
 .cp-wallet .bal { color: var(--muted); margin-left: 6px; }
