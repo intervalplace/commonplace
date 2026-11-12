@@ -2,7 +2,7 @@
 
 import { bytesToHex, sha256d, utf8, type Hex, type Node, type CsdKey } from "../../src/csd";
 import { tally } from "../../src/research";
-import { FRONTIER, backedCsd, better, parseBounty, parseMethod, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
+import { FRONTIER, backedCsd, better, parseBounty, parseMethod, parsePage, parsePageBody, type PageBody, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
 import { verifyNode } from "../../src/run-node";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -114,6 +114,32 @@ export async function verified(p: ProblemRow, r: ResultRow): Promise<boolean> {
   try { writeFileSync(VERDICTS, JSON.stringify(verdicts)); } catch {}
   return ok;
 }
+// A notebook page's near-miss, run through the verifier here (kept like results' verdicts)
+export async function verifiedPage(p: ProblemRow, pageId: string, solution: string, hash: string | undefined, claimed: number): Promise<{ ok: boolean; score: number } | null> {
+  verdicts ??= (() => { try { return JSON.parse(readFileSync(VERDICTS, "utf8")); } catch { return {}; } })();
+  if (verdicts![pageId]) return verdicts![pageId];
+  let v = verifierText.get(p.id);
+  if (!v) { v = fetchAr(p.verifier, p.hash); verifierText.set(p.id, v); v.catch(() => verifierText.delete(p.id)); }
+  try {
+    const out = await verifyNode(await v, await fetchAr(solution, hash));
+    verdicts![pageId] = { ok: out.valid && sameScore(out.score, claimed), score: out.score };
+    try { writeFileSync(VERDICTS, JSON.stringify(verdicts)); } catch {}
+    return verdicts![pageId];
+  } catch { return null; }
+}
+
+// The problem's notebook, newest first: shared work that didn't set a record
+export type PageRow = { id: Hex; by: Hex; time: number; height: number; headline: string; score: number | null; verified: boolean | null; solution: string | null; program: string | null; body: PageBody | null };
+export async function pages(api: Node, p: ProblemRow, n = 12): Promise<PageRow[]> {
+  const ps = (await api.proposalsIn(resultsTopic(p.slug), 500)).filter(x => parsePage(x.uri ?? "")).sort((a, b) => Number(b.height) - Number(a.height)).slice(0, n);
+  return Promise.all(ps.map(async x => {
+    const pg = parsePage(x.uri)!, id = x.proposal_id.toLowerCase() as Hex;
+    const body = parsePageBody(await fetchAr(pg.body, x.payload_hash).catch(() => ""));
+    const v = pg.solution && pg.score !== null ? await verifiedPage(p, id, pg.solution, body?.solution_hash, pg.score) : null;
+    return { id, by: (await api.proposal(id))?.proposer?.toLowerCase() as Hex, time: Number(x.time), height: Number(x.height), headline: pg.headline, score: pg.score, verified: v ? v.ok : null, solution: pg.solution, program: pg.program, body };
+  }));
+}
+
 export async function verifiedRecords(p: ProblemRow, rs: ResultRow[]): Promise<ResultRow[]> {
   const out: ResultRow[] = [];
   for (const r of rs) if ((!out.length || better(p.direction, r.score, out[out.length - 1].score)) && await verified(p, r)) out.push(r);

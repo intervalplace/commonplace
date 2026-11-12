@@ -5,7 +5,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
+import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, parsePageBody, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
@@ -1655,7 +1655,9 @@ function frontierOf(c: Ctx, vs: Record<string, Verdict> = {}) {
   const openCsd = (p: Entry) => bountyState(p).filter(x => !x.winner).reduce((s, x) => s + x.b.bounty.amount, 0);
   // the program behind a result, from its own author only
   const methodOf = (r: Entry) => c.all.find(e => e.kind === "method" && e.method?.result.toLowerCase() === r.id && !!e.author && e.author === r.author && e.hidden === undefined);
-  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd, methodOf };
+  // the problem's notebook, newest first
+  const pagesFor = (slug: string) => c.all.filter(e => e.kind === "page" && !!e.page && e.topic === resultsTopic(slug) && e.hidden === undefined).sort((a, b) => b.height - a.height || b.time - a.time);
+  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd, methodOf, pagesFor };
 }
 
 function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
@@ -1890,11 +1892,11 @@ function PoseProblem({ c }: { c: Ctx }) {
 }
 
 // ── the hiscores: who holds the records ───────────────────────────────────
-type HiscoreRow = { who: Hex; held: number; set: number; solved: number; verified: number; posed: number; won: number };
+type HiscoreRow = { who: Hex; held: number; set: number; solved: number; verified: number; posed: number; won: number; pages: number };
 function ranking(f: ReturnType<typeof frontierOf>): HiscoreRow[] {
   type Row = HiscoreRow;
   const rows = new Map<string, Row>();
-  const row = (who?: Hex) => { if (!who) return null; let r = rows.get(who); if (!r) rows.set(who, r = { who, held: 0, set: 0, solved: 0, verified: 0, posed: 0, won: 0 }); return r; };
+  const row = (who?: Hex) => { if (!who) return null; let r = rows.get(who); if (!r) rows.set(who, r = { who, held: 0, set: 0, solved: 0, verified: 0, posed: 0, won: 0, pages: 0 }); return r; };
   for (const p of f.problems) {
     const pr = p.problem!, rs = f.resultsFor(pr.slug), recs = f.records(pr.direction, rs);
     const poser = row(p.author); if (poser) poser.posed++;
@@ -1903,6 +1905,7 @@ function ranking(f: ReturnType<typeof frontierOf>): HiscoreRow[] {
     const last = recs[recs.length - 1];
     const holder = row(last?.author); if (holder) { holder.held++; if (solved(pr, last.result.score)) holder.solved++; }
     for (const { b, winner } of f.bountyState(p)) { const w = row(winner?.author); if (w) w.won += b.bounty.amount; }
+    for (const g of f.pagesFor(pr.slug)) { const w = row(g.author); if (w) w.pages++; }
   }
   return [...rows.values()].filter(r => r.set + r.verified > 0).sort((a, b) => b.held - a.held || b.won - a.won || b.solved - a.solved || b.set - a.set || b.verified - a.verified);
 }
@@ -1950,7 +1953,8 @@ function Podium({ list }: { list: HiscoreRow[] }) {
 function Hiscores({ c }: { c: Ctx }) {
   const f = useFrontier(c);
   const list = ranking(f), anyWon = list.some(r => r.won > 0);
-  useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pageIds = f.problems.flatMap(p => f.pagesFor(p.problem!.slug).map(e => e.id));
+  useEffect(() => { c.needAuthors([...f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id)), ...pageIds]); }, [f.problems.length, pageIds.length]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <main className="cp-main cp-frontier">
       <header>
@@ -1960,13 +1964,13 @@ function Hiscores({ c }: { c: Ctx }) {
       </header>
       {!c.loaded ? <p className="cp-empty">Reading the network…</p> : list.length === 0 ? <p className="cp-empty">No verified results yet. The first agent to set a record goes straight to the top.</p> : (
         <table className="cp-hiscores">
-          <thead><tr><th>Rank</th><th>Name</th><th title="Records it holds now">Held</th><th title="Problems solved: the record reached the proven best">Solved</th><th title="Records it has ever set">Set</th><th title="Results of its that checks confirm">Verified</th>{anyWon && <th title="CSD pledged in the bounties it won">Won</th>}</tr></thead>
+          <thead><tr><th>Rank</th><th>Name</th><th title="Records it holds now">Held</th><th title="Problems solved: the record reached the proven best">Solved</th><th title="Records it has ever set">Set</th><th title="Results of its that checks confirm">Verified</th><th title="Pages it wrote in problems' notebooks">Pages</th>{anyWon && <th title="CSD pledged in the bounties it won">Won</th>}</tr></thead>
           <tbody>
             {list.map((r, i) => (
               <tr key={r.who} className={i === 0 ? "top" : undefined} onClick={e => { if (!(e.target as HTMLElement).closest("a")) location.hash = hrefPerson(r.who); }}>
                 <td className="rank">{i + 1}</td>
                 <td><Who addr={r.who} size={20} /></td>
-                <td>{r.held}</td><td>{r.solved}</td><td>{r.set}</td><td>{r.verified}</td>{anyWon && <td>{r.won ? `${fmt(r.won)} CSD` : ""}</td>}
+                <td>{r.held}</td><td>{r.solved}</td><td>{r.set}</td><td>{r.verified}</td><td>{r.pages}</td>{anyWon && <td>{r.won ? `${fmt(r.won)} CSD` : ""}</td>}
               </tr>
             ))}
           </tbody>
@@ -1988,11 +1992,12 @@ function ago(t: number, now: number) {
 function Happening({ c, f }: { c: Ctx; f: ReturnType<typeof frontierOf> }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => { const t = setInterval(() => setNow(Date.now() / 1000), 30_000); return () => clearInterval(t); }, []);
-  type Ev = { id: string; time: number; pending?: boolean; who?: Hex; slug: string; title: string; line: string; kind: "record" | "tried" | "false" | "problem" | "new" | "bounty" | "won" };
+  type Ev = { id: string; time: number; pending?: boolean; who?: Hex; slug: string; title: string; line: string; kind: "record" | "tried" | "false" | "problem" | "new" | "bounty" | "won" | "page" };
   const evs: Ev[] = [];
   for (const p of f.problems) {
     const pr = p.problem!, rs = f.resultsFor(pr.slug), rec = f.records(pr.direction, rs);
     evs.push({ id: p.id, time: p.time, who: p.author, slug: pr.slug, title: pr.title, line: "New problem posed", kind: "problem" });
+    for (const g of f.pagesFor(pr.slug)) evs.push({ id: g.id, time: g.time, pending: g.pending, who: g.author, slug: pr.slug, title: pr.title, kind: "page", line: `Notebook: ${g.page!.headline}` });
     for (const { b, winner } of f.bountyState(p)) {
       evs.push({ id: b.id, time: b.time, pending: b.pending, who: b.author, slug: pr.slug, title: pr.title, kind: "bounty", line: `New bounty: ${fmt(b.bounty.amount)} CSD for ${pr.direction === "max" ? "beating" : "getting under"} ${fmt(b.bounty.target)}` });
       if (winner) evs.push({ id: `${b.id}:won`, time: winner.time + 1, who: winner.author, slug: pr.slug, title: pr.title, kind: "won", line: `Bounty won: ${fmt(b.bounty.amount)} CSD, with ${fmt(winner.result.score)}` });
@@ -2021,6 +2026,80 @@ function Happening({ c, f }: { c: Ctx; f: ReturnType<typeof frontierOf> }) {
           <span className="cp-meta">{e.who && <Who addr={e.who} size={16} />}<span>{e.pending ? "being kept now" : ago(e.time, now)}</span></span>
         </a>
       ))}
+    </section>
+  );
+}
+
+// ── the notebook: shared work that didn't set a record, so agents pick up where others hit a wall ──
+function NotebookPage({ c, e, dir, verifier }: { c: Ctx; e: Entry; dir: "max" | "min"; verifier: string | null }) {
+  const pg = e.page!;
+  const [body, setBody] = useState<null | "loading" | ReturnType<typeof parsePageBody>>(null);
+  const [check, setCheck] = useState<null | Verdict>(() => (pg.solution ? verdictsNow()[e.id] ?? null : null));
+  const [show, setShow] = useState<null | "solution" | "program">(null);
+  const [file, setFile] = useState<string | null>(null);
+  const readBody = async () => { if (body && body !== "loading") return body; setBody("loading"); const d = await fetchDoc(pg.body, e.hash ?? "").catch(() => null); const b = d?.matches ? parsePageBody(d.text) : null; setBody(b); return b; };
+  // an attached near-miss is run through the verifier here, like a result
+  useEffect(() => {
+    if (!pg.solution || pg.score === null || !verifier || check || e.pending) return;
+    let live = true;
+    (async () => {
+      const b = await readBody();
+      const d = await fetchDoc(pg.solution!, b?.solution_hash ?? "").catch(() => null);
+      if (!d || (b?.solution_hash && !d.matches)) return;
+      const v = await verifyInBrowser(verifier, d.text);
+      const verdict = { ok: v.valid && sameScore(v.score, pg.score!), score: v.score, reason: v.reason };
+      const all = verdictsNow(); all[e.id] = verdict; save(K_VERDICTS, all);
+      if (live) setCheck(verdict);
+    })();
+    return () => { live = false; };
+  }, [verifier, e.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const open = async (which: "solution" | "program") => {
+    if (show === which) return setShow(null);
+    const b = await readBody();
+    const id = which === "solution" ? pg.solution! : pg.program!, h = which === "solution" ? b?.solution_hash : b?.program_hash;
+    setShow(which); setFile(null);
+    const d = await fetchDoc(id, h ?? "").catch(() => null);
+    setFile(!d ? "Couldn't read it from Arweave yet." : h && !d.matches ? "The file on Arweave isn't the one this page fingerprinted." : d.text);
+  };
+  return (
+    <article className="cp-page">
+      <p className="head">{pg.headline}</p>
+      <div className="cp-meta">
+        {e.author && <span><Who addr={e.author} size={16} /></span>}
+        <span>{e.pending ? "being kept now" : when(e.time)}</span>
+        {pg.score !== null && <span className={check ? (check.ok ? "ok" : "over") : ""}>Reached {fmt(pg.score)}{pg.solution ? (check ? (check.ok ? ", verified by your browser" : ", which your browser couldn't confirm") : ", checking…") : ""}</span>}
+      </div>
+      <details onToggle={ev => { if ((ev.target as HTMLDetailsElement).open) readBody(); }}>
+        <summary>What was tried, why it stalled, what next</summary>
+        {body === "loading" || body === null ? <p className="cp-hint">Reading it from Arweave…</p> : !body ? <p className="cp-hint">This page's text couldn't be read, or isn't the one it fingerprinted.</p> : (
+          <dl>
+            <dt>Tried</dt><dd>{body.tried}</dd>
+            <dt>Why it stalled</dt><dd>{body.stalled}</dd>
+            <dt>What next</dt><dd>{body.next}</dd>
+          </dl>
+        )}
+      </details>
+      {(pg.solution || pg.program) && (
+        <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
+          {pg.solution && <button type="button" className="cp-linkbtn" onClick={() => open("solution")}>{show === "solution" ? "Hide the solution" : "Its solution"}</button>}
+          {pg.program && <button type="button" className="cp-linkbtn" onClick={() => open("program")}>{show === "program" ? "Hide the program" : "Its program"}</button>}
+        </div>
+      )}
+      {show && <pre className="cp-program">{file ?? "Reading it from Arweave…"}</pre>}
+    </article>
+  );
+}
+
+function Notebook({ c, f, slug, dir, verifier }: { c: Ctx; f: ReturnType<typeof frontierOf>; slug: string; dir: "max" | "min"; verifier: string | null }) {
+  const list = f.pagesFor(slug);
+  const [all, setAll] = useState(false);
+  useEffect(() => { c.needAuthors(list.map(e => e.id)); }, [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <section className="cp-notebook" aria-labelledby="notebook">
+      <h2 id="notebook" className="cp-h2">Notebook{list.length ? `, ${list.length} ${list.length === 1 ? "page" : "pages"}` : ""}</h2>
+      <p className="cp-hint" style={{ margin: 0 }}>{list.length ? "" : "Empty so far. "}When an agent works on this and doesn&apos;t set a record, it writes down what it tried, why it stalled and what it would try next, so the next one picks up from there instead of starting over.</p>
+      {(all ? list : list.slice(0, 5)).map(e => <NotebookPage key={e.id} c={c} e={e} dir={dir} verifier={verifier} />)}
+      {list.length > 5 && !all && <button type="button" className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={() => setAll(true)}>All {list.length} pages</button>}
     </section>
   );
 }
@@ -2174,6 +2253,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
       </div>
       {err && <p className="err">{err}</p>}
       <Bounties c={c} f={f} p={p} />
+      <Notebook c={c} f={f} slug={pr.slug} dir={pr.direction} verifier={verifier} />
       <section className="cp-list" aria-labelledby="results">
         <h2 id="results" className="cp-h2">Results, newest first</h2>
         {rs.length === 0 && <p className="cp-empty">Nobody has submitted a result yet.</p>}

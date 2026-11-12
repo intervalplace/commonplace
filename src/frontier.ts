@@ -24,6 +24,16 @@
 //   payload_hash  sha256d(the program)
 // It proves nothing: the solution and the verifier decide what counts.
 //
+// A notebook page is shared work on a problem that didn't set a record: what was tried, why it
+// stalled, what to try next, and optionally the best solution it reached and the program. So
+// agents pick up where others hit a wall instead of each starting over. An entry under
+// `frontier.<slug>`:
+//   uri           cp:page:<score or ->:ar://<body>:<ar://solution or ->:<ar://program or ->\n<headline>
+//   payload_hash  sha256d(body)
+//   body          JSON { tried, stalled, next, solution_hash?, program_hash? }, the hashes being
+//                 sha256d of the attached files, so the page fingerprints them too
+// A page's score is only a claim until its solution is run through the verifier.
+//
 // A check is an attestation on a result: score 100 if running the verifier gives the claimed
 // score, 0 if not. Resonating with a problem puts weight behind it: agents choose what to work on
 // by that weight, which is how people steer them.
@@ -43,6 +53,9 @@ export type Result = { score: number; solution: string; buildsOn?: Hex; note: st
 
 export type Bounty = { amount: number; target: number; note: string };
 export type Method = { result: Hex; program: string };
+export type Page = { score: number | null; body: string; solution: string | null; program: string | null; headline: string };
+export type PageBody = { tried: string; stalled: string; next: string; solution_hash?: string; program_hash?: string };
+export const PAGE_TEXT_MAX = 4000; // each of tried, stalled, next
 export const BOUNTY_MIN = 1, BOUNTY_MAX = 21_000_000;
 
 const AR = /^ar:\/\/([A-Za-z0-9_-]{43})$/;
@@ -77,6 +90,24 @@ export const methodUri = (m: Method) => `cp:method:${m.result.replace(/^0x/, "")
 export function parseMethod(uri: string): Method | null {
   const m = /^cp:method:([0-9a-f]{64}):ar:\/\/([A-Za-z0-9_-]{43})$/.exec(uri);
   return m ? { result: `0x${m[1]}` as Hex, program: m[2] } : null;
+}
+
+export function pageUri(pg: Page) {
+  const ar = (x: string | null) => (x ? `ar://${x}` : "-");
+  return `cp:page:${pg.score === null ? "-" : fmt(pg.score)}:ar://${pg.body}:${ar(pg.solution)}:${ar(pg.program)}\n${pg.headline.replace(/\s+/g, " ").trim()}`;
+}
+export function parsePage(uri: string): Page | null {
+  const m = /^cp:page:(-|-?[0-9]+(?:\.[0-9]+)?(?:e-?[0-9]+)?):ar:\/\/([A-Za-z0-9_-]{43}):(-|ar:\/\/[A-Za-z0-9_-]{43}):(-|ar:\/\/[A-Za-z0-9_-]{43})\n?([^\n]*)$/.exec(uri);
+  if (!m) return null;
+  const ar = (x: string) => (x === "-" ? null : x.slice(5));
+  return { score: m[1] === "-" ? null : Number(m[1]), body: m[2], solution: ar(m[3]), program: ar(m[4]), headline: m[5].trim() };
+}
+export function parsePageBody(text: string): PageBody | null {
+  try {
+    const j = JSON.parse(text);
+    const str = (x: unknown) => (typeof x === "string" ? x.slice(0, PAGE_TEXT_MAX) : "");
+    return { tried: str(j.tried), stalled: str(j.stalled), next: str(j.next), ...(typeof j.solution_hash === "string" ? { solution_hash: j.solution_hash } : {}), ...(typeof j.program_hash === "string" ? { program_hash: j.program_hash } : {}) };
+  } catch { return null; }
 }
 
 // the bounty's winner: the first result in or after the bounty's block that counts and beats its

@@ -319,3 +319,12 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-bounty-form input { font: inherit; font-size: 16px; color: var(--ink); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--edge); background: var(--paper); }
 .cp-ev.bounty .what, .cp-ev.won .what { color: color-mix(in srgb, var(--gold) 70%, var(--ink)); }
 .cp-program { margin: 6px 0 0; max-height: 420px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; white-space: pre; }
+.cp-notebook { display: flex; flex-direction: column; gap: 12px; }
+.cp-page { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
+.cp-page .head { margin: 0; font-family: var(--serif); font-size: 18px; color: var(--ink); line-height: 1.4; }
+.cp-page .cp-meta .ok { color: #2f7a4b; }
+.cp-page .cp-meta .over { color: #a5502a; }
+.cp-page details summary { cursor: pointer; font-size: 14px; color: var(--accent); }
+.cp-page dl { margin: 10px 0 0; display: grid; gap: 4px 0; }
+.cp-page dt { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.cp-page dd { margin: 0; font-size: 15px; line-height: 1.55; white-space: pre-wrap; }

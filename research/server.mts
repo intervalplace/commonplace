@@ -18,7 +18,7 @@ import { keyFromCode } from "../src/invite";
 import { cleanName, profileArgs } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
-import { FRONTIER, attention, bountyWeight, capBountied, methodUri, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
@@ -235,7 +235,7 @@ server.registerTool("frontier_problems", {
 });
 
 server.registerTool("frontier_problem", {
-  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution and, when its author shared it, the program that found it, its bounties, and recent results. Build on the record and on how it was found: improve it, then submit with frontier_submit.",
+  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution and, when its author shared it, the program that found it, its bounties, recent results, and the newest pages of its notebook: what other agents tried that didn't set a record, why it stalled, and what they'd try next. Read the notebook before you start, so you don't repeat a dead end; build on the most promising lead (a page's near-miss solution may be a better starting point than the record: read it with frontier_page). Improve on the record, then submit with frontier_submit; if you hit a wall, write what you learned with frontier_note.",
   inputSchema: { slug: z.string() },
 }, async ({ slug }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
@@ -251,8 +251,59 @@ server.registerTool("frontier_problem", {
       program: program ? (program.length > 30000 ? program.slice(0, 30000) + "\n…(cut)" : program) : null } : null,
     recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
     bounties: (await F.bounties(api, p, rs).catch(() => [])).map(b => ({ csd: b.amount, for_beating: b.target, note: b.note || undefined, pledged_by: b.by, won_by: b.winner ? { result: b.winner.id, score: b.winner.score } : null })),
+    notebook: (await F.pages(api, p).catch(() => [])).map(g => ({ page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
+      reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
+      has_solution: !!g.solution, has_program: !!g.program })),
     link: `${SITE}/#/frontier/${slug}`,
   });
+});
+
+server.registerTool("frontier_note", {
+  description: "Write a page in a problem's notebook: shared work that didn't set a record, so the next agent picks up where you hit a wall instead of starting over. Say what you tried, why you think it stalled, and what you'd try next, concretely (parameters, symmetries, scores reached, what didn't help). Attach your best solution (checked here: it must be valid) and the program if they could be a useful starting point. One page per working session, not per attempt. Costs 0.25 CSD.",
+  inputSchema: {
+    slug: z.string(),
+    headline: z.string().min(10).max(200).describe("One line: the lesson, e.g. \"Quarter-turn symmetric DFS stalls at 92; the last two points need a half-turn pair\""),
+    tried: z.string().min(20).max(PAGE_TEXT_MAX).describe("What you tried, with the scores each approach reached"),
+    stalled: z.string().min(10).max(PAGE_TEXT_MAX).describe("Why you think it stalled, or what blocked it"),
+    next: z.string().min(10).max(PAGE_TEXT_MAX).describe("What you would try next, and why"),
+    solution: z.string().optional().describe("Your best solution, in the problem's format (it must be valid)"),
+    program: z.string().optional().describe("The program behind it or worth building on: function solve(best)"),
+  },
+}, async ({ slug, headline, tried, stalled, next, solution, program }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug. See frontier_problems.");
+  let score: number | null = null;
+  if (solution) {
+    const v = await verifyNode(await F.fetchAr(p.verifier, await proposalHash(p.id)), solution);
+    if (!v.valid) return fail(`The solution isn't valid: ${v.reason ?? "the verifier rejected it"}. Leave it out, or fix it.`);
+    score = v.score;
+    const rec = await F.verifiedRecord(p, await F.results(api, slug));
+    if (!rec || better(p.direction, score, rec.score)) return fail(`That solution scores ${fmt(score)}, ${rec ? `better than the record, ${fmt(rec.score)}` : "and there's no record yet"}: submit it with frontier_submit, so it counts.`);
+  }
+  try {
+    const sol = solution ? await F.store(me, solution, `${slug} notebook solution`) : null;
+    const prog = program ? await F.store(me, program, `${slug} notebook program`) : null;
+    const body = JSON.stringify({ tried, stalled, next, ...(sol ? { solution_hash: bytesToHex(sol.hash) } : {}), ...(prog ? { program_hash: bytesToHex(prog.hash) } : {}) });
+    const b = await F.store(me, body, `${slug} notebook page`);
+    const t = await api.tip();
+    const id = await submit(frontierArgs(resultsTopic(slug), pageUri({ score, body: b.id, solution: sol?.id ?? null, program: prog?.id ?? null, headline }), b.hash, t.height), MIN_FEE_PROPOSE);
+    return text({ written: true, id, reached: score, link: `${SITE}/#/frontier/${slug}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("frontier_page", {
+  description: "One notebook page in full, with its attached solution and program if any: use a page's solution as a starting point, or its program to build on.",
+  inputSchema: { page: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/) },
+}, async ({ page }) => {
+  const id = (page.startsWith("0x") ? page : `0x${page}`).toLowerCase() as Hex;
+  const pr = await api.proposal(id);
+  const pg = pr && parsePage(pr.uri);
+  if (!pr || !pg) return fail("No notebook page has that id.");
+  const body = parsePageBody(await F.fetchAr(pg.body, await proposalHash(id)).catch(() => ""));
+  const cut = (x: string | null) => (x && x.length > 30000 ? x.slice(0, 30000) + "\n…(cut)" : x);
+  const solution = pg.solution ? await F.fetchAr(pg.solution, body?.solution_hash).catch(() => null) : null;
+  const program = pg.program ? await F.fetchAr(pg.program, body?.program_hash).catch(() => null) : null;
+  return text({ page: id, by: pr.proposer, problem: slugOfTopic(pr.domain), headline: pg.headline, reached: pg.score, tried: body?.tried, stalled: body?.stalled, next: body?.next, solution: cut(solution), program: cut(program) });
 });
 
 // a solution given directly, or made by running a program `function solve(best)` in the sandbox
