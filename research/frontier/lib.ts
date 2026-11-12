@@ -75,7 +75,8 @@ export async function backedByProblem(api: Node, all: { slug: string; bounties: 
     }
   }));
   const out: Record<string, number> = {};
-  for (const x of all) out[x.slug] = backedCsd(x.bounties.filter(b => !b.winner), by => held[by] ?? 0, by => !!unpaid[by]);
+  const everywhere = all.flatMap(x => x.bounties.filter(b => !b.winner));
+  for (const x of all) out[x.slug] = backedCsd(x.bounties.filter(b => !b.winner), everywhere, by => held[by] ?? 0, by => !!unpaid[by]);
   return out;
 }
 

@@ -1710,7 +1710,9 @@ function useBacked(c: Ctx, f: ReturnType<typeof frontierOf>): Record<string, num
     return () => { live = false; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   const out: Record<string, number> = {};
-  for (const s of states) out[s.slug] = backedCsd(s.list.filter(x => !x.winner && x.b.author).map(x => ({ amount: x.b.bounty.amount, by: x.b.author! })), by => info.held[by] ?? 0, by => !!info.unpaid[by]);
+  const openOf = (list: typeof all) => list.filter(x => !x.winner && x.b.author).map(x => ({ amount: x.b.bounty.amount, by: x.b.author! }));
+  const everywhere = openOf(all);
+  for (const s of states) out[s.slug] = backedCsd(openOf(s.list), everywhere, by => info.held[by] ?? 0, by => !!info.unpaid[by]);
   return out;
 }
 

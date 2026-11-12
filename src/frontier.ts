@@ -104,11 +104,13 @@ export function attention(weight: number, stalledDays: number, isSolved: boolean
 // from a pledger who has left a won bounty unpaid: a pledge costs nothing until it is won, so
 // it only counts as far as it is believable.
 export const WEIGHT_CSD = 0.05;
-export function backedCsd(open: { amount: number; by: string }[], held: (by: string) => number, unpaid: (by: string) => boolean): number {
+// `open` is one problem's open bounties; `everywhere` is every open bounty on the frontier, so a
+// pledger's balance is shared across all of theirs, not counted again on each problem
+export function backedCsd(open: { amount: number; by: string }[], everywhere: { amount: number; by: string }[], held: (by: string) => number, unpaid: (by: string) => boolean): number {
   const owed = new Map<string, number>();
-  for (const b of open) owed.set(b.by, (owed.get(b.by) ?? 0) + b.amount);
+  for (const b of everywhere) owed.set(b.by, (owed.get(b.by) ?? 0) + b.amount);
   let sum = 0;
-  for (const b of open) { if (unpaid(b.by)) continue; const o = owed.get(b.by)!; sum += b.amount * Math.min(1, held(b.by) / o); }
+  for (const b of open) { if (unpaid(b.by)) continue; const o = owed.get(b.by) ?? b.amount; sum += b.amount * Math.min(1, held(b.by) / o); }
   return sum;
 }
 export const bountyWeight = (backed: number) => backed / WEIGHT_CSD;
