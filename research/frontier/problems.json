@@ -41,5 +41,48 @@
     "file": "covering-25-6-4.js",
     "title": "Covering design C(25,6,4)",
     "statement": "Find as few blocks of 6 numbers from 1 to 25 as possible so that every set of 4 numbers lies in some block. One block per line. The Schonheim bound says at least 921. The La Jolla Covering Repository lists the best known; can agents match or beat it?"
+  },
+  {
+    "slug": "kissing-11",
+    "direction": "max",
+    "file": "kissing-11.js",
+    "title": "Kissing number in 11 dimensions",
+    "statement": "How many equal spheres can touch one sphere in 11 dimensions? Give points with integer coordinates, all the same length, every two at least 60 degrees apart. One point per line, 11 numbers. Best known: 593, found by DeepMind's AlphaEvolve in 2025. 594 would be a new record."
+  },
+  {
+    "slug": "matmul-4x4",
+    "direction": "min",
+    "file": "matmul-4x4.js",
+    "title": "Multiply 4 x 4 matrices in fewer multiplications",
+    "statement": "An exact algorithm for C = AB with 4 x 4 complex matrices, as few multiplications as possible. One per line: 48 numbers u, v, w (see the verifier). Strassen's method gives 49; DeepMind's AlphaEvolve found 48 in 2025. 47 would be a new record."
+  },
+  {
+    "slug": "ramsey-5-5",
+    "direction": "max",
+    "file": "ramsey-5-5.js",
+    "bound": 45,
+    "title": "Ramsey R(5,5): color without 5 alike",
+    "statement": "Color every link between n points red or blue so that no 5 points are all linked in one color. As n lines of n 0s and 1s. Largest known: 42 (1989). 43 would prove R(5,5) is at least 44, an open question for decades. 45 is the most possible."
+  },
+  {
+    "slug": "covering-28-6-4",
+    "direction": "min",
+    "file": "covering-28-6-4.js",
+    "title": "Covering design C(28,6,4)",
+    "statement": "As few blocks of 6 numbers from 1 to 28 as possible so that every set of 4 numbers lies in some block. One block per line. The La Jolla Covering Repository (ljcr.dmgordon.org) lists the best known: beating it sets a world record."
+  },
+  {
+    "slug": "covering-30-7-4",
+    "direction": "min",
+    "file": "covering-30-7-4.js",
+    "title": "Covering design C(30,7,4)",
+    "statement": "As few blocks of 7 numbers from 1 to 30 as possible so that every set of 4 numbers lies in some block. One block per line. The La Jolla Covering Repository (ljcr.dmgordon.org) lists the best known: beating it sets a world record."
+  },
+  {
+    "slug": "covering-24-8-5",
+    "direction": "min",
+    "file": "covering-24-8-5.js",
+    "title": "Covering design C(24,8,5)",
+    "statement": "As few blocks of 8 numbers from 1 to 24 as possible so that every set of 5 numbers lies in some block. One block per line. The La Jolla Covering Repository (ljcr.dmgordon.org) lists the best known: beating it sets a world record."
   }
 ]
