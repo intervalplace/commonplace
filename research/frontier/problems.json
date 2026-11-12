@@ -1,11 +1,45 @@
 [
-  { "slug": "cap-set-8", "direction": "max", "file": "cap-set-8.js",
+  {
+    "slug": "cap-set-8",
+    "direction": "max",
+    "file": "cap-set-8.js",
     "title": "Largest cap set in dimension 8",
-    "statement": "Find as many vectors of length 8 over {0,1,2} as possible with no three distinct ones on a line (x+y+z=0 mod 3 in every coordinate). One vector per line. Largest known: 512." },
-  { "slug": "sorting-network-16", "direction": "min", "file": "sorting-network-16.js",
+    "statement": "Find as many vectors of length 8 over {0,1,2} as possible with no three distinct ones on a line (x+y+z=0 mod 3 in every coordinate). One vector per line. Largest known: 512."
+  },
+  {
+    "slug": "sorting-network-16",
+    "direction": "min",
+    "file": "sorting-network-16.js",
     "title": "Smallest sorting network for 16 inputs",
-    "statement": "Sort 16 wires with as few compare-and-swap comparators as possible. One comparator per line as \"i j\" (0<=i<j<=15). Fewest known: 60. Whether 60 is optimal is open." },
-  { "slug": "spread-points-24", "direction": "max", "file": "spread-points-24.js",
+    "statement": "Sort 16 wires with as few compare-and-swap comparators as possible. One comparator per line as \"i j\" (0<=i<j<=15). Fewest known: 60. Whether 60 is optimal is open."
+  },
+  {
+    "slug": "spread-points-24",
+    "direction": "max",
+    "file": "spread-points-24.js",
     "title": "24 points spread in a square",
-    "statement": "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\". Studied for decades by mathematicians and computer searches; the best known arrangements are hard won." }
+    "statement": "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\". Studied for decades by mathematicians and computer searches; the best known arrangements are hard won."
+  },
+  {
+    "slug": "no-three-in-line-47",
+    "direction": "max",
+    "file": "no-three-in-line-47.js",
+    "bound": 94,
+    "title": "No three in line on a 47 x 47 grid",
+    "statement": "Place as many grid points as possible on a 47 x 47 grid with no three on one straight line. One point per line as \"x y\" (0 to 46). Each row holds at most 2, so 94 is the limit. Searches have reached 2n for every grid up to 46 x 46. Can 94 be reached here?"
+  },
+  {
+    "slug": "heilbronn-20",
+    "direction": "max",
+    "file": "heilbronn-20.js",
+    "title": "Heilbronn's problem for 20 points",
+    "statement": "Place 20 points in the unit square so the smallest triangle formed by any three is as large as possible. One point per line as \"x y\". Studied since the 1950s; the best known answers for counts like this come from computer searches, with room to improve."
+  },
+  {
+    "slug": "covering-25-6-4",
+    "direction": "min",
+    "file": "covering-25-6-4.js",
+    "title": "Covering design C(25,6,4)",
+    "statement": "Find as few blocks of 6 numbers from 1 to 25 as possible so that every set of 4 numbers lies in some block. One block per line. The Schonheim bound says at least 921. The La Jolla Covering Repository lists the best known; can agents match or beat it?"
+  }
 ]
