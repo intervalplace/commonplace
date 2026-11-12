@@ -1540,19 +1540,57 @@ function verifyInBrowser(verifier: string, solution: string): Promise<{ valid: b
 }
 
 type ResultEntry = Entry & { result: NonNullable<Entry["result"]> };
-function frontierOf(c: Ctx) {
+
+// Every result is verified here, in the visitor's own browser, by running the problem's verifier on
+// its solution: the record is the best result this browser has seen verify, whatever anyone's
+// checks say (checks are a public signal, and could be stacked by one person with many keys).
+// Results never change, so a verdict is kept in this browser for good.
+type Verdict = { ok: boolean; score: number; reason?: string };
+const K_VERDICTS = "commonplace.verdicts1";
+let verdicts: Record<string, Verdict> | null = null;
+const verdictsNow = () => (verdicts ??= load(K_VERDICTS, {} as Record<string, Verdict>));
+const verdictListeners = new Set<() => void>();
+const verifying = new Set<string>();
+const verifiers = new Map<string, Promise<string | null>>();
+let verifyQueue: Promise<void> = Promise.resolve();
+function verifyResult(problem: Entry, r: ResultEntry) {
+  if (verdictsNow()[r.id] || verifying.has(r.id) || r.pending) return;
+  verifying.add(r.id);
+  verifyQueue = verifyQueue.then(async () => {
+    try {
+      let v = verifiers.get(problem.id);
+      if (!v) { v = fetchDoc(problem.problem!.verifier, problem.hash ?? "").then(d => (d.matches ? d.text : null)); verifiers.set(problem.id, v); v.catch(() => verifiers.delete(problem.id)); }
+      const verifier = await v;
+      if (verifier === null) return; // the stored verifier isn't the one the problem pinned: verdicts mean nothing
+      const sol = await fetchDoc(r.result.solution, r.hash ?? "");
+      const out: Verdict = !sol.matches ? { ok: false, score: NaN, reason: "the stored solution isn't the one this result fingerprinted" }
+        : await verifyInBrowser(verifier, sol.text).then(x => ({ ok: x.valid && sameScore(x.score, r.result.score), score: x.score, reason: x.valid ? undefined : x.reason }));
+      const all = verdictsNow(); all[r.id] = out; save(K_VERDICTS, all);
+      verdictListeners.forEach(f => f());
+    } catch { /* a gateway that didn't answer: try again next time */ } finally { verifying.delete(r.id); }
+  });
+}
+function useVerdicts() {
+  const [, bump] = useState(0);
+  useEffect(() => { const f = () => bump(n => n + 1); verdictListeners.add(f); return () => { verdictListeners.delete(f); }; }, []);
+  return verdictsNow();
+}
+
+function frontierOf(c: Ctx, vs: Record<string, Verdict> = {}) {
   const problems = c.all.filter(e => e.kind === "problem" && e.problem && e.topic === FRONTIER && !e.hidden)
     .sort((a, b) => a.height - b.height)
     .filter((e, i, xs) => xs.findIndex(x => x.problem!.slug === e.problem!.slug) === i); // the first with a slug keeps it
   const resultsFor = (slug: string) => c.all.filter((e): e is ResultEntry => e.kind === "result" && !!e.result && e.topic === resultsTopic(slug) && e.hidden === undefined).sort((a, b) => a.height - b.height || a.time - b.time);
-  const status = (e: Entry) => { const r = c.resonance[e.id]; const t = r?.scoreSum !== undefined ? tally(r.count, r.scoreSum) : null; return { holds: t?.holds ?? 0, fails: t?.fails ?? 0 }; };
-  // the record over time: each result that beat the one before, counting only those whose checks hold up
+  const status = (e: Entry) => { const r = c.resonance[e.id]; const t = r?.scoreSum !== undefined ? tally(r.count, r.scoreSum) : null; return { holds: t?.holds ?? 0, fails: t?.fails ?? 0, mine: vs[e.id] }; };
+  // whether a result counts: this browser's own verdict once it has one; until then, its checks
+  const counts = (r: Entry) => { const s = status(r); return s.mine ? s.mine.ok : s.holds > s.fails; };
+  // the record over time: each result that counts and beat the one before
   const records = (dir: "max" | "min", rs: ResultEntry[]) => {
     const out: ResultEntry[] = [];
-    for (const r of rs) { const s = status(r); if (s.holds > s.fails && (!out.length || better(dir, r.result.score, out[out.length - 1].result.score))) out.push(r); }
+    for (const r of rs) if (counts(r) && (!out.length || better(dir, r.result.score, out[out.length - 1].result.score))) out.push(r);
     return out;
   };
-  return { problems, resultsFor, status, records };
+  return { problems, resultsFor, status, counts, records };
 }
 
 function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
@@ -1578,8 +1616,18 @@ function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: Res
 
 function useFrontier(c: Ctx) {
   useEffect(() => { c.loadTopic(FRONTIER); c.loadTopic(PROFILE_TOPIC); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const f = frontierOf(c);
+  const vs = useVerdicts();
+  const f = frontierOf(c, vs);
   useEffect(() => { for (const p of f.problems) c.loadTopic(resultsTopic(p.problem!.slug)); c.needAuthors(f.problems.map(p => p.id)); }, [f.problems.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // verify every result in this browser, best claims first
+  const nResults = f.problems.reduce((n, p) => n + f.resultsFor(p.problem!.slug).length, 0);
+  useEffect(() => {
+    for (const p of f.problems) {
+      const dir = p.problem!.direction;
+      const rs = f.resultsFor(p.problem!.slug).slice().sort((a, b) => (better(dir, a.result.score, b.result.score) ? -1 : 1)).slice(0, 50);
+      for (const r of rs) verifyResult(p, r);
+    }
+  }, [f.problems.length, nResults]); // eslint-disable-line react-hooks/exhaustive-deps
   return f;
 }
 
@@ -1625,7 +1673,7 @@ function Hiscores({ c }: { c: Ctx }) {
   for (const p of f.problems) {
     const pr = p.problem!, rs = f.resultsFor(pr.slug), recs = f.records(pr.direction, rs);
     const poser = row(p.author); if (poser) poser.posed++;
-    for (const r of rs) { const st = f.status(r); const w = row(r.author); if (w && st.holds > st.fails) w.verified++; }
+    for (const r of rs) { const w = row(r.author); if (w && f.counts(r)) w.verified++; }
     for (const r of recs) { const w = row(r.author); if (w) w.set++; }
     const last = recs[recs.length - 1];
     const holder = row(last?.author); if (holder) { holder.held++; if (solved(pr, last.result.score)) holder.solved++; }
@@ -1677,10 +1725,10 @@ function Happening({ c, f }: { c: Ctx; f: ReturnType<typeof frontierOf> }) {
     for (const r of rs) {
       const st = f.status(r);
       const prev = r.result.buildsOn ? c.byId.get(r.result.buildsOn)?.result : undefined;
-      const kind = rec.some(x => x.id === r.id) ? "record" : st.fails > st.holds ? "false" : st.holds + st.fails === 0 ? "new" : "tried";
+      const kind = rec.some(x => x.id === r.id) ? "record" : (st.mine ? !st.mine.ok : st.fails > st.holds) ? "false" : !st.mine && st.holds + st.fails === 0 ? "new" : "tried";
       const line = kind === "record" ? `New record: ${fmt(r.result.score)}${prev ? `, building on ${fmt(prev.score)}` : ""}`
         : kind === "false" ? `Claimed ${fmt(r.result.score)}; the verifier says otherwise`
-        : kind === "new" ? `Submitted ${fmt(r.result.score)}, waiting to be checked`
+        : kind === "new" ? `Submitted ${fmt(r.result.score)}, being verified`
         : `Submitted ${fmt(r.result.score)}`;
       const checks = st.holds + st.fails;
       evs.push({ id: r.id, time: r.time, pending: r.pending, who: r.author, slug: pr.slug, title: pr.title, kind, line: line + (checks && kind !== "false" ? `, verified by ${st.holds}` : "") });
@@ -1766,8 +1814,12 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
   );
 }
 
-function ResultRow({ c, r, dir, verifier, isRecord, status }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number } }) {
-  const [mine, setMine] = useState<null | "running" | { ok: boolean; text: string }>(null);
+function ResultRow({ c, r, dir, verifier, isRecord, status }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict } }) {
+  const auto = status.mine && { ok: status.mine.ok, text: status.mine.ok ? `Your browser ran the verifier: ${fmt(r.result.score)}, as claimed.`
+    : Number.isFinite(status.mine.score) && !status.mine.reason ? `Your browser ran the verifier: ${fmt(status.mine.score)}, not ${fmt(r.result.score)} as claimed.`
+    : `Your browser ran the verifier: not valid (${status.mine.reason ?? "no reason"}).` };
+  const [ran, setMine] = useState<null | "running" | { ok: boolean; text: string }>(null);
+  const mine = ran ?? auto ?? null;
   const run = async () => {
     if (!verifier) return;
     setMine("running");

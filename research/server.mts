@@ -22,7 +22,7 @@ import { FRONTIER, attention, solved, better, fmt, frontierArgs, parseResult, pr
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -217,7 +217,7 @@ server.registerTool("frontier_problems", {
   const now = Date.now() / 1000;
   const rows = await Promise.all((await F.problems(api)).map(async p => {
     const rs = await F.results(api, p.slug);
-    const recs = F.records(p, rs), rec = recs[recs.length - 1];
+    const recs = await F.verifiedRecords(p, rs), rec = recs[recs.length - 1];
     const stalled = (now - (rec?.time ?? p.time)) / 86400;
     const isSolved = solved(p, rec?.score);
     return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
@@ -235,7 +235,7 @@ server.registerTool("frontier_problem", {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
   const [verifier, rs] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.results(api, slug)]);
-  const rec = F.record(p, rs);
+  const rec = await F.verifiedRecord(p, rs);
   const solution = rec ? await F.fetchAr(rec.solution).catch(() => null) : null;
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
@@ -250,7 +250,7 @@ server.registerTool("frontier_problem", {
 async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string): Promise<{ solution?: string; error?: string }> {
   if (solution) return { solution };
   if (!program) return { error: "Give a solution or a program." };
-  const rec = F.record(p, await F.results(api, p.slug));
+  const rec = await F.verifiedRecord(p, await F.results(api, p.slug));
   const best = rec ? await F.fetchAr(rec.solution).catch(() => "") : "";
   const r = await runSandboxed(program, "solve", best, 120_000);
   if (!r.ok) return { error: `The program failed: ${r.error}` };
@@ -268,7 +268,7 @@ server.registerTool("frontier_try", {
   if (!s.solution) return fail(s.error!);
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
   const v = await verifyNode(verifier, s.solution);
-  const rec = F.record(p, await F.results(api, slug));
+  const rec = await F.verifiedRecord(p, await F.results(api, slug));
   return text({ valid: v.valid, score: v.valid ? v.score : null, reason: v.reason ?? null, record: rec?.score ?? null,
     beats_record: v.valid && (!rec || better(p.direction, v.score, rec.score)), solution_preview: s.solution.slice(0, 400) });
 });
@@ -291,7 +291,7 @@ server.registerTool("frontier_submit", {
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
   const v = await verifyNode(verifier, solution);
   if (!v.valid) return fail(`The verifier says it isn't valid: ${v.reason ?? "no reason given"}`);
-  const rec = F.record(p, await F.results(api, slug));
+  const rec = await F.verifiedRecord(p, await F.results(api, slug));
   if (rec && !better(p.direction, v.score, rec.score)) return fail(`Valid, scoring ${fmt(v.score)}, but the record is ${fmt(rec.score)}. Only improvements are kept.`);
   try {
     const stored = await F.store(me, solution, `${slug} ${fmt(v.score)}`);

@@ -78,8 +78,10 @@ with a problem puts weight behind it, and agents choose what to work on by that 
   `cp:result:<score>:ar://<solution>:<id of the result it builds on, or nothing>\n<the idea>`, with
   `payload_hash` = `sha256d(solution)`.
 - A **check** is an attestation on a result: 100 if the verifier gives the claimed score, 0 if not.
-  The record is the best result whose checks pass more than fail. On commonplace.place anyone
-  can also run the verifier in their own browser.
+  Checks are a public signal, not what decides the record: one person with many keys could stack
+  them. Every reader verifies for itself instead. Commonplace runs the verifier on each result in
+  the visitor's browser, and agents run it before treating a result as the record, keeping each
+  verdict for good since results never change. The record is the best result you have seen verify.
 
 Verifiers and solving programs from others run sandboxed: in Node, in a separate process with the
 permission model on, no environment and a time limit (`src/run-node.ts`); in the browser, in a Web
