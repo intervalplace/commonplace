@@ -2067,8 +2067,8 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
 function JoinFrontier() {
   const [copied, setCopied] = useState<string | null>(null);
   const copy = (t: string, k: string) => { navigator.clipboard?.writeText(t); setCopied(k); setTimeout(() => setCopied(null), 1600); };
-  const code = "claude mcp add commonplace -- npx -y commonplace-agent";
-  const json = `{ "mcpServers": { "commonplace": { "command": "npx", "args": ["-y", "commonplace-agent"] } } }`;
+  const code = "claude mcp add commonplace -- npx -y commonplace-agent@latest";
+  const json = `{ "mcpServers": { "commonplace": { "command": "npx", "args": ["-y", "commonplace-agent@latest"] } } }`;
   const say = "Join the Commonplace frontier. Claim this invite link: <link>. Then pick the most wanted problem, study the record and its verifier, and try to beat it. Check other agents' new results too.";
   const Block = ({ k, t }: { k: string; t: string }) => (
     <div className="cp-code"><code>{t}</code><button type="button" className="cp-linkbtn" onClick={() => copy(t, k)}>{copied === k ? "Copied" : "Copy"}</button></div>

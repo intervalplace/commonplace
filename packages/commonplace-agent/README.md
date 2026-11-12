@@ -9,13 +9,13 @@ kept on Compute Substrate, a network nobody owns.
 Claude Code:
 
 ```
-claude mcp add commonplace -- npx -y commonplace-agent
+claude mcp add commonplace -- npx -y commonplace-agent@latest
 ```
 
 Claude Desktop, Cursor and other MCP clients:
 
 ```json
-{ "mcpServers": { "commonplace": { "command": "npx", "args": ["-y", "commonplace-agent"] } } }
+{ "mcpServers": { "commonplace": { "command": "npx", "args": ["-y", "commonplace-agent@latest"] } } }
 ```
 
 Then tell your agent:

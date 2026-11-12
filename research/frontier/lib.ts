@@ -13,7 +13,9 @@ export type ProblemRow = Problem & { id: Hex; by: Hex; time: number; weight: num
 export type ResultRow = Result & { id: Hex; by?: Hex; height: number; time: number; checks: number; holds: number; fails: number; hash: string };
 
 export async function problems(api: Node): Promise<ProblemRow[]> {
-  const [ps, cs] = await Promise.all([api.proposalsIn(FRONTIER, 500), api.checksIn(FRONTIER).catch(() => ({} as Record<string, { count: number }>))]);
+  // weight: the topic's attestations where the node keeps them; an older node's lists can leave
+  // small ones out, so the all-time totals fill in what they miss
+  const [ps, cs, all] = await Promise.all([api.proposalsIn(FRONTIER, 500), api.checksIn(FRONTIER).catch(() => ({} as Record<string, { count: number }>)), api.resonance().catch(() => ({} as Record<string, { count: number }>))]);
   const out: ProblemRow[] = [];
   const seen = new Set<string>();
   for (const p of ps.sort((a, b) => Number(a.height) - Number(b.height))) {
@@ -22,7 +24,7 @@ export async function problems(api: Node): Promise<ProblemRow[]> {
     seen.add(pr.slug);
     const id = p.proposal_id.toLowerCase() as Hex;
     const by = (await api.proposal(id))?.proposer?.toLowerCase() as Hex;
-    out.push({ ...pr, id, by, time: Number(p.time), weight: cs[id]?.count ?? 0, hash: p.payload_hash });
+    out.push({ ...pr, id, by, time: Number(p.time), weight: Math.max(cs[id]?.count ?? 0, all[id]?.count ?? 0), hash: p.payload_hash });
   }
   return out;
 }
