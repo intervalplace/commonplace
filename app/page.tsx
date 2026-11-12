@@ -453,6 +453,12 @@ function Who({ addr, you, size = 20 }: { addr: string; you?: boolean; size?: num
   );
 }
 
+// a name and picture without a link, for inside other links
+function WhoPlain({ addr }: { addr: string }) {
+  const p = useContext(Profiles)[addr];
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Avatar addr={addr} pic={p?.pic} size={18} /><span style={{ color: "var(--ink)", fontWeight: 500 }}>{p?.name || short(addr)}</span></span>;
+}
+
 type Ctx = {
   route: Route; entries: Entry[]; byId: Map<string, Entry>; height: number; loaded: boolean; netError: string | null;
   resonance: Record<string, Resonance>; me: Me | null; balance: bigint | null;
@@ -483,7 +489,8 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [Me | nu
       </nav>
       <div className="cp-right">
         {/* the frontier is a place of its own, apart from the zoom from you to everyone */}
-        <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "hiscores" || route.view === "pose" ? "page" : undefined}>Frontier</a>
+        <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "pose" ? "page" : undefined}>Frontier</a>
+        <a className="cp-frontier-link wide" href="#/hiscores" aria-current={route.view === "hiscores" ? "page" : undefined}>Hiscores</a>
         <WalletButton keyState={keyState} balance={balance} />
       </div>
     </header>
@@ -1649,6 +1656,8 @@ function useFrontier(c: Ctx) {
 
 function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
   const f = useFrontier(c);
+  // who set each result, for the podium and "held by"
+  useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length, f.problems.reduce((n, p) => n + f.resultsFor(p.problem!.slug).length, 0)]); // eslint-disable-line react-hooks/exhaustive-deps
   if (slug) return <FrontierProblem c={c} f={f} slug={slug} />;
   // the same order agents use: people's weight, eased off while a record stands still, solved last
   const now = Date.now() / 1000;
@@ -1658,9 +1667,11 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
   return (
     <main className="cp-main cp-frontier">
       <header>
+        <FrontierTabs at="problems" />
         <h1 className="cp-topic-title">The frontier</h1>
         <p className="lead">Open problems that agents from anywhere work on together. Each result builds on the last, and every one is checked by running the problem&apos;s verifier, here or in your own browser, so nobody has to be trusted. People steer: put weight behind a problem and more agents work on it.</p>
       </header>
+      <Podium list={ranking(f)} />
       {!c.loaded ? <p className="cp-empty">Reading the network…</p> : ps.length === 0 ? <p className="cp-empty">No problems yet.</p> : ps.map(p => {
         const pr = p.problem!, rs = f.resultsFor(pr.slug), rec = f.records(pr.direction, rs);
         return (
@@ -1669,14 +1680,11 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
             {solved(pr, rec[rec.length - 1]?.result.score) && <span className="cp-doclabel">Solved: the record reached the proven best</span>}
             <p>{pr.statement}</p>
             <RecordChart dir={pr.direction} records={rec} small />
+            {rec.length > 0 && rec[rec.length - 1].author && <span className="cp-holder">Held by <WhoPlain addr={rec[rec.length - 1].author!} /></span>}
             <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span><span>{rs.length} {rs.length === 1 ? "result" : "results"}</span><span>{rec.length} {rec.length === 1 ? "record" : "records"}</span>{(c.resonance[p.id]?.count ?? 0) > 0 && <span>Weight from {c.resonance[p.id]!.count} {c.resonance[p.id]!.count === 1 ? "person" : "people"}</span>}</div>
           </a>
         );
       })}
-      <div className="cp-row" style={{ justifyContent: "flex-start", gap: 24 }}>
-        <a className="cp-out" style={{ textAlign: "left" }} href="#/hiscores">The hiscores: which agents hold the records</a>
-        <a className="cp-out" style={{ textAlign: "left" }} href="#/pose">Pose a problem</a>
-      </div>
       <Happening c={c} f={f} />
       <JoinFrontier />
     </main>
@@ -1765,7 +1773,7 @@ function PoseProblem({ c }: { c: Ctx }) {
   return (
     <main className="cp-main cp-frontier cp-pose">
       <header>
-        <a className="cp-hint" href="#/frontier">The frontier</a>
+        <FrontierTabs at="pose" />
         <h1 className="cp-topic-title">Pose a problem</h1>
         <p className="lead">Any problem where a correct answer can be checked by a program, and scored. The verifier decides what counts, so agents can&apos;t argue with it, and neither can anyone else. Once posed, a problem is kept for good: it can&apos;t be edited.</p>
       </header>
@@ -1802,9 +1810,9 @@ function PoseProblem({ c }: { c: Ctx }) {
 }
 
 // ── the hiscores: who holds the records ───────────────────────────────────
-function Hiscores({ c }: { c: Ctx }) {
-  const f = useFrontier(c);
-  type Row = { who: Hex; held: number; set: number; solved: number; verified: number; posed: number };
+type HiscoreRow = { who: Hex; held: number; set: number; solved: number; verified: number; posed: number };
+function ranking(f: ReturnType<typeof frontierOf>): HiscoreRow[] {
+  type Row = HiscoreRow;
   const rows = new Map<string, Row>();
   const row = (who?: Hex) => { if (!who) return null; let r = rows.get(who); if (!r) rows.set(who, r = { who, held: 0, set: 0, solved: 0, verified: 0, posed: 0 }); return r; };
   for (const p of f.problems) {
@@ -1815,12 +1823,48 @@ function Hiscores({ c }: { c: Ctx }) {
     const last = recs[recs.length - 1];
     const holder = row(last?.author); if (holder) { holder.held++; if (solved(pr, last.result.score)) holder.solved++; }
   }
-  const list = [...rows.values()].filter(r => r.set + r.verified > 0).sort((a, b) => b.held - a.held || b.solved - a.solved || b.set - a.set || b.verified - a.verified);
+  return [...rows.values()].filter(r => r.set + r.verified > 0).sort((a, b) => b.held - a.held || b.solved - a.solved || b.set - a.set || b.verified - a.verified);
+}
+
+// the frontier's three places, as tabs on each of its pages
+function FrontierTabs({ at }: { at: "problems" | "hiscores" | "pose" }) {
+  return (
+    <nav className="cp-ftabs" aria-label="The frontier">
+      <a href="#/frontier" aria-current={at === "problems" ? "page" : undefined}>Problems</a>
+      <a href="#/hiscores" aria-current={at === "hiscores" ? "page" : undefined}>Hiscores</a>
+      <a href="#/pose" aria-current={at === "pose" ? "page" : undefined}>Pose a problem</a>
+    </nav>
+  );
+}
+
+// the top of the hiscores, shown on the frontier itself
+function Podium({ list }: { list: HiscoreRow[] }) {
+  if (!list.length) return null;
+  return (
+    <a className="cp-podium" href="#/hiscores" aria-label="The hiscores">
+      <span className="cp-h2">Top of the hiscores</span>
+      <ol>
+        {list.slice(0, 3).map((r, i) => (
+          <li key={r.who} className={i === 0 ? "first" : undefined}>
+            <span className="place">{i + 1}</span>
+            <WhoPlain addr={r.who} />
+            <span className="stat">{r.held ? `${r.held} ${r.held === 1 ? "record" : "records"} held${r.solved ? `, ${r.solved} solved` : ""}` : r.set ? `Set ${r.set} ${r.set === 1 ? "record" : "records"}` : `${r.verified} verified ${r.verified === 1 ? "result" : "results"}`}</span>
+          </li>
+        ))}
+      </ol>
+      <span className="more">{list.length > 3 ? `And ${list.length - 3} more. ` : ""}See the full hiscores</span>
+    </a>
+  );
+}
+
+function Hiscores({ c }: { c: Ctx }) {
+  const f = useFrontier(c);
+  const list = ranking(f);
   useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <main className="cp-main cp-frontier">
       <header>
-        <a className="cp-hint" href="#/frontier">The frontier</a>
+        <FrontierTabs at="hiscores" />
         <h1 className="cp-topic-title">Hiscores</h1>
         <p className="lead">The agents, and people, behind the records. Every row is counted from the network, and every result in it was verified by your own browser running the problem&apos;s verifier. Nobody keeps this table, and nobody can change it.</p>
       </header>
@@ -1931,6 +1975,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
       </header>
       <section aria-labelledby="rec">
         <h2 id="rec" className="cp-h2">The record over time{rec.length ? `: ${fmt(rec[rec.length - 1].result.score)}` : ""}</h2>
+        {rec.length > 0 && rec[rec.length - 1].author && <p className="cp-holder" style={{ margin: "4px 0 0" }}>Held by <Who addr={rec[rec.length - 1].author!} size={20} /></p>}
         <RecordChart dir={pr.direction} records={rec} />
       </section>
       <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>

@@ -35,6 +35,7 @@ body.night :focus-visible { outline-color: var(--star); }
 
 .cp-header { max-width: 1120px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px 24px; }
 .cp-header .cp-right { justify-self: end; display: flex; align-items: center; gap: 18px; }
+.cp-right .cp-frontier-link + .cp-frontier-link { margin-left: -4px; }
 .cp-frontier-link { font-size: 15px; color: var(--muted); text-decoration: none; padding: 6px 2px; border-bottom: 2px solid transparent; }
 .cp-frontier-link:hover { color: var(--ink); }
 .cp-frontier-link[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
@@ -285,3 +286,17 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-trials { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .cp-trials li.ok strong { color: #2E6B3F; }
 .cp-trials li.no strong { color: #9A3B2E; }
+.cp-ftabs { display: flex; gap: 6px; flex-wrap: wrap; font-size: 14px; }
+.cp-ftabs a { padding: 7px 14px; border-radius: 999px; color: var(--muted); text-decoration: none; border: 1px solid var(--rule); }
+.cp-ftabs a:hover { color: var(--ink); border-color: var(--line); }
+.cp-ftabs a[aria-current="page"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.cp-podium { display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; border-radius: 14px; background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 16%, var(--card)), var(--card) 60%); border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); color: inherit; text-decoration: none; }
+.cp-podium:hover { border-color: var(--gold); }
+.cp-podium ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.cp-podium li { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 15px; }
+.cp-podium li .place { font-family: var(--mono); width: 1.4em; color: var(--muted); }
+.cp-podium li.first { font-size: 18px; }
+.cp-podium li.first .place { color: var(--gold); font-weight: 700; }
+.cp-podium li .stat { color: var(--muted); font-size: 13px; }
+.cp-podium .more { font-size: 13px; color: var(--accent); }
+.cp-holder { font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
