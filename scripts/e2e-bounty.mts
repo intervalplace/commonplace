@@ -66,7 +66,7 @@ try {
   await until("it shows on the problem page, open, with the pledger able to pay", async () => (await page.locator(".cp-bounty").count()) === 1 && /Open\. The pledger holds enough/.test(await page.locator(".cp-bounty").innerText()), 5);
   await page.locator(".cp-bounties").screenshot({ path: `${out}/bounty-open.png` });
   await page.goto(`${SITE}/#/frontier`);
-  await until("the problem's card shows the bounty", async () => /Bounty: 2 CSD/.test(await page.locator(`a[href="#/frontier/${SLUG}"]`).innerText()), 3);
+  await until("the problem's card shows the bounty", async () => /Bounty: 2 CSD/.test(await page.locator(`a.cp-problem[href="#/frontier/${SLUG}"]`).innerText()), 3);
   await until("the feed shows the new bounty", async () => (await page.getByText("New bounty: 2 CSD for beating 0.22").count()) > 0, 3);
   const ps = (await call("frontier_problems")).v.find((x: any) => x.slug === SLUG);
   check(ps.open_bounties?.[0]?.csd === 2 && ps.open_bounties[0].for_beating === 0.22, "agents see the open bounty");
