@@ -72,7 +72,10 @@ try {
   const held = Number((await api.utxos(P.addr20, true)).reduce((s, u) => s + u.value, 0n)) / 1e8;
   const ra = await row(A);
   check(Math.abs(ra.bounties_backed_csd - held) < 0.02, `a 100 CSD bounty counts only the ${held} CSD its pledger holds (${ra.bounties_backed_csd})`);
-  check(ra.attention > 5, `so it draws more attention (${ra.attention})`);
+  // it would count like 1 + held / 0.05 people; problems with bounties get at most what all others get together
+  const others = (await call("frontier_problems")).v.filter((x: any) => !x.open_bounties).reduce((t: number, x: any) => t + x.attention, 0);
+  const uncapped = 1 + held / 0.05;
+  check(Math.abs(ra.attention - Math.min(uncapped, others)) < 0.1, `so it draws ${ra.attention}: as much as ${uncapped.toFixed(1)} people, capped at half of all attention (the others add up to ${others.toFixed(2)})`);
   await pledge(B, 100, 0.3);
   await until("a second pledge, on B, is in a block", async () => (await row(B))?.open_bounties?.length === 1);
   const [a2, b2] = [await row(A), await row(B)];
