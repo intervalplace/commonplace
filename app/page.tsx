@@ -1581,6 +1581,21 @@ function verifyInBrowser(verifier: string, solution: string): Promise<{ valid: b
   });
 }
 
+// Runs a shared program in a Web Worker, with the worker's ways to reach the network taken away
+// first, so what it returns comes from the program alone
+function runInBrowser(source: string, input: string, ms: number): Promise<{ ok: boolean; out?: unknown; error?: string; secs: number }> {
+  return new Promise(resolve => {
+    const lock = `for (const k of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "WebTransport", "Request"]) { try { Object.defineProperty(self, k, { value: undefined, writable: false, configurable: false }); } catch {} }`;
+    const url = URL.createObjectURL(new Blob([`${lock}\n${RUNNER}\nonmessage = e => postMessage(run(e.data));`], { type: "text/javascript" }));
+    const w = new Worker(url), t0 = Date.now();
+    const done = (r: { ok: boolean; out?: unknown; error?: string }) => { clearTimeout(t); w.terminate(); URL.revokeObjectURL(url); resolve({ ...r, secs: Math.round((Date.now() - t0) / 100) / 10 }); };
+    const t = setTimeout(() => done({ ok: false, error: `it took longer than ${ms / 1000} seconds` }), ms);
+    w.onmessage = e => done(e.data);
+    w.onerror = e => done({ ok: false, error: e.message });
+    w.postMessage({ source, fn: "solve", input });
+  });
+}
+
 type ResultEntry = Entry & { result: NonNullable<Entry["result"]> };
 
 // Every result is verified here, in the visitor's own browser, by running the problem's verifier on
@@ -2172,6 +2187,23 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
 
 function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict }; method?: Entry }) {
   const [prog, setProg] = useState<null | "loading" | string>(null);
+  const [rerun, setRerun] = useState<null | "running" | { ok: boolean; text: string }>(null);
+  // run the shared program here, from what the result built on, and verify what it returns
+  const runProgram = async () => {
+    if (!prog || prog === "loading" || !verifier) return;
+    setRerun("running");
+    try {
+      const prev = r.result.buildsOn ? c.byId.get(r.result.buildsOn) : undefined;
+      let best = "";
+      if (prev?.result) { const d = await fetchDoc(prev.result.solution, prev.hash ?? ""); if (d.matches) best = d.text; }
+      const out = await runInBrowser(prog, best, 180_000);
+      if (!out.ok || typeof out.out !== "string") return setRerun({ ok: false, text: `The program didn't return a solution: ${out.error ?? "it must return text"}` });
+      const v = await verifyInBrowser(verifier, out.out);
+      if (!v.valid) return setRerun({ ok: false, text: `In ${out.secs} seconds it returned a solution the verifier rejects (${v.reason ?? "no reason"}).` });
+      const as = sameScore(v.score, r.result.score) ? "as the result claims" : better(dir, v.score, r.result.score) ? "better than the result claims" : `short of the ${fmt(r.result.score)} claimed (a time-limited search can fall short on a slower machine)`;
+      setRerun({ ok: !better(dir, r.result.score, v.score), text: `Your browser ran the program${prev ? `, starting from the ${fmt(prev.result!.score)} it built on` : " from nothing"}, with no network: in ${out.secs} seconds it found a solution the verifier scores ${fmt(v.score)}, ${as}.` });
+    } catch (x) { setRerun({ ok: false, text: `Couldn't run it: ${nice(x)}` }); }
+  };
   const showProgram = async () => {
     if (!method?.method) return;
     if (prog && prog !== "loading") return setProg(null);
@@ -2213,6 +2245,9 @@ function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; 
       {mine && mine !== "running" && <p className={mine.ok ? "cp-hint ok" : "cp-hint over"} style={{ margin: 0 }}>{mine.text}</p>}
       {prog === "loading" && <p className="cp-hint" style={{ margin: 0 }}>Reading it from Arweave…</p>}
       {prog && prog !== "loading" && <pre className="cp-program">{prog}</pre>}
+      {prog && prog !== "loading" && verifier && rerun === null && <button type="button" className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={runProgram}>Run it yourself, in your browser</button>}
+      {rerun === "running" && <p className="cp-hint" style={{ margin: 0 }}>Running the program in your browser, with no network. A search can take a minute or two…</p>}
+      {rerun && rerun !== "running" && <p className={rerun.ok ? "cp-hint ok" : "cp-hint over"} style={{ margin: 0 }}>{rerun.text}</p>}
     </article>
   );
 }

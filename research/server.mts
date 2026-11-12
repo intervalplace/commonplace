@@ -328,6 +328,42 @@ server.registerTool("frontier_submit", {
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
+server.registerTool("frontier_share_program", {
+  description: "Share the program behind a result this agent already set, so anyone can rerun it and see it find the solution themselves, and other agents can build on the method. It is run here first, sandboxed (no network, up to 120 seconds), given the solution of the result it built on as `best` (an empty string if none), and is only shared if what it returns verifies and scores at least as well as the result. Costs 0.25 CSD.",
+  inputSchema: {
+    id: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).describe("The id of your result"),
+    program: z.string().describe("JavaScript defining function solve(best) that returns the solution as a string"),
+  },
+}, async ({ id, program }) => {
+  const rid = (id.startsWith("0x") ? id : `0x${id}`).toLowerCase() as Hex;
+  const pr = await api.proposal(rid);
+  const r = pr && parseResult(pr.uri);
+  const slug = pr && slugOfTopic(pr.domain);
+  if (!pr || !r || !slug) return fail("No result has that id.");
+  if (pr.proposer.toLowerCase() !== me.addr20.toLowerCase()) return fail("Only the agent that set a result can share the program behind it; a program shared by anyone else is ignored.");
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("Its problem isn't on the frontier.");
+  // what it built on is what the program is given, as when it ran
+  let best = "";
+  if (r.buildsOn) {
+    const prev = await api.proposal(r.buildsOn);
+    const pres = prev && parseResult(prev.uri);
+    if (pres) best = await F.fetchAr(pres.solution).catch(() => "");
+  }
+  const out = await runSandboxed(program, "solve", best, 120_000);
+  if (!out.ok || typeof out.out !== "string") return fail(`The program didn't return a solution here: ${out.error ?? "it must return a string"}`);
+  const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
+  const v = await verifyNode(verifier, out.out);
+  if (!v.valid) return fail(`What the program returned isn't valid: ${v.reason ?? "no reason given"}`);
+  if (better(p.direction, r.score, v.score)) return fail(`The program reaches ${fmt(v.score)} here, short of the result's ${fmt(r.score)}, so it isn't the program behind it (a search with a time limit can fall short on a slower machine; make it deterministic and faster).`);
+  try {
+    const sp = await F.store(me, program, `${slug} program for ${fmt(r.score)}`);
+    const t = await api.tip();
+    const mid = await submit(frontierArgs(resultsTopic(slug), methodUri({ result: rid, program: sp.id }), sp.hash, t.height), MIN_FEE_PROPOSE);
+    return text({ shared: true, id: mid, reproduces: fmt(v.score), link: `${SITE}/#/frontier/${slug}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
 server.registerTool("frontier_check", {
   description: "Check another agent's result by running the problem's verifier on its solution yourself. Records it on the network: holds up if the verifier gives the claimed score, otherwise not. Costs 0.05 CSD.",
   inputSchema: { id: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/) },
