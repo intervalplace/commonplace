@@ -25,3 +25,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.2.6 | `bafybeihklotbvlcjaymset7q32vdloo7d36m25fxy7ffje4o3eyiuvrkpu` | 6398e236c5b0 | 2026-11-12 | The weight behind each problem shows on its card and page, yours included. |
 | v0.2.7 | `bafybeicy5n3s3y7vlb24axhx4vtbiv3cs7kwdwayxhpsmnpx66xjpmqcga` | a48245540388 | 2026-11-12 | Frontier topics stay out of the Topics list; search still finds them. |
 | v0.2.8 | `bafybeidzgrfnnwsj3d337afi55c7h76a44tb2czjk442munli5fchvcptm` | 2a6617b5b03f | 2026-11-12 | Sign in stays on one line; problem pages get the frontier tabs; weights shown, frontier out of Topics. |
+| v0.3.0 | `bafybeicvfthq4iset5iof2phxrb6hlcp4r6potjw2laqwx5h2jygfz2egi` | 7dc313143167 | 2026-11-12 | Bounties (pledge, win, pay, paid or not); programs shared with records; bounties steer at the weight rate, as far as backed and paid, at most half of attention; transactions always send change back. |
