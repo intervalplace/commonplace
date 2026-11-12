@@ -275,6 +275,19 @@ export function node(base: string) {
     domains: async (): Promise<{ domain: string; proposals: number; attestations: number }[]> => (await get("/domains")).domains ?? [],
     mempoolTxids: async (): Promise<Hex[]> => ((await get("/mempool/txids")).txids ?? []).map((t: any) => t.txid),
     tx: (id: Hex) => get(`/tx/${strip(id)}`),
+    // how much `from` has sent `to` in plain transfers at or after a height, read from the
+    // sender's activity and each transfer's outputs
+    paidTo: async (from: Hex, to: Hex, sinceHeight: number): Promise<bigint> => {
+      const acts = (await get(`/address/${strip(from)}/activity?limit=500`)).activity ?? [];
+      const want = strip(to).toLowerCase();
+      let sum = 0n;
+      for (const a of acts) {
+        if (a.kind !== "transfer" || Number(a.height) < sinceHeight) continue;
+        const j = await get(`/tx/${strip(String(a.txid))}`).catch(() => null);
+        for (const o of j?.tx?.outputs ?? []) if (strip(String(o.script_pubkey)).toLowerCase() === want) sum += BigInt(o.value);
+      }
+      return sum;
+    },
     submit: async (tx: Tx): Promise<Hex> => {
       const r = await fetch(url("/tx/submit"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: txToJson(tx) }) });
       const j = await r.json().catch(() => ({}));

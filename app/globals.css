@@ -303,3 +303,18 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-holder { font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
 .cp-weight { color: var(--ink); font-weight: 500; }
 .cp-weight::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); margin-right: 6px; vertical-align: 1px; }
+.cp-bounty-badge { align-self: flex-start; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, var(--gold) 22%, var(--card)); color: var(--ink); border: 1px solid color-mix(in srgb, var(--gold) 55%, var(--line)); }
+.cp-bounties { display: flex; flex-direction: column; gap: 12px; }
+.cp-bounty { padding: 16px 18px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 12%, var(--card)), var(--card) 70%); display: flex; flex-direction: column; gap: 6px; }
+.cp-bounty.won { border-color: var(--line); background: var(--card); }
+.cp-bounty .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cp-bounty .amt { font-family: var(--serif); font-size: 26px; color: var(--ink); }
+.cp-bounty .for { color: var(--muted); font-size: 15px; }
+.cp-bounty p { margin: 0; }
+.cp-bounty .state { margin: 4px 0 0; font-size: 14px; color: var(--ink); display: block; }
+.cp-bounty .paid { color: #2f7a4b; }
+.cp-bounty .unpaid { color: #a5502a; }
+.cp-bounty-form { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
+.cp-bounty-form label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+.cp-bounty-form input { font: inherit; font-size: 16px; color: var(--ink); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--edge); background: var(--paper); }
+.cp-ev.bounty .what, .cp-ev.won .what { color: color-mix(in srgb, var(--gold) 70%, var(--ink)); }

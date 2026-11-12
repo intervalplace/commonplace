@@ -8,7 +8,7 @@
 
 import { EPOCH_LEN, MAX_DOMAIN_BYTES, MAX_URI_BYTES, sha256d, utf8, type Hex, type ProposalItem } from "./csd";
 import { parseFinding, type Finding } from "./research";
-import { FRONTIER, fmt, parseProblem, parseResult, type Problem, type Result } from "./frontier";
+import { FRONTIER, fmt, parseBounty, parseProblem, parseResult, type Bounty, type Problem, type Result } from "./frontier";
 
 export const PREFIX = "cp:";
 export const DEFAULT_TOPIC = "thoughts";
@@ -18,7 +18,7 @@ export type Entry = {
   id: Hex;
   topic: string;
   text: string;          // the words, or the link for an outside proposal
-  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result";
+  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result" | "bounty";
   docId?: string;
   hash?: string;         // payload_hash: the fingerprint of the text or file        // a document entry: its Arweave id (the title is `text`)
   pic?: number;          // a profile entry: its picture (0: the one made from the key) and name
@@ -27,6 +27,7 @@ export type Entry = {
   finding?: Finding;     // a finding in the research memory: its source, claim and quote
   problem?: Problem;     // an open problem on the frontier
   result?: Result;       // a result on a frontier problem
+  bounty?: Bounty;       // a bounty pledged on a frontier problem
   replyTo?: Hex;
   height: number;
   time: number;          // unix seconds, from the block
@@ -78,6 +79,8 @@ export function parseEntry(p: ProposalItem): Entry {
   if (pb) return { ...base, kind: "problem", text: pb.title, problem: pb };
   const rs = p.domain.startsWith(FRONTIER + ".") ? parseResult(u) : null;
   if (rs) return { ...base, kind: "result", text: `Score ${fmt(rs.score)}${rs.note ? `: ${rs.note}` : ""}`, result: rs };
+  const bn = p.domain.startsWith(FRONTIER + ".") ? parseBounty(u) : null;
+  if (bn) return { ...base, kind: "bounty", text: `Bounty: ${fmt(bn.amount)} CSD for beating ${fmt(bn.target)}${bn.note ? `. ${bn.note}` : ""}`, bounty: bn };
   const f = parseFinding(u);
   if (f) return { ...base, kind: "finding", text: f.claim, finding: f };
   if (u.startsWith(PREFIX)) return { ...base, kind: "note", text: u.slice(PREFIX.length) };

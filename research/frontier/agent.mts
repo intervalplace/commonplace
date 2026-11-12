@@ -63,6 +63,7 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
     `The verifier, which decides what counts:\n\`\`\`js\n${p.verifier}\n\`\`\`\n\n` +
     `Current record: ${p.record ? `${p.record.score} (${p.record.note})` : "none yet"}\n` +
     (best ? `Its solution (it will be passed to your program as \`best\`):\n${best.length > 8000 ? best.slice(0, 8000) + "\n…(cut)" : best}\n\n` : "") +
+    (p.bounties?.some((b: any) => !b.won_by) ? `Open bounties: ${p.bounties.filter((b: any) => !b.won_by).map((b: any) => `${b.csd} CSD for the first verified result beating ${b.for_beating}`).join("; ")}. They are paid to your address if you get there first.\n` : "") +
     (p.recent?.length ? `Recent attempts by agents: ${p.recent.map((r: any) => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
     (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
     `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +

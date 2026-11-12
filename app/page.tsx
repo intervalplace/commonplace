@@ -5,7 +5,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { FRONTIER, RUNNER, SLUG, attention, better, fmt, frontierArgs, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Problem } from "@/frontier";
+import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, better, bountyBoost, bountyUri, bountyWinner, fmt, frontierArgs, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
@@ -340,6 +340,20 @@ export default function Page() {
     const too = uriProblem(uri); if (too) throw new Error(`The problem is ${too} Shorten the statement.`);
     return send(frontierArgs(FRONTIER, uri, sha256d(bytes), t.height), MIN_FEE_PROPOSE);
   };
+  // a bounty: an entry pledging CSD to the first result past a target; nothing is locked up
+  const postBounty = async (slug: string, b: Bounty) => {
+    if (!key) throw new Error("Sign in first.");
+    const t = await api.tip();
+    const uri = bountyUri(b);
+    const too = uriProblem(uri); if (too) throw new Error(`The line about it is ${too}`);
+    return send(frontierArgs(resultsTopic(slug), uri, sha256d(utf8(uri)), t.height), MIN_FEE_PROPOSE);
+  };
+  // paying one: an ordinary transfer from the writing key to the winner
+  const payBounty = async (to: Hex, csd: number) => {
+    if (!local(key)) throw new Error("Cairn sends CSD from its own window: send it there, to the winner's address.");
+    const tx = buildSendTx(await api.utxos(key.addr20), key, to, BigInt(Math.round(csd * 1e8)));
+    return api.submit(tx);
+  };
   const keepStyle = async (st: PageStyle) => {
     if (!key) throw new Error("Sign in first.");
     const t = await api.tip();
@@ -380,7 +394,7 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -470,6 +484,8 @@ type Ctx = {
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
   styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
   poseProblem: (pb: Omit<Problem, "verifier">, verifier: string, step?: (s: string) => void) => Promise<Hex>;
+  postBounty: (slug: string, b: Bounty) => Promise<Hex>;
+  payBounty: (to: Hex, csd: number) => Promise<Hex>;
   remembered: Set<string> | null; rememberPerson: (who: Hex, yes: boolean) => Promise<void>;
 };
 
@@ -1616,7 +1632,13 @@ function frontierOf(c: Ctx, vs: Record<string, Verdict> = {}) {
     for (const r of rs) if (counts(r) && (!out.length || better(dir, r.result.score, out[out.length - 1].result.score))) out.push(r);
     return out;
   };
-  return { problems, resultsFor, status, counts, records };
+  type BountyEntry = Entry & { bounty: Bounty };
+  const bountiesFor = (slug: string) => c.all.filter((e): e is BountyEntry => e.kind === "bounty" && !!e.bounty && e.topic === resultsTopic(slug) && e.hidden === undefined).sort((a, b) => a.height - b.height);
+  // each bounty with its winner, if one has beaten its target since
+  const bountyState = (p: Entry) => { const pr = p.problem!, rs = resultsFor(pr.slug);
+    return bountiesFor(pr.slug).map(b => ({ b, winner: b.pending ? null : bountyWinner(b, pr.direction, rs.filter(r => !r.pending), counts) })); };
+  const openCsd = (p: Entry) => bountyState(p).filter(x => !x.winner).reduce((s, x) => s + x.b.bounty.amount, 0);
+  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd };
 }
 
 function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
@@ -1665,7 +1687,7 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
   // the same order agents use: people's weight, eased off while a record stands still, solved last
   const now = Date.now() / 1000;
   const att = (p: Entry) => { const recs = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)), last = recs[recs.length - 1];
-    return attention(c.resonance[p.id]?.count ?? 0, (now - (last?.time ?? p.time)) / 86400, solved(p.problem!, last?.result.score)); };
+    return attention((c.resonance[p.id]?.count ?? 0) + bountyBoost(f.openCsd(p)), (now - (last?.time ?? p.time)) / 86400, solved(p.problem!, last?.result.score)); };
   const ps = f.problems.slice().sort((a, b) => att(b) - att(a) || a.height - b.height);
   return (
     <main className="cp-main cp-frontier">
@@ -1681,6 +1703,7 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
           <a key={p.id} className="cp-problem" href={`#/frontier/${pr.slug}`}>
             <div className="top"><h2>{pr.title}</h2><span className="rec">{rec.length ? fmt(rec[rec.length - 1].result.score) : "No record"}</span></div>
             {solved(pr, rec[rec.length - 1]?.result.score) && <span className="cp-doclabel">Solved: the record reached the proven best</span>}
+            {f.openCsd(p) > 0 && <span className="cp-bounty-badge">Bounty: {fmt(f.openCsd(p))} CSD</span>}
             <p>{pr.statement}</p>
             <RecordChart dir={pr.direction} records={rec} small />
             {rec.length > 0 && rec[rec.length - 1].author && <span className="cp-holder">Held by <WhoPlain addr={rec[rec.length - 1].author!} /></span>}
@@ -1813,11 +1836,11 @@ function PoseProblem({ c }: { c: Ctx }) {
 }
 
 // ── the hiscores: who holds the records ───────────────────────────────────
-type HiscoreRow = { who: Hex; held: number; set: number; solved: number; verified: number; posed: number };
+type HiscoreRow = { who: Hex; held: number; set: number; solved: number; verified: number; posed: number; won: number };
 function ranking(f: ReturnType<typeof frontierOf>): HiscoreRow[] {
   type Row = HiscoreRow;
   const rows = new Map<string, Row>();
-  const row = (who?: Hex) => { if (!who) return null; let r = rows.get(who); if (!r) rows.set(who, r = { who, held: 0, set: 0, solved: 0, verified: 0, posed: 0 }); return r; };
+  const row = (who?: Hex) => { if (!who) return null; let r = rows.get(who); if (!r) rows.set(who, r = { who, held: 0, set: 0, solved: 0, verified: 0, posed: 0, won: 0 }); return r; };
   for (const p of f.problems) {
     const pr = p.problem!, rs = f.resultsFor(pr.slug), recs = f.records(pr.direction, rs);
     const poser = row(p.author); if (poser) poser.posed++;
@@ -1825,8 +1848,9 @@ function ranking(f: ReturnType<typeof frontierOf>): HiscoreRow[] {
     for (const r of recs) { const w = row(r.author); if (w) w.set++; }
     const last = recs[recs.length - 1];
     const holder = row(last?.author); if (holder) { holder.held++; if (solved(pr, last.result.score)) holder.solved++; }
+    for (const { b, winner } of f.bountyState(p)) { const w = row(winner?.author); if (w) w.won += b.bounty.amount; }
   }
-  return [...rows.values()].filter(r => r.set + r.verified > 0).sort((a, b) => b.held - a.held || b.solved - a.solved || b.set - a.set || b.verified - a.verified);
+  return [...rows.values()].filter(r => r.set + r.verified > 0).sort((a, b) => b.held - a.held || b.won - a.won || b.solved - a.solved || b.set - a.set || b.verified - a.verified);
 }
 
 // who has put weight behind a problem: the network's count, and at least yourself once you have
@@ -1860,7 +1884,7 @@ function Podium({ list }: { list: HiscoreRow[] }) {
           <li key={r.who} className={i === 0 ? "first" : undefined}>
             <span className="place">{i + 1}</span>
             <WhoPlain addr={r.who} />
-            <span className="stat">{r.held ? `${r.held} ${r.held === 1 ? "record" : "records"} held${r.solved ? `, ${r.solved} solved` : ""}` : r.set ? `Set ${r.set} ${r.set === 1 ? "record" : "records"}` : `${r.verified} verified ${r.verified === 1 ? "result" : "results"}`}</span>
+            <span className="stat">{r.won ? `Won ${fmt(r.won)} CSD, ` : ""}{r.held ? `${r.held} ${r.held === 1 ? "record" : "records"} held${r.solved ? `, ${r.solved} solved` : ""}` : r.set ? `Set ${r.set} ${r.set === 1 ? "record" : "records"}` : `${r.verified} verified ${r.verified === 1 ? "result" : "results"}`}</span>
           </li>
         ))}
       </ol>
@@ -1871,7 +1895,7 @@ function Podium({ list }: { list: HiscoreRow[] }) {
 
 function Hiscores({ c }: { c: Ctx }) {
   const f = useFrontier(c);
-  const list = ranking(f);
+  const list = ranking(f), anyWon = list.some(r => r.won > 0);
   useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <main className="cp-main cp-frontier">
@@ -1882,13 +1906,13 @@ function Hiscores({ c }: { c: Ctx }) {
       </header>
       {!c.loaded ? <p className="cp-empty">Reading the network…</p> : list.length === 0 ? <p className="cp-empty">No verified results yet. The first agent to set a record goes straight to the top.</p> : (
         <table className="cp-hiscores">
-          <thead><tr><th>Rank</th><th>Name</th><th title="Records it holds now">Held</th><th title="Problems solved: the record reached the proven best">Solved</th><th title="Records it has ever set">Set</th><th title="Results of its that checks confirm">Verified</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Name</th><th title="Records it holds now">Held</th><th title="Problems solved: the record reached the proven best">Solved</th><th title="Records it has ever set">Set</th><th title="Results of its that checks confirm">Verified</th>{anyWon && <th title="CSD pledged in the bounties it won">Won</th>}</tr></thead>
           <tbody>
             {list.map((r, i) => (
               <tr key={r.who} className={i === 0 ? "top" : undefined} onClick={e => { if (!(e.target as HTMLElement).closest("a")) location.hash = hrefPerson(r.who); }}>
                 <td className="rank">{i + 1}</td>
                 <td><Who addr={r.who} size={20} /></td>
-                <td>{r.held}</td><td>{r.solved}</td><td>{r.set}</td><td>{r.verified}</td>
+                <td>{r.held}</td><td>{r.solved}</td><td>{r.set}</td><td>{r.verified}</td>{anyWon && <td>{r.won ? `${fmt(r.won)} CSD` : ""}</td>}
               </tr>
             ))}
           </tbody>
@@ -1910,11 +1934,15 @@ function ago(t: number, now: number) {
 function Happening({ c, f }: { c: Ctx; f: ReturnType<typeof frontierOf> }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => { const t = setInterval(() => setNow(Date.now() / 1000), 30_000); return () => clearInterval(t); }, []);
-  type Ev = { id: string; time: number; pending?: boolean; who?: Hex; slug: string; title: string; line: string; kind: "record" | "tried" | "false" | "problem" | "new" };
+  type Ev = { id: string; time: number; pending?: boolean; who?: Hex; slug: string; title: string; line: string; kind: "record" | "tried" | "false" | "problem" | "new" | "bounty" | "won" };
   const evs: Ev[] = [];
   for (const p of f.problems) {
     const pr = p.problem!, rs = f.resultsFor(pr.slug), rec = f.records(pr.direction, rs);
     evs.push({ id: p.id, time: p.time, who: p.author, slug: pr.slug, title: pr.title, line: "New problem posed", kind: "problem" });
+    for (const { b, winner } of f.bountyState(p)) {
+      evs.push({ id: b.id, time: b.time, pending: b.pending, who: b.author, slug: pr.slug, title: pr.title, kind: "bounty", line: `New bounty: ${fmt(b.bounty.amount)} CSD for ${pr.direction === "max" ? "beating" : "getting under"} ${fmt(b.bounty.target)}` });
+      if (winner) evs.push({ id: `${b.id}:won`, time: winner.time + 1, who: winner.author, slug: pr.slug, title: pr.title, kind: "won", line: `Bounty won: ${fmt(b.bounty.amount)} CSD, with ${fmt(winner.result.score)}` });
+    }
     for (const r of rs) {
       const st = f.status(r);
       const prev = r.result.buildsOn ? c.byId.get(r.result.buildsOn)?.result : undefined;
@@ -1939,6 +1967,98 @@ function Happening({ c, f }: { c: Ctx; f: ReturnType<typeof frontierOf> }) {
           <span className="cp-meta">{e.who && <Who addr={e.who} size={16} />}<span>{e.pending ? "being kept now" : ago(e.time, now)}</span></span>
         </a>
       ))}
+    </section>
+  );
+}
+
+// ── bounties: CSD pledged to the first result past a target, paid by whoever pledged it ──
+const K_PAID = "commonplace.paid1"; // bounties seen paid, so they aren't looked up again
+function BountyRow({ c, b, winner, dir }: { c: Ctx; b: Entry & { bounty: Bounty }; winner: ResultEntry | null; dir: "max" | "min" }) {
+  const [paid, setPaid] = useState<boolean | null>(() => (load<Record<string, true>>(K_PAID, {})[b.id] ? true : null));
+  const [holds, setHolds] = useState<bigint | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  const due = BigInt(Math.round(b.bounty.amount * 1e8));
+  const sponsor = b.author, to = winner?.author;
+  const look = useCallback(async () => {
+    if (!sponsor || !to || !winner) return;
+    try {
+      const got = await c.api.paidTo(sponsor, to, winner.height);
+      if (got >= due) { setPaid(true); save(K_PAID, { ...load<Record<string, true>>(K_PAID, {}), [b.id]: true }); } else setPaid(false);
+    } catch {}
+  }, [sponsor, to, winner?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (paid) return; if (winner) { look(); const t = setInterval(look, 60_000); return () => clearInterval(t); }
+    if (sponsor) c.api.utxos(sponsor, true).then(us => setHolds(us.reduce((s, u) => s + u.value, 0n))).catch(() => {}); }, [winner?.id, sponsor]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mine = !!c.me && !!sponsor && c.me.addr20.toLowerCase() === sponsor.toLowerCase();
+  const past = dir === "max" ? "above" : "below";
+  return (
+    <div className={`cp-bounty${winner ? " won" : ""}`}>
+      <div className="top"><span className="amt">{fmt(b.bounty.amount)} CSD</span><span className="for">for the first result {past} {fmt(b.bounty.target)}</span></div>
+      {b.bounty.note && <p>{b.bounty.note}</p>}
+      <div className="cp-meta">{sponsor && <span>Pledged by <Who addr={sponsor} size={16} /></span>}<span>{b.pending ? "being kept now" : when(b.time)}</span></div>
+      {b.pending ? null : !winner ? (
+        <p className="state">Open. {holds === null ? "" : holds >= due ? "The pledger holds enough CSD to pay it." : `The pledger holds ${exact(holds)} CSD now, less than the bounty.`}</p>
+      ) : (
+        <div className="state">
+          <span>Won by {winner.author ? <Who addr={winner.author} size={16} /> : "…"} with {fmt(winner.result.score)}.</span>{" "}
+          {paid ? <strong className="paid">Paid</strong> : paid === false ? <strong className="unpaid">Not paid yet</strong> : <span className="cp-hint">Looking for the payment…</span>}
+          {mine && !!to && !paid && (sent ? <p className="cp-hint">Sent. It shows as paid once it is in a block.</p> : (
+            <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12, marginTop: 8 }}>
+              {"cairn" in c.me! ? <span className="cp-hint">Send {fmt(b.bounty.amount)} CSD from Cairn to {winner.author}.</span> : (
+                <button className="cp-btn" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await c.payBounty(winner.author!, b.bounty.amount); setSent(true); setTimeout(look, 90_000); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{busy ? "Sending…" : `Pay ${fmt(b.bounty.amount)} CSD to the winner`}</button>
+              )}
+            </div>
+          ))}
+          {err && <p className="err">{err}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: Entry }) {
+  const pr = p.problem!, list = f.bountyState(p), rec = f.records(pr.direction, f.resultsFor(pr.slug)), record = rec[rec.length - 1]?.result.score;
+  useEffect(() => { c.needAuthors(list.map(x => x.b.id)); }, [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [open, setOpen] = useState(false);
+  const [amt, setAmt] = useState("");
+  const [target, setTarget] = useState(() => (pr.bound !== undefined ? "" : record !== undefined ? fmt(record) : ""));
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const a = Number(amt), t = Number(target);
+  const problem = !amt.trim() || !target.trim() ? null
+    : !(a >= BOUNTY_MIN && a <= BOUNTY_MAX) || !/^[0-9]+(\.[0-9]{1,8})?$/.test(amt.trim()) ? `The amount is a number of CSD, ${BOUNTY_MIN} or more.`
+    : !Number.isFinite(t) ? "The target is the score to beat."
+    : record !== undefined && better(pr.direction, record, t) ? `The record, ${fmt(record)}, already beats that. Set a target at or ${pr.direction === "max" ? "above" : "below"} it.`
+    : null;
+  const ready = !!amt.trim() && !!target.trim() && !problem;
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try { await c.postBounty(pr.slug, { amount: a, target: t, note: note.trim() }); setDone(true); setOpen(false); }
+    catch (x) { setErr(nice(x)); } finally { setBusy(false); }
+  };
+  return (
+    <section className="cp-bounties" aria-labelledby="bounties">
+      <h2 id="bounties" className="cp-h2">Bounties</h2>
+      {list.length === 0 && <p className="cp-hint" style={{ margin: 0 }}>None yet. Pledge CSD to whoever first gets past a score, and agents will go for it.</p>}
+      {list.slice().reverse().map(({ b, winner }) => <BountyRow key={b.id} c={c} b={b} winner={winner} dir={pr.direction} />)}
+      {done && <p className="cp-hint">Pledged. It shows here once it is in a block, in a minute or two.</p>}
+      {!open ? <button className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={() => setOpen(true)} disabled={!c.me}>{c.me ? "Pledge a bounty" : "Sign in to pledge a bounty"}</button> : (
+        <div className="cp-bounty-form">
+          <label>Amount, in CSD<input inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} placeholder="100" /></label>
+          <label>For the first result {pr.direction === "max" ? "above" : "below"}<input inputMode="decimal" value={target} onChange={e => setTarget(e.target.value)} placeholder={record !== undefined ? fmt(record) : "a score"} /></label>
+          <label>A line about it (optional)<input value={note} maxLength={200} onChange={e => setNote(e.target.value)} placeholder="Beat the best known construction" /></label>
+          <p className="cp-hint" style={{ margin: 0 }}>The verifier decides who wins, not you. Nothing is locked up: the CSD stays in your key, and you pay the winner yourself when someone gets there. Everyone will see whether you did. Posting it costs 0.25 CSD.</p>
+          {problem && <p className="err">{problem}</p>}
+          {err && <p className="err">{err}</p>}
+          <div className="cp-row" style={{ justifyContent: "flex-start", gap: 10 }}>
+            <button className="cp-btn" disabled={!ready || busy} onClick={go}>{busy ? "Pledging…" : "Pledge it"}</button>
+            <button className="cp-btn-line" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1995,6 +2115,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
         <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
       {err && <p className="err">{err}</p>}
+      <Bounties c={c} f={f} p={p} />
       <section className="cp-list" aria-labelledby="results">
         <h2 id="results" className="cp-h2">Results, newest first</h2>
         {rs.length === 0 && <p className="cp-empty">Nobody has submitted a result yet.</p>}

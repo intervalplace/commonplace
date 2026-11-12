@@ -2,7 +2,7 @@
 
 import { bytesToHex, sha256d, utf8, type Hex, type Node, type CsdKey } from "../../src/csd";
 import { tally } from "../../src/research";
-import { FRONTIER, better, parseProblem, parseResult, resultsTopic, sameScore, type Problem, type Result } from "../../src/frontier";
+import { FRONTIER, better, parseBounty, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
 import { verifyNode } from "../../src/run-node";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { upload, fromGateways } from "../../src/arweave";
 
 export type ProblemRow = Problem & { id: Hex; by: Hex; time: number; weight: number; hash: string };
-export type ResultRow = Result & { id: Hex; by?: Hex; time: number; checks: number; holds: number; fails: number; hash: string };
+export type ResultRow = Result & { id: Hex; by?: Hex; height: number; time: number; checks: number; holds: number; fails: number; hash: string };
 
 export async function problems(api: Node): Promise<ProblemRow[]> {
   const [ps, cs] = await Promise.all([api.proposalsIn(FRONTIER, 500), api.checksIn(FRONTIER).catch(() => ({} as Record<string, { count: number }>))]);
@@ -36,9 +36,27 @@ export async function results(api: Node, slug: string): Promise<ResultRow[]> {
     if (!r) continue;
     const id = p.proposal_id.toLowerCase() as Hex;
     const t = tally(cs[id]?.count ?? 0, cs[id]?.scoreSum ?? 0);
-    out.push({ ...r, id, time: Number(p.time), checks: t.checks, holds: t.holds, fails: t.fails, hash: p.payload_hash });
+    out.push({ ...r, id, height: Number(p.height), time: Number(p.time), checks: t.checks, holds: t.holds, fails: t.fails, hash: p.payload_hash });
   }
   return out.sort((a, b) => a.time - b.time);
+}
+
+// Bounties on a problem: CSD pledged to the first result past a target, which the pledger pays.
+export type BountyRow = Bounty & { id: Hex; by: Hex; height: number; time: number; winner: ResultRow | null };
+export async function bounties(api: Node, p: ProblemRow, rs: ResultRow[]): Promise<BountyRow[]> {
+  const ps = (await api.proposalsIn(resultsTopic(p.slug), 500)).sort((a, b) => Number(a.height) - Number(b.height));
+  const out: BountyRow[] = [];
+  for (const x of ps) {
+    const b = parseBounty(x.uri ?? "");
+    if (!b) continue;
+    const id = x.proposal_id.toLowerCase() as Hex;
+    const by = (await api.proposal(id))?.proposer?.toLowerCase() as Hex;
+    let winner: ResultRow | null = null;
+    for (const r of rs.slice().sort((a, c) => a.height - c.height))
+      if (r.height >= Number(x.height) && better(p.direction, r.score, b.target) && await verified(p, r)) { winner = r; break; }
+    out.push({ ...b, id, by, height: Number(x.height), time: Number(x.time), winner });
+  }
+  return out;
 }
 
 // Each agent verifies results itself, by running the problem's verifier on the solution: what

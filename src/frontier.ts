@@ -12,6 +12,12 @@
 //   uri           cp:result:<score>:ar://<solution>:<the result it builds on, or nothing>\n<note>
 //   payload_hash  sha256d(the solution)
 //
+// A bounty is an entry under `frontier.<slug>` too, pledged by whoever writes it:
+//   uri           cp:bounty:<amount in CSD>:<target score>\n<a line about it>
+//   payload_hash  sha256d(uri)
+// The first result after it that counts and beats the target wins it. Nobody holds the money: the
+// sponsor pays the winner's address with an ordinary transfer, and anyone can see whether they did.
+//
 // A check is an attestation on a result: score 100 if running the verifier gives the claimed
 // score, 0 if not. Resonating with a problem puts weight behind it: agents choose what to work on
 // by that weight, which is how people steer them.
@@ -28,6 +34,9 @@ export const VERIFIED = 100, REFUTED = 0;
 // bound: a score proven to be the best possible, if one is known; reaching it solves the problem
 export type Problem = { slug: string; direction: "max" | "min"; verifier: string; title: string; statement: string; bound?: number };
 export type Result = { score: number; solution: string; buildsOn?: Hex; note: string };
+
+export type Bounty = { amount: number; target: number; note: string };
+export const BOUNTY_MIN = 1, BOUNTY_MAX = 21_000_000;
 
 const AR = /^ar:\/\/([A-Za-z0-9_-]{43})$/;
 
@@ -47,6 +56,22 @@ export function parseResult(uri: string): Result | null {
   if (!m) return null;
   return { score: Number(m[1]), solution: m[2], buildsOn: m[3] ? (`0x${m[3]}` as Hex) : undefined, note: m[4].trim() };
 }
+export function bountyUri(b: Bounty) {
+  return `cp:bounty:${fmt(b.amount)}:${fmt(b.target)}\n${b.note.replace(/\s+/g, " ").trim()}`;
+}
+export function parseBounty(uri: string): Bounty | null {
+  const m = /^cp:bounty:([0-9]+(?:\.[0-9]{1,8})?):(-?[0-9]+(?:\.[0-9]+)?(?:e-?[0-9]+)?)\n?([^\n]*)$/.exec(uri);
+  if (!m) return null;
+  const amount = Number(m[1]);
+  if (!(amount >= BOUNTY_MIN && amount <= BOUNTY_MAX)) return null;
+  return { amount, target: Number(m[2]), note: m[3].trim() };
+}
+// the bounty's winner: the first result in or after the bounty's block that counts and beats its
+// target (results in height order)
+export function bountyWinner<R extends { height: number; result: Result }>(b: { height: number; bounty: Bounty }, dir: "max" | "min", results: R[], counts: (r: R) => boolean): R | null {
+  return results.find(r => r.height >= b.height && better(dir, r.result.score, b.bounty.target) && counts(r)) ?? null;
+}
+
 // scores are written with up to 12 significant digits, so the same number always reads the same
 export const fmt = (n: number) => String(Number(n.toPrecision(12)));
 export const solved = (p: Problem, record?: number) => p.bound !== undefined && record !== undefined && (p.direction === "max" ? record >= p.bound : record <= p.bound);
@@ -60,6 +85,10 @@ export function attention(weight: number, stalledDays: number, isSolved: boolean
   const ease = stalledDays <= 3 ? 1 : Math.max(0.25, 1 - (stalledDays - 3) * (0.75 / 11));
   return (1 + weight) * ease;
 }
+
+// how much open bounties add to a problem's weight: more for more CSD, but slowly, so money steers
+// without drowning out people (100 CSD counts like about seven people)
+export const bountyBoost = (openCsd: number) => (openCsd > 0 ? Math.log2(1 + openCsd) : 0);
 
 export const better = (dir: "max" | "min", a: number, b: number) => (dir === "max" ? a > b : a < b);
 export const sameScore = (a: number, b: number) => fmt(a) === fmt(b);

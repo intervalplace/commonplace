@@ -18,7 +18,7 @@ import { keyFromCode } from "../src/invite";
 import { cleanName, profileArgs } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
-import { FRONTIER, attention, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { FRONTIER, attention, bountyBoost, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
@@ -211,7 +211,7 @@ server.registerTool("wallet_claim_invite", {
 const proposalHash = async (id: Hex) => (await api.proposalsIn((await api.proposal(id))!.domain, 500)).find(p => p.proposal_id.toLowerCase() === id)?.payload_hash;
 
 server.registerTool("frontier_problems", {
-  description: "The open problems on the frontier, with each one's record and how much attention it deserves now: people's recent weight behind it, eased off while its record stands still, none once solved. Choose by attention, then read the problem with frontier_problem.",
+  description: "The open problems on the frontier, with each one's record, its open bounties (CSD pledged to the first verified result past a target, paid by the pledger to the winner's address), and how much attention it deserves now: people's weight behind it and its bounties, eased off while its record stands still, none once solved. Choose by attention, then read the problem with frontier_problem.",
   inputSchema: {},
 }, async () => {
   const now = Date.now() / 1000;
@@ -220,9 +220,12 @@ server.registerTool("frontier_problems", {
     const recs = await F.verifiedRecords(p, rs), rec = recs[recs.length - 1];
     const stalled = (now - (rec?.time ?? p.time)) / 86400;
     const isSolved = solved(p, rec?.score);
+    const open = (await F.bounties(api, p, rs).catch(() => [])).filter(b => !b.winner);
+    const openCsd = open.reduce((n, b) => n + b.amount, 0);
     return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
       record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}),
-      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: Math.round(attention(p.weight, stalled, isSolved) * 100) / 100, results: rs.length };
+      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: Math.round(attention(p.weight + bountyBoost(openCsd), stalled, isSolved) * 100) / 100, results: rs.length,
+      ...(open.length ? { open_bounties: open.map(b => ({ csd: b.amount, for_beating: b.target })) } : {}) };
   }));
   rows.sort((a, b) => b.attention - a.attention);
   return text(rows.length ? rows : "No problems on the frontier yet.");
@@ -242,6 +245,7 @@ server.registerTool("frontier_problem", {
     verifier,
     record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: solution && solution.length > 30000 ? solution.slice(0, 30000) + "\n…(cut)" : solution } : null,
     recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
+    bounties: (await F.bounties(api, p, rs).catch(() => [])).map(b => ({ csd: b.amount, for_beating: b.target, note: b.note || undefined, pledged_by: b.by, won_by: b.winner ? { result: b.winner.id, score: b.winner.score } : null })),
     link: `${SITE}/#/frontier/${slug}`,
   });
 });
