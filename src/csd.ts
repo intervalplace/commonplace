@@ -129,8 +129,10 @@ const SPLIT_MIN = 30_000_000n; // 0.3 CSD: enough for an entry with room to spar
 export function buildAppTx(utxos: Utxo[], key: CsdKey, app: AppPayload, fee: bigint): Tx {
   const sorted = [...utxos].sort((a, b) => (b.value > a.value ? 1 : b.value < a.value ? -1 : 0));
   const picked: Utxo[] = []; let total = 0n;
-  for (const u of sorted) { if (total >= fee) break; picked.push(u); total += u.value; }
-  if (total < fee) throw new Error("NOT_ENOUGH_CSD");
+  // a transaction needs at least one output, so take coins until there is change to send back
+  // (a coin worth exactly the fee alone would leave none, and the node refuses that)
+  for (const u of sorted) { if (total >= fee + MIN_SEND) break; picked.push(u); total += u.value; }
+  if (total <= fee) throw new Error("NOT_ENOUGH_CSD");
   // Change comes back as up to four coins rather than one. The node only spends coins that are
   // already in a block, so with a single coin, writing twice before the next block would fail;
   // with a few, the next entries and resonances have a coin ready.

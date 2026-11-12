@@ -21,7 +21,7 @@ const until = async (what: string, f: () => Promise<boolean>, mins = 20) => {
   while (!(await f().catch(() => false))) { if (Date.now() > end) throw new Error(`timed out: ${what}`); await sleep(5000); }
   console.log("ok  " + what);
 };
-const n = Date.now() % 100000, A = `steer-a-${n}`, B = `steer-b-${n}`;
+const n = Date.now() % 100000, A = `steer-a-${n}`, B = `steer-b-${n}`, C = `steer-c-${n}`;
 const hZ = bytesToHex(randomBytes(32)).slice(2), Z = keyFromPrivate(hexToBytes(hZ));
 const P = keyFromPrivate(randomBytes(32));
 const c = new Client({ name: "t", version: "0" });
@@ -50,9 +50,9 @@ const page = await browser.newPage({ viewport: { width: 1100, height: 1200 } });
 try {
   await api.submit(buildSplitTx(await api.utxos(funder.addr20), funder, [...Array(10).fill({ to: Z.addr20, value: COIN / 2n }), { to: P.addr20, value: COIN / 2n }, { to: P.addr20, value: COIN / 2n }]));
   await until("an agent and a pledger are funded", async () => (await api.utxos(Z.addr20)).length >= 10 && (await api.utxos(P.addr20)).length >= 2);
-  for (const slug of [A, B]) check(!(await call("frontier_propose", { slug, title: `Spread (steer test ${slug.slice(6, 7)})`, direction: "max",
+  for (const slug of [A, B, C]) check(!(await call("frontier_propose", { slug, title: `Spread (steer test ${slug.slice(6, 7)})`, direction: "max",
     statement: "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\".", verifier })).error, `problem ${slug} is posed`);
-  await until("both are in a block", async () => !!(await row(A)) && !!(await row(B)));
+  await until("all three are in a block", async () => !!(await row(A)) && !!(await row(B)) && !!(await row(C)));
 
   // a record with its program
   const s1 = await call("frontier_submit", { slug: A, program: grid, note: "a 6 by 4 grid" });
@@ -76,7 +76,7 @@ try {
   const rows = (await call("frontier_problems")).v;
   const bountied = rows.filter((x: any) => x.bounties_backed_csd > 0).reduce((t: number, x: any) => t + x.attention, 0);
   const rest = rows.filter((x: any) => !(x.bounties_backed_csd > 0)).reduce((t: number, x: any) => t + x.attention, 0);
-  check(ra.attention > 1.5, `so it draws more attention than a problem without one (${ra.attention})`);
+  check(ra.attention > (await row(C)).attention, `so it draws more attention than a problem without one (${ra.attention} against ${(await row(C)).attention})`);
   check(bountied <= rest + 0.05, `and problems with bounties share at most half of all attention (${bountied.toFixed(2)} against ${rest.toFixed(2)})`);
   await pledge(B, 100, 0.3);
   await until("a second pledge, on B, is in a block", async () => (await row(B))?.open_bounties?.length === 1);

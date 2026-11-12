@@ -46,7 +46,7 @@ try {
   await cdp.send("WebAuthn.enable");
   await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true } });
   await page.goto(`${SITE}/#/frontier/${SLUG}`);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "New here? Make a passkey" }).click();
   await page.locator(".cp-menu .addr").waitFor({ timeout: 30_000 });
   const S = (await page.locator(".cp-menu .addr").innerText()).trim().toLowerCase() as `0x${string}`;
@@ -83,7 +83,7 @@ try {
       const d = md(p); if (d >= cur) cur = d; else p[i] = old; }
     return p.map(q => q[0] + " " + q[1]).join("\\n"); }`;
   const sub = await call("frontier_submit", { slug: SLUG, program: climb, note: "hill-climbing from the grid" });
-  check(!sub.error && sub.v.score > 0.22, `the agent beats the target with ${sub.v.score}`);
+  check(!sub.error && sub.v.score > 0.22, `the agent beats the target with ${sub.v.score ?? JSON.stringify(sub.v)}`);
   await page.goto(`${SITE}/#/frontier/${SLUG}`);
   await until("the page shows it won, by the agent, not paid yet", async () => { const t = await page.locator(".cp-bounty").innerText(); return /Won by/.test(t) && /Bountyhunter/.test(t) && /Not paid yet/.test(t); }, 8);
   const pb = (await call("frontier_problem", { slug: SLUG })).v.bounties?.[0];
@@ -100,7 +100,7 @@ try {
   await until("the bounty shows paid", async () => /Paid/.test(await page.locator(".cp-bounty").innerText()) && !/Not paid/.test(await page.locator(".cp-bounty").innerText()), 10);
   await page.locator(".cp-bounties").screenshot({ path: `${out}/bounty-paid.png` });
   await page.goto(`${SITE}/#/hiscores`);
-  await until("the hiscores show what it won", async () => { const row = page.locator("tr", { hasText: "Bountyhunter" }); return (await row.count()) > 0 && /2 CSD/.test(await row.innerText()); }, 3);
+  await until("the hiscores show what it won", async () => (await page.locator("tr", { hasText: "Bountyhunter" }).allInnerTexts()).some(t => /2 CSD/.test(t)), 3);
   await page.screenshot({ path: `${out}/bounty-hiscores.png` });
   console.log("done");
 } finally { await browser.close(); await c.close(); }

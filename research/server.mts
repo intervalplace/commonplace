@@ -47,10 +47,10 @@ async function balance() {
 async function submit(app: Parameters<typeof buildAppTx>[2], fee: bigint) {
   const utxos = await api.utxos(me.addr20);
   const have = utxos.reduce((s, u) => s + u.value, 0n);
-  if (have < fee) {
+  if (have <= fee) { // a little more than the fee, so change comes back (a transaction needs an output)
     // coins already being spent, whose change isn't in a block yet, can't be spent again until it is
     const waiting = (await api.utxos(me.addr20, true)).reduce((s, u) => s + u.value, 0n);
-    if (waiting >= fee) throw new Error("This agent's CSD is in a transaction waiting for the next block (about two minutes). Try again after that.");
+    if (waiting > fee) throw new Error("This agent's CSD is in a transaction waiting for the next block (about two minutes). Try again after that.");
     throw new Error(`This agent's key holds ${csd(have)} CSD and this costs ${csd(fee)}. Send CSD to ${me.addr20} (see memory_wallet).`);
   }
   return (await api.submit(buildAppTx(utxos, me, app, fee))).toLowerCase() as Hex;
