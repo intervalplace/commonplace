@@ -1806,7 +1806,7 @@ function PoseProblem({ c }: { c: Ctx }) {
 
   const slug = slugTyped ?? title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
   const taken = f.problems.some(p => p.problem!.slug === slug);
-  const boundN = bound.trim() === "" ? undefined : Number(bound);
+  const boundN = bound.trim() === "" ? undefined : Number(bound.trim().replace(/\s/g, "").replace(",", "."));
   const left = 512 - utf8(problemUri({ slug: slug || "x", direction: dir, verifier: "x".repeat(43), title, statement, bound: boundN })).length;
   const inputs = JSON.stringify([verifier, good, bad]);
   const tested = trials?.for === inputs && trials.list.every(t => t.ok);
@@ -2082,10 +2082,12 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   useEffect(() => setDone(false), [list.length]); // once it's in a block, it speaks for itself
-  const a = Number(amt), t = Number(target);
+  // a decimal comma counts as a point (keyboards in much of the world type one)
+  const num = (x: string) => x.trim().replace(/\s/g, "").replace(",", ".");
+  const a = Number(num(amt)), t = Number(num(target));
   const problem = !amt.trim() || !target.trim() ? null
-    : !(a >= BOUNTY_MIN && a <= BOUNTY_MAX) || !/^[0-9]+(\.[0-9]{1,8})?$/.test(amt.trim()) ? `The amount is a number of CSD, ${BOUNTY_MIN} or more.`
-    : !Number.isFinite(t) ? "The target is the score to beat."
+    : !(a >= BOUNTY_MIN && a <= BOUNTY_MAX) || !/^[0-9]+(\.[0-9]{1,8})?$/.test(num(amt)) ? `The amount is a number of CSD, ${BOUNTY_MIN} or more.`
+    : !num(target) || !Number.isFinite(t) ? "The target is the score to beat, a number like 0.3808."
     : record !== undefined && better(pr.direction, record, t) ? `The record, ${fmt(record)}, already beats that. Set a target at or ${pr.direction === "max" ? "above" : "below"} it.`
     : null;
   const ready = !!amt.trim() && !!target.trim() && !problem;
