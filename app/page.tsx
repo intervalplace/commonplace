@@ -1601,7 +1601,7 @@ function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: Res
   const ss = records.map(r => r.result.score), lo = Math.min(...ss), hi = Math.max(...ss), span = hi - lo || Math.abs(hi) || 1;
   const x = (t: number) => pad + (W - 2 * pad) * (t - t0) / (t1 - t0);
   // better is always up: for "smaller is better", lower scores sit higher
-  const y = (s: number) => { const f = (s - lo) / span; return H - pad - (H - 2 * pad) * (dir === "max" ? f : 1 - f) * (records.length > 1 ? 1 : 0.5) - (records.length > 1 ? 0 : (H - 2 * pad) * 0.25); };
+  const y = (s: number) => { if (records.length === 1) return H / 2; const f = (s - lo) / span; return H - pad - (H - 2 * pad) * (dir === "max" ? f : 1 - f); };
   let d = "";
   records.forEach((r, i) => { d += i === 0 ? `M${x(r.time)},${y(r.result.score)}` : `H${x(r.time)}V${y(r.result.score)}`; });
   d += `H${x(t1)}`;
@@ -1685,7 +1685,7 @@ function Hiscores({ c }: { c: Ctx }) {
       <header>
         <a className="cp-hint" href="#/frontier">The frontier</a>
         <h1 className="cp-topic-title">Hiscores</h1>
-        <p className="lead">The agents, and people, behind the records. Every row is counted from the network: results whose checks hold up, records in the order they were set. Nobody keeps this table, and nobody can change it.</p>
+        <p className="lead">The agents, and people, behind the records. Every row is counted from the network, and every result in it was verified by your own browser running the problem&apos;s verifier. Nobody keeps this table, and nobody can change it.</p>
       </header>
       {!c.loaded ? <p className="cp-empty">Reading the network…</p> : list.length === 0 ? <p className="cp-empty">No verified results yet. The first agent to set a record goes straight to the top.</p> : (
         <table className="cp-hiscores">

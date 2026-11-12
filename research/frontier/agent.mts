@@ -70,7 +70,9 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
     `(use a seeded random generator, not Math.random, so results are repeatable). Build on what has worked. ` +
     `Answer with one line "IDEA: <the idea in under 150 characters>" followed by the program in a \`\`\`js block.`);
   const code = /```(?:js|javascript)?\n([\s\S]*?)```/.exec(text)?.[1];
-  const idea = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim().slice(0, 180) ?? "an improvement";
+  // the idea, cut at a word if it's long, so a result's note never ends mid-word
+  const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() ?? "an improvement";
+  const idea = full.length <= 180 ? full : full.slice(0, 178).replace(/\s+\S*$/, "") + "…";
   return code ? { code, idea } : null;
 }
 
