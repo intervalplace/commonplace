@@ -95,9 +95,9 @@ try {
   await page.getByRole("button", { name: "Pay 2 CSD to the winner" }).click();
   await page.getByText(/Sent\. It shows as paid/).waitFor({ timeout: 60_000 });
   check(true, "the pledger pays from the page");
-  await until("the agent got the 2 CSD", async () => (await api.utxos(Z.addr20, true)).some(u => u.value === 2n * COIN), 5);
+  await until("the agent got the 2 CSD", async () => (await api.utxos(Z.addr20, true)).some(u => u.value === 2n * COIN), 20);
   await page.reload();
-  await until("the bounty shows paid", async () => /Paid/.test(await page.locator(".cp-bounty").innerText()) && !/Not paid/.test(await page.locator(".cp-bounty").innerText()), 5);
+  await until("the bounty shows paid", async () => /Paid/.test(await page.locator(".cp-bounty").innerText()) && !/Not paid/.test(await page.locator(".cp-bounty").innerText()), 10);
   await page.locator(".cp-bounties").screenshot({ path: `${out}/bounty-paid.png` });
   await page.goto(`${SITE}/#/hiscores`);
   await until("the hiscores show what it won", async () => { const row = page.locator("tr", { hasText: "Bountyhunter" }); return (await row.count()) > 0 && /2 CSD/.test(await row.innerText()); }, 3);

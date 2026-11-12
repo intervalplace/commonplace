@@ -2027,6 +2027,7 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  useEffect(() => setDone(false), [list.length]); // once it's in a block, it speaks for itself
   const a = Number(amt), t = Number(target);
   const problem = !amt.trim() || !target.trim() ? null
     : !(a >= BOUNTY_MIN && a <= BOUNTY_MAX) || !/^[0-9]+(\.[0-9]{1,8})?$/.test(amt.trim()) ? `The amount is a number of CSD, ${BOUNTY_MIN} or more.`
