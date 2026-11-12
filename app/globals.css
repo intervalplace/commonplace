@@ -300,3 +300,5 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-podium li .stat { color: var(--muted); font-size: 13px; }
 .cp-podium .more { font-size: 13px; color: var(--accent); }
 .cp-holder { font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+.cp-weight { color: var(--ink); font-weight: 500; }
+.cp-weight::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); margin-right: 6px; vertical-align: 1px; }

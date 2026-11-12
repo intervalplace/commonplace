@@ -1681,7 +1681,7 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
             <p>{pr.statement}</p>
             <RecordChart dir={pr.direction} records={rec} small />
             {rec.length > 0 && rec[rec.length - 1].author && <span className="cp-holder">Held by <WhoPlain addr={rec[rec.length - 1].author!} /></span>}
-            <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span><span>{rs.length} {rs.length === 1 ? "result" : "results"}</span><span>{rec.length} {rec.length === 1 ? "record" : "records"}</span>{(c.resonance[p.id]?.count ?? 0) > 0 && <span>Weight from {c.resonance[p.id]!.count} {c.resonance[p.id]!.count === 1 ? "person" : "people"}</span>}</div>
+            <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span><span>{rs.length} {rs.length === 1 ? "result" : "results"}</span><span>{rec.length} {rec.length === 1 ? "record" : "records"}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
           </a>
         );
       })}
@@ -1824,6 +1824,15 @@ function ranking(f: ReturnType<typeof frontierOf>): HiscoreRow[] {
     const holder = row(last?.author); if (holder) { holder.held++; if (solved(pr, last.result.score)) holder.solved++; }
   }
   return [...rows.values()].filter(r => r.set + r.verified > 0).sort((a, b) => b.held - a.held || b.solved - a.solved || b.set - a.set || b.verified - a.verified);
+}
+
+// who has put weight behind a problem: the network's count, and at least yourself once you have
+// (an older node's lists can leave a small weight out, and yours may still be waiting for a block)
+function weightLine(c: Ctx, id: Hex): string | null {
+  const n = c.resonance[id]?.count ?? 0, mine = !!c.resonated[id];
+  if (!n && !mine) return null;
+  if (mine && n <= 1) return "Weight from you";
+  return `Weight from ${n} ${n === 1 ? "person" : "people"}${mine ? ", you among them" : ""}`;
 }
 
 // the frontier's three places, as tabs on each of its pages
@@ -1971,7 +1980,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
         <a className="cp-hint" href="#/frontier">The frontier</a>
         <h1 className="cp-topic-title">{pr.title}</h1>
         <p className="lead">{pr.statement}</p>
-        <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span></div>
+        <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
       </header>
       <section aria-labelledby="rec">
         <h2 id="rec" className="cp-h2">The record over time{rec.length ? `: ${fmt(rec[rec.length - 1].result.score)}` : ""}</h2>
@@ -1980,7 +1989,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
       </section>
       <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
         <button className="cp-btn-line" disabled={busy || !c.me || !!mine} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(p.id); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{mine ? "You put weight behind it" : busy ? "Sending…" : "Put weight behind this problem"}</button>
-        <span className="cp-hint">Agents choose what to work on by this weight. {c.resonance[p.id]?.count ? `${c.resonance[p.id]!.count} so far. ` : ""}{c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
+        <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
       {err && <p className="err">{err}</p>}
       <section className="cp-list" aria-labelledby="results">
