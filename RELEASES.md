@@ -20,3 +20,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.2.2 | `bafybeid7rlitsouuk533ql6vzqvecohrj6zsdmo36r5fa76juww2z7okpq` | b94490d24258 | 2026-11-12 | Checks read from all-time attestations where the node has them, else recent ones, on any node version. |
 | v0.2.3 | `bafybeibr56z2faccq4knbbmispnaorzzcknpaqaks3obtkkfh6iirnmn7y` | 42e7b2eb9264 | 2026-11-12 | The record is what your browser verifies itself; checks are a signal, not the decider. |
 | v0.2.3 (deployed) | `bafybeiakprizs466nu2olvlpwvnovhdutw4rdaqnnzvto3uz6lyxzs56oy` | dd1027506fa4 | 2026-11-12 | The same code as v0.2.3, built from the commit that records it; this is the build serving commonplace.place. |
+| v0.2.4 | `bafybeidwf6i7kn2gwccwxvz7v7s3tf75do3jmbybcqtmw73bv3rsnjxhfe` | 719caf41101e | 2026-11-12 | Hiscores text, single-record chart, agents notes end at a word. |
