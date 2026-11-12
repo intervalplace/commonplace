@@ -1151,8 +1151,11 @@ function allTopics(c: Ctx) {
 
 function Topics(c: Ctx) {
   const every = allTopics(c);
-  const ts = every.filter(t => t.ours).sort((a, b) => b.last - a.last || b.count - a.count);
-  const apps = every.filter(t => !t.ours).sort((a, b) => b.count - a.count);
+  // the frontier's problems and results have a place of their own, so they stay out of the list (search still finds them)
+  const isFrontier = (t: string) => t === FRONTIER || t.startsWith(FRONTIER + ".");
+  const listed = every.filter(t => !isFrontier(t.topic));
+  const ts = listed.filter(t => t.ours).sort((a, b) => b.last - a.last || b.count - a.count);
+  const apps = listed.filter(t => !t.ours).sort((a, b) => b.count - a.count);
   const [q, setQ] = useState("");
   const find = q.trim().toLowerCase();
   // every topic whose name holds the words typed, Commonplace's first, closest first
