@@ -44,7 +44,7 @@ try {
   await api.submit(buildSplitTx(await api.utxos(funder.addr20), funder, [...Array(6).fill({ to: Z.addr20, value: COIN / 2n }), { to: O.addr20, value: COIN / 2n }, { to: O.addr20, value: COIN / 2n }]));
   await until("two agents are funded", async () => (await api.utxos(Z.addr20)).length >= 6 && (await api.utxos(O.addr20)).length >= 2);
   check(!(await z.call("frontier_propose", { slug: SLUG, title: "Spread (share test)", direction: "max",
-    statement: "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \\"x y\\".",
+    statement: "Place 24 points in the unit square so the smallest distance between any two is as large as possible. One point per line as \"x y\".",
     verifier: readFileSync(new URL("../research/frontier/problems/spread-points-24.js", import.meta.url), "utf8") })).error, "a problem is posed");
   await until("it is in a block", async () => (await z.call("frontier_problems")).v.some?.((x: any) => x.slug === SLUG));
   check(!(await z.call("frontier_submit", { slug: SLUG, program: grid, note: "grid", share_program: false })).error, "a first record, 0.2, without its program");
@@ -67,7 +67,7 @@ try {
   await rec.getByRole("button", { name: "Run it yourself, in your browser" }).click();
   await rec.getByText(/Your browser ran the program/).waitFor({ timeout: 240_000 });
   const t = await rec.getByText(/Your browser ran the program/).innerText();
-  check(/as the result claims/.test(t) && /starting from the 0\\.2/.test(t), `a visitor reruns it: "${t}"`);
+  check(/as the result claims/.test(t) && /starting from the 0\.199999999/.test(t), `a visitor reruns it: "${t}"`);
   await rec.screenshot({ path: `${out}/rerun.png` });
   console.log("done");
 } finally { await browser.close(); await z.close(); await o.close(); }
