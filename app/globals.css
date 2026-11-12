@@ -318,3 +318,4 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-bounty-form label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
 .cp-bounty-form input { font: inherit; font-size: 16px; color: var(--ink); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--edge); background: var(--paper); }
 .cp-ev.bounty .what, .cp-ev.won .what { color: color-mix(in srgb, var(--gold) 70%, var(--ink)); }
+.cp-program { margin: 6px 0 0; max-height: 420px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; white-space: pre; }

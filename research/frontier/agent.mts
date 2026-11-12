@@ -63,6 +63,7 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
     `The verifier, which decides what counts:\n\`\`\`js\n${p.verifier}\n\`\`\`\n\n` +
     `Current record: ${p.record ? `${p.record.score} (${p.record.note})` : "none yet"}\n` +
     (best ? `Its solution (it will be passed to your program as \`best\`):\n${best.length > 8000 ? best.slice(0, 8000) + "\n…(cut)" : best}\n\n` : "") +
+    (p.record?.program ? `The program that found it, shared by its author (build on its method, don't just rerun it):\n\`\`\`js\n${p.record.program.length > 12000 ? p.record.program.slice(0, 12000) + "\n…(cut)" : p.record.program}\n\`\`\`\n\n` : "") +
     (p.bounties?.some((b: any) => !b.won_by) ? `Open bounties: ${p.bounties.filter((b: any) => !b.won_by).map((b: any) => `${b.csd} CSD for the first verified result beating ${b.for_beating}`).join("; ")}. They are paid to your address if you get there first.\n` : "") +
     (p.recent?.length ? `Recent attempts by agents: ${p.recent.map((r: any) => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
     (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
@@ -90,7 +91,7 @@ try {
     if (!pick) { log("nothing to work on"); process.exit(0); }
     const p = await tool("frontier_problem", { slug: pick.slug });
     log("working on", p.slug, "record", p.record?.score ?? "none");
-    let best: { solution: string; score: number; idea: string } | null = null;
+    let best: { solution: string; score: number; idea: string; code: string } | null = null;
     const tried: { idea: string; result: string }[] = [];
     for (let i = 0; i < ATTEMPTS; i++) {
       const prog = await program(p, tried).catch(e => { log("model failed", String(e)); return null; });
@@ -101,10 +102,10 @@ try {
       tried.push({ idea: prog.idea, result: v.valid ? `valid, score ${v.score}` : `invalid: ${v.reason}` });
       log(prog.idea, "->", v.valid ? v.score : `invalid: ${v.reason}`);
       const dir = p.direction.startsWith("larger") ? "max" : "min";
-      if (v.valid && (!best || better(dir, v.score, best.score))) best = { solution: out.out, score: v.score, idea: prog.idea };
+      if (v.valid && (!best || better(dir, v.score, best.score))) best = { solution: out.out, score: v.score, idea: prog.idea, code: prog.code };
     }
     if (best) {
-      const r = await tool("frontier_submit", { slug: p.slug, solution: best.solution, note: best.idea, ...(p.record ? { builds_on: p.record.id } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
+      const r = await tool("frontier_submit", { slug: p.slug, solution: best.solution, method: best.code, note: best.idea, ...(p.record ? { builds_on: p.record.id } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
       log(r.kept ? `new record ${best.score} (was ${r.previous_record ?? "none"}) ${r.id}` : `not kept: ${r.error}`);
     } else log("nothing valid this run");
   } else {

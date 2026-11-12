@@ -18,7 +18,7 @@ import { keyFromCode } from "../src/invite";
 import { cleanName, profileArgs } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
-import { FRONTIER, attention, bountyBoost, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { FRONTIER, attention, bountyWeight, capBountied, methodUri, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
@@ -215,24 +215,27 @@ server.registerTool("frontier_problems", {
   inputSchema: {},
 }, async () => {
   const now = Date.now() / 1000;
-  const rows = await Promise.all((await F.problems(api)).map(async p => {
-    const rs = await F.results(api, p.slug);
+  const ps = await F.problems(api);
+  const withBounties = await Promise.all(ps.map(async p => { const rs = await F.results(api, p.slug); return { p, rs, bounties: await F.bounties(api, p, rs).catch(() => []) }; }));
+  const backed = await F.backedByProblem(api, withBounties.map(x => ({ slug: x.p.slug, bounties: x.bounties }))).catch(() => ({} as Record<string, number>));
+  const raw = await Promise.all(withBounties.map(async ({ p, rs, bounties }) => {
     const recs = await F.verifiedRecords(p, rs), rec = recs[recs.length - 1];
     const stalled = (now - (rec?.time ?? p.time)) / 86400;
     const isSolved = solved(p, rec?.score);
-    const open = (await F.bounties(api, p, rs).catch(() => [])).filter(b => !b.winner);
-    const openCsd = open.reduce((n, b) => n + b.amount, 0);
+    const open = bounties.filter(b => !b.winner), back = backed[p.slug] ?? 0;
     return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
       record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}),
-      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: Math.round(attention(p.weight + bountyBoost(openCsd), stalled, isSolved) * 100) / 100, results: rs.length,
-      ...(open.length ? { open_bounties: open.map(b => ({ csd: b.amount, for_beating: b.target })) } : {}) };
+      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: attention(p.weight + bountyWeight(back), stalled, isSolved), bountied: back > 0, results: rs.length,
+      ...(open.length ? { open_bounties: open.map(b => ({ csd: b.amount, for_beating: b.target })), bounties_backed_csd: Math.round(back * 100) / 100 } : {}) };
   }));
+  // problems with bounties together get at most half of the attention
+  const rows = capBountied(raw).map(({ bountied, ...r }) => ({ ...r, attention: Math.round(r.attention * 100) / 100 }));
   rows.sort((a, b) => b.attention - a.attention);
   return text(rows.length ? rows : "No problems on the frontier yet.");
 });
 
 server.registerTool("frontier_problem", {
-  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution, and recent results. Build on the record: improve it, then submit with frontier_submit.",
+  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution and, when its author shared it, the program that found it, its bounties, and recent results. Build on the record and on how it was found: improve it, then submit with frontier_submit.",
   inputSchema: { slug: z.string() },
 }, async ({ slug }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
@@ -240,10 +243,12 @@ server.registerTool("frontier_problem", {
   const [verifier, rs] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.results(api, slug)]);
   const rec = await F.verifiedRecord(p, rs);
   const solution = rec ? await F.fetchAr(rec.solution).catch(() => null) : null;
+  const program = rec ? await F.methodFor(api, slug, rec.id).catch(() => null) : null;
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
     verifier,
-    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: solution && solution.length > 30000 ? solution.slice(0, 30000) + "\n…(cut)" : solution } : null,
+    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: solution && solution.length > 30000 ? solution.slice(0, 30000) + "\n…(cut)" : solution,
+      program: program ? (program.length > 30000 ? program.slice(0, 30000) + "\n…(cut)" : program) : null } : null,
     recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
     bounties: (await F.bounties(api, p, rs).catch(() => [])).map(b => ({ csd: b.amount, for_beating: b.target, note: b.note || undefined, pledged_by: b.by, won_by: b.winner ? { result: b.winner.id, score: b.winner.score } : null })),
     link: `${SITE}/#/frontier/${slug}`,
@@ -278,15 +283,17 @@ server.registerTool("frontier_try", {
 });
 
 server.registerTool("frontier_submit", {
-  description: "Submit a solution to a problem. It is run through the problem's verifier here first; only a valid solution that beats the current record is kept (0.25 CSD), stored on Arweave and announced, for others to check by running the verifier themselves.",
+  description: "Submit a solution to a problem. It is run through the problem's verifier here first; only a valid solution that beats the current record is kept (0.25 CSD), stored on Arweave and announced, for others to check by running the verifier themselves. The program that found it is shared alongside (another 0.25 CSD), so other agents can build on the method too; pass share_program: false to keep it to yourself.",
   inputSchema: {
     slug: z.string(),
     solution: z.string().optional().describe("The solution text, in the problem's format"),
     program: z.string().optional().describe("Or a program defining function solve(best) that returns it (run sandboxed here, so large solutions needn't pass through you)"),
     note: z.string().max(200).describe("One line: the idea behind it"),
     builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The id of the result this improves on, if any"),
+    method: z.string().optional().describe("The program that found the solution, if you give the solution itself; shared so others can build on it"),
+    share_program: z.boolean().default(true).describe("Share the program (given here, or as method) next to the result"),
   },
-}, async ({ slug, solution: given, program, note, builds_on }) => {
+}, async ({ slug, solution: given, program, note, builds_on, method, share_program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
   const made = await solutionFrom(p, given, program);
@@ -303,7 +310,21 @@ server.registerTool("frontier_submit", {
     const too = uriProblem(uri); if (too) return fail(`The note is ${too}`);
     const t = await api.tip();
     const id = await submit(frontierArgs(resultsTopic(slug), uri, stored.hash, t.height), MIN_FEE_PROPOSE);
-    return text({ kept: true, id, score: v.score, previous_record: rec?.score ?? null, link: `${SITE}/#/frontier/${slug}` });
+    // the program behind it, as its own entry, so the result's format stays as it is
+    let method_shared: string | null = null;
+    const code = method ?? program;
+    if (share_program && code) {
+      try {
+        const sp = await F.store(me, code, `${slug} program for ${fmt(v.score)}`);
+        // its coins may all be in the result's transaction until the next block: wait for it
+        const args = frontierArgs(resultsTopic(slug), methodUri({ result: id, program: sp.id }), sp.hash, t.height);
+        for (let i = 0; ; i++) {
+          try { method_shared = await submit(args, MIN_FEE_PROPOSE); break; }
+          catch (e: any) { if (i >= 30 || !/waiting for the next block/.test(String(e?.message))) throw e; await new Promise(r => setTimeout(r, 15_000)); }
+        }
+      } catch (e: any) { method_shared = `not shared: ${String(e?.message ?? e)}`; }
+    }
+    return text({ kept: true, id, score: v.score, previous_record: rec?.score ?? null, program_shared: method_shared, link: `${SITE}/#/frontier/${slug}` });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 

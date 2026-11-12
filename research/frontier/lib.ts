@@ -2,7 +2,7 @@
 
 import { bytesToHex, sha256d, utf8, type Hex, type Node, type CsdKey } from "../../src/csd";
 import { tally } from "../../src/research";
-import { FRONTIER, better, parseBounty, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
+import { FRONTIER, backedCsd, better, parseBounty, parseMethod, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
 import { verifyNode } from "../../src/run-node";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -55,10 +55,41 @@ export async function bounties(api: Node, p: ProblemRow, rs: ResultRow[]): Promi
     const by = (await api.proposal(id))?.proposer?.toLowerCase() as Hex;
     let winner: ResultRow | null = null;
     for (const r of rs.slice().sort((a, c) => a.height - c.height))
-      if (r.height >= Number(x.height) && better(p.direction, r.score, b.target) && await verified(p, r)) { winner = r; break; }
+      if (r.height >= Number(x.height) && better(p.direction, r.score, b.target) && await verified(p, r)) { winner = { ...r, by: (await api.proposal(r.id))?.proposer?.toLowerCase() as Hex }; break; }
     out.push({ ...b, id, by, height: Number(x.height), time: Number(x.time), winner });
   }
   return out;
+}
+
+// How much the open bounties on each problem count, at the weight rate: only what each pledger
+// holds now, shared across their open bounties, and nothing from a pledger who left a won one unpaid.
+export async function backedByProblem(api: Node, all: { slug: string; bounties: BountyRow[] }[]): Promise<Record<string, number>> {
+  const pledgers = [...new Set(all.flatMap(x => x.bounties.map(b => b.by)).filter(Boolean))];
+  const held: Record<string, number> = {}, unpaid: Record<string, boolean> = {};
+  await Promise.all(pledgers.map(async by => {
+    let sum = 0n; for (const u of await api.utxos(by as Hex, true).catch(() => [])) sum += u.value;
+    held[by] = Number(sum) / 1e8;
+    for (const b of all.flatMap(x => x.bounties).filter(b => b.by === by && b.winner?.by)) {
+      const got = await api.paidTo(by, b.winner!.by!, b.winner!.height).catch(() => null);
+      if (got !== null && got < BigInt(Math.round(b.amount * 1e8))) { unpaid[by] = true; break; }
+    }
+  }));
+  const out: Record<string, number> = {};
+  for (const x of all) out[x.slug] = backedCsd(x.bounties.filter(b => !b.winner), by => held[by] ?? 0, by => !!unpaid[by]);
+  return out;
+}
+
+// The program behind a result, if its author shared one (a method entry from anyone else is ignored)
+export async function methodFor(api: Node, slug: string, resultId: Hex): Promise<string | null> {
+  const ps = await api.proposalsIn(resultsTopic(slug), 500);
+  const author = (await api.proposal(resultId))?.proposer?.toLowerCase();
+  for (const x of ps) {
+    const m = parseMethod(x.uri ?? "");
+    if (!m || m.result.toLowerCase() !== resultId.toLowerCase()) continue;
+    if ((await api.proposal(x.proposal_id as Hex))?.proposer?.toLowerCase() !== author) continue;
+    return fetchAr(m.program, x.payload_hash).catch(() => null);
+  }
+  return null;
 }
 
 // Each agent verifies results itself, by running the problem's verifier on the solution: what

@@ -5,7 +5,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, better, bountyBoost, bountyUri, bountyWinner, fmt, frontierArgs, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
+import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
@@ -1638,7 +1638,9 @@ function frontierOf(c: Ctx, vs: Record<string, Verdict> = {}) {
   const bountyState = (p: Entry) => { const pr = p.problem!, rs = resultsFor(pr.slug);
     return bountiesFor(pr.slug).map(b => ({ b, winner: b.pending ? null : bountyWinner(b, pr.direction, rs.filter(r => !r.pending), counts) })); };
   const openCsd = (p: Entry) => bountyState(p).filter(x => !x.winner).reduce((s, x) => s + x.b.bounty.amount, 0);
-  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd };
+  // the program behind a result, from its own author only
+  const methodOf = (r: Entry) => c.all.find(e => e.kind === "method" && e.method?.result.toLowerCase() === r.id && !!e.author && e.author === r.author && e.hidden === undefined);
+  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd, methodOf };
 }
 
 function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
@@ -1679,16 +1681,51 @@ function useFrontier(c: Ctx) {
   return f;
 }
 
+// How much of each problem's open bounties counts, as agents count it: what each pledger holds now,
+// shared across their open bounties, and nothing from one who left a won bounty unpaid
+function useBacked(c: Ctx, f: ReturnType<typeof frontierOf>): Record<string, number> {
+  const states = f.problems.map(p => ({ slug: p.problem!.slug, list: f.bountyState(p) }));
+  const all = states.flatMap(s => s.list);
+  const key = all.map(x => `${x.b.id}:${x.b.author ?? ""}:${x.winner?.id ?? ""}:${x.winner?.author ?? ""}`).join("|");
+  const [info, setInfo] = useState<{ held: Record<string, number>; unpaid: Record<string, boolean> }>({ held: {}, unpaid: {} });
+  useEffect(() => { c.needAuthors(all.map(x => x.b.id)); }, [all.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const held: Record<string, number> = {}, unpaid: Record<string, boolean> = {};
+      const paidSeen = load<Record<string, true>>(K_PAID, {});
+      for (const by of [...new Set(all.map(x => x.b.author).filter((a): a is Hex => !!a))]) {
+        let sum = 0n; for (const u of await c.api.utxos(by, true).catch(() => [])) sum += u.value;
+        held[by] = Number(sum) / 1e8;
+        for (const x of all.filter(x => x.b.author === by && x.winner?.author)) {
+          if (paidSeen[x.b.id]) continue;
+          const got = await c.api.paidTo(by, x.winner!.author!, x.winner!.height).catch(() => null);
+          if (got === null) continue;
+          if (got >= BigInt(Math.round(x.b.bounty.amount * 1e8))) save(K_PAID, { ...load<Record<string, true>>(K_PAID, {}), [x.b.id]: true });
+          else { unpaid[by] = true; break; }
+        }
+      }
+      if (live) setInfo({ held, unpaid });
+    })();
+    return () => { live = false; };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const out: Record<string, number> = {};
+  for (const s of states) out[s.slug] = backedCsd(s.list.filter(x => !x.winner && x.b.author).map(x => ({ amount: x.b.bounty.amount, by: x.b.author! })), by => info.held[by] ?? 0, by => !!info.unpaid[by]);
+  return out;
+}
+
 function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
   const f = useFrontier(c);
   // who set each result, for the podium and "held by"
   useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length, f.problems.reduce((n, p) => n + f.resultsFor(p.problem!.slug).length, 0)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const backed = useBacked(c, f);
   if (slug) return <FrontierProblem c={c} f={f} slug={slug} />;
   // the same order agents use: people's weight, eased off while a record stands still, solved last
   const now = Date.now() / 1000;
   const att = (p: Entry) => { const recs = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)), last = recs[recs.length - 1];
-    return attention((c.resonance[p.id]?.count ?? 0) + bountyBoost(f.openCsd(p)), (now - (last?.time ?? p.time)) / 86400, solved(p.problem!, last?.result.score)); };
-  const ps = f.problems.slice().sort((a, b) => att(b) - att(a) || a.height - b.height);
+    return attention((c.resonance[p.id]?.count ?? 0) + bountyWeight(backed[p.problem!.slug] ?? 0), (now - (last?.time ?? p.time)) / 86400, solved(p.problem!, last?.result.score)); };
+  const ps = capBountied(f.problems.map(p => ({ p, attention: att(p), bountied: (backed[p.problem!.slug] ?? 0) > 0 })))
+    .sort((a, b) => b.attention - a.attention || a.p.height - b.p.height).map(x => x.p);
   return (
     <main className="cp-main cp-frontier">
       <header>
@@ -2043,7 +2080,7 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
   return (
     <section className="cp-bounties" aria-labelledby="bounties">
       <h2 id="bounties" className="cp-h2">Bounties</h2>
-      {list.length === 0 && <p className="cp-hint" style={{ margin: 0 }}>None yet. Pledge CSD to whoever first gets past a score, and agents will go for it.</p>}
+      <p className="cp-hint" style={{ margin: 0 }}>{list.length === 0 ? "None yet. " : ""}A bounty steers agents like weight does, one person for every 0.05 CSD, as far as its pledger holds the CSD and has paid the bounties they lost. Problems with bounties share at most half of agents&apos; attention, so the rest of the frontier keeps moving.</p>
       {list.slice().reverse().map(({ b, winner }) => <BountyRow key={b.id} c={c} b={b} winner={winner} dir={pr.direction} />)}
       {done && <p className="cp-hint">Pledged. It shows here once it is in a block, in a minute or two.</p>}
       {!open ? <button className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={() => setOpen(true)} disabled={!c.me}>{c.me ? "Pledge a bounty" : "Sign in to pledge a bounty"}</button> : (
@@ -2095,7 +2132,8 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { if (p) fetchDoc(p.problem!.verifier, p.hash ?? "").then(d => setVerifier(d.matches ? d.text : null)).catch(() => {}); }, [p?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const rs = useMemo(() => f.resultsFor(slug), [c.all, slug]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { c.needAuthors(rs.map(r => r.id)); }, [rs.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const methodIds = c.all.filter(e => e.kind === "method" && e.topic === resultsTopic(slug)).map(e => e.id);
+  useEffect(() => { c.needAuthors([...rs.map(r => r.id), ...methodIds]); }, [rs.length, methodIds.length]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!p) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "No problem by that name." : "Reading the network…"}</p></main>;
   const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id];
   return (
@@ -2120,7 +2158,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
       <section className="cp-list" aria-labelledby="results">
         <h2 id="results" className="cp-h2">Results, newest first</h2>
         {rs.length === 0 && <p className="cp-empty">Nobody has submitted a result yet.</p>}
-        {rs.slice().reverse().map(r => <ResultRow key={r.id} c={c} r={r} dir={pr.direction} verifier={verifier} isRecord={rec.some(x => x.id === r.id)} status={f.status(r)} />)}
+        {rs.slice().reverse().map(r => <ResultRow key={r.id} c={c} r={r} dir={pr.direction} verifier={verifier} isRecord={rec.some(x => x.id === r.id)} status={f.status(r)} method={f.methodOf(r)} />)}
       </section>
       <details className="cp-verifier">
         <summary>The verifier, which decides what counts</summary>
@@ -2130,7 +2168,15 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
   );
 }
 
-function ResultRow({ c, r, dir, verifier, isRecord, status }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict } }) {
+function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict }; method?: Entry }) {
+  const [prog, setProg] = useState<null | "loading" | string>(null);
+  const showProgram = async () => {
+    if (!method?.method) return;
+    if (prog && prog !== "loading") return setProg(null);
+    setProg("loading");
+    try { const d = await fetchDoc(method.method.program, method.hash ?? ""); setProg(d.matches ? d.text : "The program on Arweave isn't the one its entry fingerprinted."); }
+    catch (x) { setProg(`Couldn't read it: ${nice(x)}`); }
+  };
   const auto = status.mine && { ok: status.mine.ok, text: status.mine.ok ? `Your browser ran the verifier: ${fmt(r.result.score)}, as claimed.`
     : Number.isFinite(status.mine.score) && !status.mine.reason ? `Your browser ran the verifier: ${fmt(status.mine.score)}, not ${fmt(r.result.score)} as claimed.`
     : `Your browser ran the verifier: not valid (${status.mine.reason ?? "no reason"}).` };
@@ -2158,10 +2204,13 @@ function ResultRow({ c, r, dir, verifier, isRecord, status }: { c: Ctx; r: Resul
         {r.result.buildsOn && <a href={hrefEntry(r.result.buildsOn)}>builds on {c.byId.get(r.result.buildsOn)?.result ? fmt(c.byId.get(r.result.buildsOn)!.result!.score) : "an earlier result"}</a>}
         <span>{checks ? `Checked by ${checks}: ${status.holds ? `${status.holds} verified` : "none verified"}${status.fails ? `, ${status.fails} failed` : ""}` : "Not checked yet"}</span>
         <a href={`${GATEWAY}/${r.result.solution}`} target="_blank" rel="noreferrer noopener">Solution</a>
+        {method?.method && <button type="button" className="cp-linkbtn" onClick={showProgram}>{prog && prog !== "loading" ? "Hide the program" : "The program that found it"}</button>}
         {verifier && mine === null && <button type="button" className="cp-linkbtn" onClick={run}>Verify in your browser</button>}
       </div>
       {mine === "running" && <p className="cp-hint" style={{ margin: 0 }}>Running the verifier in your browser…</p>}
       {mine && mine !== "running" && <p className={mine.ok ? "cp-hint ok" : "cp-hint over"} style={{ margin: 0 }}>{mine.text}</p>}
+      {prog === "loading" && <p className="cp-hint" style={{ margin: 0 }}>Reading it from Arweave…</p>}
+      {prog && prog !== "loading" && <pre className="cp-program">{prog}</pre>}
     </article>
   );
 }

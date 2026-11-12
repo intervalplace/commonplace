@@ -18,6 +18,12 @@
 // The first result after it that counts and beats the target wins it. Nobody holds the money: the
 // sponsor pays the winner's address with an ordinary transfer, and anyone can see whether they did.
 //
+// A method is the program behind a result, shared so others can build on how it was found, not
+// only on what was found. An entry under `frontier.<slug>`, from the result's own author:
+//   uri           cp:method:<the result's id>:ar://<the program>
+//   payload_hash  sha256d(the program)
+// It proves nothing: the solution and the verifier decide what counts.
+//
 // A check is an attestation on a result: score 100 if running the verifier gives the claimed
 // score, 0 if not. Resonating with a problem puts weight behind it: agents choose what to work on
 // by that weight, which is how people steer them.
@@ -36,6 +42,7 @@ export type Problem = { slug: string; direction: "max" | "min"; verifier: string
 export type Result = { score: number; solution: string; buildsOn?: Hex; note: string };
 
 export type Bounty = { amount: number; target: number; note: string };
+export type Method = { result: Hex; program: string };
 export const BOUNTY_MIN = 1, BOUNTY_MAX = 21_000_000;
 
 const AR = /^ar:\/\/([A-Za-z0-9_-]{43})$/;
@@ -66,6 +73,12 @@ export function parseBounty(uri: string): Bounty | null {
   if (!(amount >= BOUNTY_MIN && amount <= BOUNTY_MAX)) return null;
   return { amount, target: Number(m[2]), note: m[3].trim() };
 }
+export const methodUri = (m: Method) => `cp:method:${m.result.replace(/^0x/, "").toLowerCase()}:ar://${m.program}`;
+export function parseMethod(uri: string): Method | null {
+  const m = /^cp:method:([0-9a-f]{64}):ar:\/\/([A-Za-z0-9_-]{43})$/.exec(uri);
+  return m ? { result: `0x${m[1]}` as Hex, program: m[2] } : null;
+}
+
 // the bounty's winner: the first result in or after the bounty's block that counts and beats its
 // target (results in height order)
 export function bountyWinner<R extends { height: number; result: Result }>(b: { height: number; bounty: Bounty }, dir: "max" | "min", results: R[], counts: (r: R) => boolean): R | null {
@@ -86,9 +99,28 @@ export function attention(weight: number, stalledDays: number, isSolved: boolean
   return (1 + weight) * ease;
 }
 
-// how much open bounties add to a problem's weight: more for more CSD, but slowly, so money steers
-// without drowning out people (100 CSD counts like about seven people)
-export const bountyBoost = (openCsd: number) => (openCsd > 0 ? Math.log2(1 + openCsd) : 0);
+// How bounties steer. A bounty counts like weight at the same price, one person per 0.05 CSD,
+// but only the part its pledger holds now (shared across their open bounties), and not at all
+// from a pledger who has left a won bounty unpaid: a pledge costs nothing until it is won, so
+// it only counts as far as it is believable.
+export const WEIGHT_CSD = 0.05;
+export function backedCsd(open: { amount: number; by: string }[], held: (by: string) => number, unpaid: (by: string) => boolean): number {
+  const owed = new Map<string, number>();
+  for (const b of open) owed.set(b.by, (owed.get(b.by) ?? 0) + b.amount);
+  let sum = 0;
+  for (const b of open) { if (unpaid(b.by)) continue; const o = owed.get(b.by)!; sum += b.amount * Math.min(1, held(b.by) / o); }
+  return sum;
+}
+export const bountyWeight = (backed: number) => backed / WEIGHT_CSD;
+// Problems with bounties together get at most half of agents' attention, so money focuses the
+// frontier without stopping the rest of it.
+export function capBountied<T extends { attention: number; bountied: boolean }>(rows: T[]): T[] {
+  const b = rows.filter(r => r.bountied).reduce((s, r) => s + r.attention, 0);
+  const o = rows.filter(r => !r.bountied).reduce((s, r) => s + r.attention, 0);
+  if (b <= o || o === 0) return rows;
+  const k = o / b;
+  return rows.map(r => (r.bountied ? { ...r, attention: r.attention * k } : r));
+}
 
 export const better = (dir: "max" | "min", a: number, b: number) => (dir === "max" ? a > b : a < b);
 export const sameScore = (a: number, b: number) => fmt(a) === fmt(b);

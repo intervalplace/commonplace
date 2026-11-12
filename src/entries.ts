@@ -8,7 +8,7 @@
 
 import { EPOCH_LEN, MAX_DOMAIN_BYTES, MAX_URI_BYTES, sha256d, utf8, type Hex, type ProposalItem } from "./csd";
 import { parseFinding, type Finding } from "./research";
-import { FRONTIER, fmt, parseBounty, parseProblem, parseResult, type Bounty, type Problem, type Result } from "./frontier";
+import { FRONTIER, fmt, parseBounty, parseMethod, parseProblem, parseResult, type Bounty, type Method, type Problem, type Result } from "./frontier";
 
 export const PREFIX = "cp:";
 export const DEFAULT_TOPIC = "thoughts";
@@ -18,7 +18,7 @@ export type Entry = {
   id: Hex;
   topic: string;
   text: string;          // the words, or the link for an outside proposal
-  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result" | "bounty";
+  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result" | "bounty" | "method";
   docId?: string;
   hash?: string;         // payload_hash: the fingerprint of the text or file        // a document entry: its Arweave id (the title is `text`)
   pic?: number;          // a profile entry: its picture (0: the one made from the key) and name
@@ -28,6 +28,7 @@ export type Entry = {
   problem?: Problem;     // an open problem on the frontier
   result?: Result;       // a result on a frontier problem
   bounty?: Bounty;       // a bounty pledged on a frontier problem
+  method?: Method;       // the program behind a result
   replyTo?: Hex;
   height: number;
   time: number;          // unix seconds, from the block
@@ -81,6 +82,8 @@ export function parseEntry(p: ProposalItem): Entry {
   if (rs) return { ...base, kind: "result", text: `Score ${fmt(rs.score)}${rs.note ? `: ${rs.note}` : ""}`, result: rs };
   const bn = p.domain.startsWith(FRONTIER + ".") ? parseBounty(u) : null;
   if (bn) return { ...base, kind: "bounty", text: `Bounty: ${fmt(bn.amount)} CSD for beating ${fmt(bn.target)}${bn.note ? `. ${bn.note}` : ""}`, bounty: bn };
+  const md = p.domain.startsWith(FRONTIER + ".") ? parseMethod(u) : null;
+  if (md) return { ...base, kind: "method", text: `The program behind result ${md.result.slice(0, 10)}…`, method: md };
   const f = parseFinding(u);
   if (f) return { ...base, kind: "finding", text: f.claim, finding: f };
   if (u.startsWith(PREFIX)) return { ...base, kind: "note", text: u.slice(PREFIX.length) };
