@@ -49,6 +49,7 @@ const settlementAbi = [
   { type: "function", name: "finalizedAuthorization", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "totalLocked", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "maxTotalLocked", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "openLockForCsdAddress", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "bytes32" }] },
   { type: "function", name: "refundExpiredLock", stateMutability: "nonpayable", outputs: [], inputs: [{ name: "auth", type: "tuple", components: AUTH_TYPES.CsdUsdcAuthorization }] },
 ] as const;
 const usdcAbi = [
@@ -153,15 +154,51 @@ export async function onMainnet(provider: Provider) {
   catch { throw new Error("Switch your wallet to Ethereum mainnet and try again."); }
 }
 
+// A read-only Ethereum provider over public RPCs, each tried in turn (for an agent, which has no wallet app)
+export const PUBLIC_RPCS = (process.env.ETH_RPC_URLS ?? "https://ethereum-rpc.publicnode.com,https://eth.llamarpc.com,https://cloudflare-eth.com,https://eth.merkle.io").split(",").map(s => s.trim()).filter(Boolean);
+export function rpcProvider(urls = PUBLIC_RPCS): Provider {
+  let id = 0;
+  return {
+    async request({ method, params }) {
+      let last: unknown;
+      for (const u of urls) {
+        try {
+          const r = await fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: params ?? [] }) });
+          const j = await r.json();
+          if (j.error) { if (r.ok && j.error.code !== -32005 && j.error.code !== -32603) throw Object.assign(new Error(j.error.message), { rpc: true }); last = new Error(j.error.message); continue; }
+          return j.result;
+        } catch (e: any) { if (e?.rpc) throw e; last = e; }
+      }
+      throw last ?? new Error("ETH_RPC_UNREACHABLE");
+    },
+  };
+}
+// The most a single trade may spend right now, across makers (each caps its trades)
+export async function maxTrade(): Promise<bigint> {
+  const qs = await quotes(USDC_UNIT * 2n).catch(() => []);
+  return qs.reduce((m, q) => { const x = BigInt(q.offer.payload.maxTradeUsdc); return x > m ? x : m; }, 0n);
+}
+
+// Whether a CSD address is receiving a trade that hasn't settled yet: the contract allows one at a
+// time per address, so another buy must pay a different address meanwhile
+export async function csdAddressBusy(provider: Provider, addr20: Hex): Promise<boolean> {
+  const h = (await eth(provider).read.readContract({ address: SETTLEMENT, abi: settlementAbi, functionName: "openLockForCsdAddress", args: [(addr20 + "00".repeat(12)) as Hex] })) as string;
+  return BigInt(h) !== 0n;
+}
+
 export async function usdcBalance(provider: Provider, owner: Address): Promise<bigint> {
   return (await eth(provider).read.readContract({ address: USDC, abi: usdcAbi, functionName: "balanceOf", args: [owner] })) as bigint;
 }
 
 // Places the order and waits for a maker to accept and lock it. Tries the next maker if one declines.
-export async function topUp(args: { provider: Provider; buyer: Address; key: CsdKey; spend: bigint; csdNode: Node; onStep: (s: string) => void }): Promise<TopUp> {
+// `sign`, when given, signs the two messages instead of the wallet behind `provider` (an agent
+// signing with its own key, with `provider` only reading Ethereum)
+type Signer = (a: { domain: any; types: any; primaryType: string; message: any }) => Promise<Hex>;
+export async function topUp(args: { provider: Provider; buyer: Address; key: CsdKey; spend: bigint; csdNode: Node; onStep: (s: string) => void; sign?: Signer }): Promise<TopUp> {
   const { provider, buyer, key, spend, csdNode, onStep } = args;
   await onMainnet(provider);
   const { read, wallet } = eth(provider);
+  const sign: Signer = args.sign ?? (a => wallet.signTypedData({ account: buyer, ...a } as any) as Promise<Hex>);
   if (((await read.readContract({ address: USDC, abi: usdcAbi, functionName: "balanceOf", args: [buyer] })) as bigint) < spend) throw new Error("NOT_ENOUGH_USDC");
   // the easiest CSD difficulty a payment proof may use: the real one with 10% slack, from the
   // CSD node this page reads, not from the maker (easier would make fake CSD blocks cheap)
@@ -187,7 +224,7 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Csd
       csdMaxTarget, executorFeeAmount: q.fee, validAfter: BigInt(t - 120), validBefore: BigInt(t + 3 * 3600), nonce: toHex(crypto.getRandomValues(new Uint8Array(32))),
     };
     onStep("Sign in your wallet (1 of 2): the order");
-    const signature = await wallet.signTypedData({ account: buyer, domain, types: AUTH_TYPES, primaryType: "CsdUsdcAuthorization", message: auth });
+    const signature = await sign({ domain, types: AUTH_TYPES, primaryType: "CsdUsdcAuthorization", message: auth });
     const authHash = hashTypedData({ domain, types: AUTH_TYPES, primaryType: "CsdUsdcAuthorization", message: auth }) as Hex;
     const [name, version, nonce] = await Promise.all([
       read.readContract({ address: USDC, abi: usdcAbi, functionName: "name" }),
@@ -196,7 +233,7 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Csd
     ]) as [string, string, bigint];
     const deadline = BigInt(t + 300);
     onStep("Sign in your wallet (2 of 2): the USDC it may lock");
-    const ps = await wallet.signTypedData({ account: buyer, domain: { name, version, chainId: CHAIN_ID, verifyingContract: USDC }, types: PERMIT_TYPES, primaryType: "Permit",
+    const ps = await sign({ domain: { name, version, chainId: CHAIN_ID, verifyingContract: USDC }, types: PERMIT_TYPES, primaryType: "Permit",
       message: { owner: buyer, spender: SETTLEMENT, value: q.total, nonce, deadline } });
     const strs = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === "bigint" ? String(v) : v])) as Record<string, string>;
     const authorization = strs(auth);

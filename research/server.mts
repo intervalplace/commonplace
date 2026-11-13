@@ -16,14 +16,17 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { keyFromCode } from "../src/invite";
 import { cleanName, profileArgs } from "../src/entries";
-import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
+import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, concat, utf8, type CsdKey, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
 import { TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave";
+import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
+import { sha256 } from "@noble/hashes/sha2";
+import { privateKeyToAccount } from "viem/accounts";
 import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.10";
+const VERSION = "0.1.11";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -172,13 +175,173 @@ server.registerTool("memory_wallet", {
   return text({
     address: me.addr20, balance: `${csd(b)} CSD`,
     can_keep: Number(b / MIN_FEE_PROPOSE), can_check: Number(b / MIN_FEE_ATTEST),
-    fund: "Send CSD to the address: from a CSD wallet, an invite link opened on commonplace.place and sent on, or the CSD/USDC market. Note a CSD address looks like an Ethereum one but is not.",
+    fund: "Easiest: wallet_topup gives a card payment link for your person; this agent then buys CSD by itself. Or send CSD to the address (from a CSD wallet, or an invite link opened on commonplace.place and sent on). Note a CSD address looks like an Ethereum one but is not.",
+    usdc: await usdcBalance(rpcProvider(), ETH_ADDR).then(u => `${usd(u)} USDC at ${ETH_ADDR} (this key's Ethereum address)${u >= USDC_UNIT ? "; wallet_buy_csd trades it for CSD" : ""}`).catch(() => "unknown (Ethereum didn't answer)"),
+    ...(buying ? { buying: "a CSD purchase is running" } : {}),
+    ...(await Promise.all(spares.map(k => api.utxos(k.addr20, true).then(us => us.reduce((s, u) => s + u.value, 0n)).catch(() => 0n))).then(xs => xs.reduce((a, b) => a + b, 0n)).then(p => p > 0n ? { on_its_way: `${csd(p)} CSD bought, being moved to the main address after the next block` } : {})),
+    ...(lastBuys.length ? { recent_purchases: lastBuys.slice(0, 5) } : {}),
     page: `${SITE}/#/p/${me.addr20}`,
     uploads: {
       turbo_address: turbo, turbo_credits: credits,
       about: `Solutions, verifiers, programs and notebook pages are stored on Arweave through Turbo. Files up to 105 KiB are free within an allowance per uploader; after that Turbo bills the turbo_address, which is the Ethereum address of this same key (not the CSD address). To buy credits: ${TURBO_TOPUP} (card, or ETH/USDC; any address can be topped up).`,
     },
   });
+});
+
+// ── Topping up: a card payment through Stripe buys USDC on Ethereum for this agent's own key (its
+// Ethereum address is the same key's), and the agent trades it for CSD on the open CSD/USDC market,
+// signing for itself: no ETH needed, no custody, nobody selling CSD for cards.
+const ETH_ADDR = turboAddress(me.priv) as `0x${string}`;
+const ethSigner = privateKeyToAccount(bytesToHex(me.priv) as `0x${string}`);
+const ONRAMP = process.env.CSD_ONRAMP ?? "https://crypto.link.com/agents/create_session";
+const usd = (u: bigint) => (Number(u) / 1e6).toFixed(2);
+let buying: Promise<unknown> | null = null;
+const lastBuys: { at: string; spent: string; csd: string; status: string; trade: string }[] = [];
+const log = (...a: unknown[]) => console.error("commonplace-agent:", ...a);
+
+// Trades the USDC this key holds (or up to `cap`) for CSD, one trade at a time within the makers' limits
+async function buyCsd(cap?: bigint): Promise<{ spent: bigint; trades: TopUp[]; note?: string }> {
+  if (buying) throw new Error("A purchase is already running; it reports in memory_wallet.");
+  const run = (async () => {
+    const eth = rpcProvider();
+    const have = await usdcBalance(eth, ETH_ADDR);
+    let left = cap !== undefined && cap < have ? cap : have;
+    if (left < USDC_UNIT) return { spent: 0n, trades: [], note: `This agent holds ${usd(have)} USDC at ${ETH_ADDR}; at least 1 is needed.` };
+    const most = await maxTrade();
+    if (most === 0n) return { spent: 0n, trades: [], note: "No market maker is selling CSD right now. The USDC stays here; try again later." };
+    const trades: TopUp[] = [];
+    let spent = 0n, lastTo: CsdKey = me;
+    while (left >= USDC_UNIT) {
+      const spend = left > most ? most : left;
+      // a maker takes one buy at a time per buyer: before the next, wait for the last one's CSD to be sent
+      if (trades.length) await csdArrived(trades[trades.length - 1], lastTo);
+      let t: TopUp;
+      try {
+        const to = await freeKey(eth);
+        t = await topUp({ provider: eth, buyer: ETH_ADDR, key: to, spend, csdNode: api, onStep: s => log(s), sign: a => ethSigner.signTypedData(a as any) });
+        lastTo = to;
+        if (to !== me) sweepSoon();
+      }
+      catch (e) { if (!trades.length) throw e; return { spent, trades, note: `${buyError(e)} (${usd(left)} USDC left; call wallet_buy_csd to try again.)` }; }
+      trades.push(t);
+      spent += BigInt(t.total); left -= spend;
+      lastBuys.unshift({ at: new Date().toISOString(), spent: usd(BigInt(t.total)) + " USDC", csd: csd(BigInt(t.csd)), status: t.status, trade: t.aonHash });
+      // the next trade's USDC permit needs this one's used first (the lock uses it)
+      if (t.status !== "locked") return { spent, trades, note: "The maker accepted but its lock isn't on Ethereum yet, so the rest waits. Call wallet_buy_csd again in a few minutes." };
+    }
+    return { spent, trades };
+  })();
+  buying = run;
+  try { return await run; } finally { buying = null; }
+}
+
+// Waits (up to 3 minutes) until a buy's CSD has been sent: the maker sends it once the USDC is locked
+async function csdArrived(t: TopUp, to: CsdKey) {
+  const want = BigInt(t.csd);
+  for (const end = Date.now() + 180_000; Date.now() < end;) {
+    const coins = await api.utxos(to.addr20, true).catch(() => []);
+    if (coins.some(u => u.value === want)) return;
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+// The contract lets a CSD address receive one trade at a time until it settles (20 CSD blocks), so a
+// top-up of several trades has the others paid to addresses of this agent's own (derived from its
+// key), then swept into its main address once the coins are in a block
+const SPARE_KEYS = 12;
+const spareKey = (i: number): CsdKey => keyFromPrivate(sha256(concat(me.priv, utf8(`commonplace-agent top-up ${i}`))));
+const spares = Array.from({ length: SPARE_KEYS }, (_, i) => spareKey(i + 1));
+async function freeKey(eth: ReturnType<typeof rpcProvider>): Promise<CsdKey> {
+  for (const k of [me, ...spares]) if (!(await csdAddressBusy(eth, k.addr20))) return k;
+  throw new Error("Every receiving address of this agent has a trade settling. Try again in about 40 minutes.");
+}
+async function sweep(): Promise<bigint> {
+  let pending = 0n;
+  for (const k of spares) {
+    const all = await api.utxos(k.addr20, true).catch(() => []);
+    pending += all.reduce((s, u) => s + u.value, 0n);
+    const ready = await api.utxos(k.addr20).catch(() => []);
+    if (ready.reduce((s, u) => s + u.value, 0n) <= SEND_FEE) continue;
+    try { await api.submit(buildSendTx(ready, k, me.addr20, "all")); log(`moved the CSD from ${k.addr20} to ${me.addr20}`); }
+    catch (e: any) { log("sweep:", e?.message ?? e); }
+  }
+  return pending;
+}
+let sweeping = false;
+function sweepSoon() {
+  if (sweeping) return;
+  sweeping = true;
+  const end = Date.now() + 2 * 3600_000;
+  const tick = async () => {
+    const left = await sweep().catch(() => 1n);
+    if (left > 0n && Date.now() < end) setTimeout(tick, 60_000); else sweeping = false;
+  };
+  setTimeout(tick, 20_000);
+}
+sweepSoon(); // (anything left from an earlier run)
+
+// After a top-up link is made: watch for the USDC to arrive, then buy CSD with it (for up to 3 hours)
+let watching = false;
+function watchForUsdc() {
+  if (watching) return;
+  watching = true;
+  const end = Date.now() + 3 * 3600_000;
+  const tick = async () => {
+    try {
+      const have = await usdcBalance(rpcProvider(), ETH_ADDR);
+      if (have >= USDC_UNIT && !buying) {
+        log(`${usd(have)} USDC arrived; buying CSD`);
+        const r = await buyCsd();
+        log(`bought with ${usd(r.spent)} USDC${r.note ? ` (${r.note})` : ""}`);
+        if (r.spent > 0n) { watching = false; return; }
+      }
+    } catch (e: any) { log("top-up:", e?.message ?? e); }
+    if (Date.now() < end) setTimeout(tick, 30_000); else watching = false;
+  };
+  setTimeout(tick, 30_000);
+}
+
+const buyError = (e: any) => {
+  const m = String(e?.shortMessage ?? e?.message ?? e);
+  if (m === "NO_OFFER") return "No market maker is selling CSD right now. The USDC stays at this agent's address; try again later.";
+  if (m === "MARKET_FULL") return "The market is at its limit for trades settling at once. Nothing was traded; try again in a little while.";
+  if (m === "NO_MAKER_ANSWERED") return "No market maker took the order. Nothing was traded; the USDC stays here. Try again in a few minutes.";
+  if (m === "NOT_ENOUGH_USDC") return "This agent doesn't hold that much USDC.";
+  return m;
+};
+
+server.registerTool("wallet_topup", {
+  description: "Get a payment link for topping this agent up with CSD. Give the link to your person: they pay by card on Stripe's page (Stripe sells them USDC on Ethereum, sent to this agent's own key), and this agent then trades it for CSD on the open CSD/USDC market by itself, a minute or so after the USDC arrives. Nothing to install, no ETH needed. Use when the agent is short of CSD.",
+  inputSchema: { usd: z.number().min(2).max(300).describe("Dollars to spend, e.g. 10. Stripe's own fee comes on top.") },
+}, async ({ usd: dollars }) => {
+  try {
+    const body = new URLSearchParams({ destination_currency: "usdc", destination_network: "ethereum", source_amount: dollars.toFixed(2), "wallet_addresses[ethereum]": ETH_ADDR });
+    const r = await fetch(ONRAMP, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+    const j: any = await r.json().catch(() => ({}));
+    const url = j.redirect_url ?? j.url;
+    if (!r.ok || !url) return fail(`Stripe didn't make a payment link (${r.status}${j.error?.message ? `: ${j.error.message}` : ""}). Another way in: send USDC on Ethereum to ${ETH_ADDR}, then call wallet_buy_csd; or send CSD to ${me.addr20}.`);
+    watchForUsdc();
+    return text({
+      link: url,
+      say: `Here's a link to top me up with about $${dollars.toFixed(2)} of CSD: ${url} It's Stripe's checkout; you pay by card and it sends USDC to my own address, which I trade for CSD on the open market.`,
+      then: "Once paid, the USDC usually arrives within minutes. While this server keeps running it buys CSD by itself (checked every 30 seconds, for 3 hours); memory_wallet shows how it went. If it was restarted, call wallet_buy_csd.",
+      usdc_to: ETH_ADDR, csd_to: me.addr20,
+    });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("wallet_buy_csd", {
+  description: "Trade the USDC this agent's key holds on Ethereum for CSD, on the open CSD/USDC market (signed by the agent itself, no ETH needed). The CSD arrives at the agent's CSD address within about one Ethereum block. Usually done automatically after wallet_topup.",
+  inputSchema: { usdc: z.number().min(1).optional().describe("At most this many USDC; leave out to use all of it") },
+}, async ({ usdc }) => {
+  try {
+    const r = await buyCsd(usdc !== undefined ? BigInt(Math.round(usdc * 1e6)) : undefined);
+    return text({
+      spent: `${usd(r.spent)} USDC`,
+      bought: r.trades.map(t => ({ csd: csd(BigInt(t.csd)), paid: `${usd(BigInt(t.total))} USDC`, status: t.status === "locked" ? "locked on Ethereum; the CSD is on its way" : "accepted, waiting for the lock", trade: `https://explorer.aon.network?hash=${t.aonHash}` })),
+      ...(r.note ? { note: r.note } : {}),
+    });
+  } catch (e: any) { return fail(buyError(e)); }
 });
 
 server.registerTool("agent_set_name", {
