@@ -4,6 +4,8 @@
 
 import { bytesToHex, sha256d, type CsdKey } from "./csd";
 import { dataItem } from "./ans104";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3";
 
 export const FREE_BYTES = 105 * 1024;
 export const GATEWAY = process.env.NEXT_PUBLIC_ARWEAVE_GATEWAY ?? "https://arweave.net";
@@ -12,6 +14,22 @@ export const TEXT_TYPES: Record<string, string> = { md: "text/markdown; charset=
 export function contentTypeOf(name: string): string | null {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   return TEXT_TYPES[ext] ?? null;
+}
+
+// The address Turbo bills uploads to: the Ethereum address of the writing key (keccak of the
+// uncompressed public key), which is not the key's CSD address
+export function turboAddress(priv: Uint8Array): string {
+  return bytesToHex(keccak_256(secp256k1.getPublicKey(priv, false).slice(1)).slice(-20)).toLowerCase();
+}
+export const TURBO_TOPUP = "https://console.ar.io/topup";
+export const TURBO_PAYMENT = process.env.TURBO_PAYMENT ?? "https://payment.ardrive.io";
+// Turbo credits held by an address, in winc (10^12 winc = 1 credit); 0 for an address Turbo hasn't seen
+export async function turboBalance(addr: string): Promise<bigint> {
+  const r = await fetch(`${TURBO_PAYMENT}/v1/balance?address=${addr}`);
+  if (r.status === 404) return 0n;
+  if (!r.ok) throw new Error(`TURBO_${r.status}`);
+  const j = await r.json();
+  return BigInt(j.effectiveBalance ?? j.winc ?? 0);
 }
 
 export const UPLOADER = process.env.NEXT_PUBLIC_TURBO_UPLOAD ?? "https://upload.ardrive.io";
@@ -31,17 +49,41 @@ export async function upload(key: CsdKey, data: Uint8Array, contentType: string,
 // Gateways to read from, in order. A file just uploaded through Turbo is served by Turbo's own
 // gateway at once, and by others only once it has been bundled onto Arweave, which can take a while.
 export const GATEWAYS = [...new Set([GATEWAY, "https://turbo-gateway.com", "https://arweave.net", "https://ardrive.net"])];
-export async function fromGateways(id: string): Promise<Response> {
-  let last = 0;
-  for (const g of GATEWAYS) {
-    try { const r = await fetch(`${g}/${id}`); if (r.ok) return r; last = r.status; } catch {}
+
+// Each gateway is asked for /raw/<id> first: /<id> now redirects to a per-file subdomain that some
+// networks block. A response wrapped in a multipart envelope isn't the file itself, so it's skipped.
+async function* copies(id: string): AsyncGenerator<Uint8Array> {
+  for (const g of GATEWAYS) for (const path of [`raw/${id}`, id]) {
+    try {
+      const r = await fetch(`${g}/${path}`);
+      if (!r.ok) continue;
+      if ((r.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/")) continue;
+      yield new Uint8Array(await r.arrayBuffer());
+      break; // this gateway answered; the next copy comes from the next gateway
+    } catch {}
   }
-  throw new Error(`GATEWAY_${last || "UNREACHABLE"}`);
+}
+
+// The file's bytes: the first copy that matches the fingerprint, when there is one. With no
+// fingerprint, the first copy. Throws when no gateway has it (or none has the fingerprinted file).
+export async function readAr(id: string, payloadHash?: string): Promise<Uint8Array> {
+  const want = payloadHash?.toLowerCase().replace(/^0x/, "");
+  let any = false;
+  for await (const buf of copies(id)) {
+    any = true;
+    if (!want || bytesToHex(sha256d(buf)).toLowerCase().replace(/^0x/, "") === want) return buf;
+  }
+  throw new Error(any ? "GATEWAY_MISMATCH" : "GATEWAY_UNREACHABLE");
 }
 
 // The file, and whether it is exactly the one the entry fingerprinted
 export async function fetchDoc(id: string, payloadHash: string): Promise<{ text: string; bytes: number; matches: boolean }> {
-  const r = await fromGateways(id);
-  const buf = new Uint8Array(await r.arrayBuffer());
-  return { text: new TextDecoder().decode(buf), bytes: buf.length, matches: bytesToHex(sha256d(buf)).toLowerCase() === payloadHash.toLowerCase() };
+  let first: Uint8Array | null = null;
+  const want = payloadHash.toLowerCase().replace(/^0x/, "");
+  for await (const buf of copies(id)) {
+    first ??= buf;
+    if (want && bytesToHex(sha256d(buf)).toLowerCase().replace(/^0x/, "") === want) return { text: new TextDecoder().decode(buf), bytes: buf.length, matches: true };
+  }
+  if (!first) throw new Error("GATEWAY_UNREACHABLE");
+  return { text: new TextDecoder().decode(first), bytes: first.length, matches: false };
 }

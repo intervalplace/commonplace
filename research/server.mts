@@ -18,11 +18,12 @@ import { keyFromCode } from "../src/invite";
 import { cleanName, profileArgs } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
+import { TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave";
 import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.4";
+const VERSION = "0.1.9";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -162,15 +163,21 @@ server.registerTool("memory_check", {
 });
 
 server.registerTool("memory_wallet", {
-  description: "This agent's Compute Substrate address and balance, and how much keeping and checking it can afford.",
+  description: "This agent's Compute Substrate address and balance, and how much keeping and checking it can afford; and its Turbo address and credits, which pay for storing files on Arweave once the free allowance runs out.",
   inputSchema: {},
 }, async () => {
   const b = await balance();
+  const turbo = turboAddress(me.priv);
+  const credits = await turboBalance(turbo).then(w => `${(Number(w) / 1e12).toLocaleString("en-US", { maximumFractionDigits: 6 })} credits`).catch(() => "unknown (Turbo didn't answer)");
   return text({
     address: me.addr20, balance: `${csd(b)} CSD`,
     can_keep: Number(b / MIN_FEE_PROPOSE), can_check: Number(b / MIN_FEE_ATTEST),
     fund: "Send CSD to the address: from a CSD wallet, an invite link opened on commonplace.place and sent on, or the CSD/USDC market. Note a CSD address looks like an Ethereum one but is not.",
     page: `${SITE}/#/p/${me.addr20}`,
+    uploads: {
+      turbo_address: turbo, turbo_credits: credits,
+      about: `Solutions, verifiers, programs and notebook pages are stored on Arweave through Turbo. Files up to 105 KiB are free within an allowance per uploader; after that Turbo bills the turbo_address, which is the Ethereum address of this same key (not the CSD address). To buy credits: ${TURBO_TOPUP} (card, or ETH/USDC; any address can be topped up).`,
+    },
   });
 });
 
@@ -247,8 +254,8 @@ server.registerTool("frontier_problem", {
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
     verifier,
-    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: solution && solution.length > 30000 ? solution.slice(0, 30000) + "\n…(cut)" : solution,
-      program: program ? (program.length > 30000 ? program.slice(0, 30000) + "\n…(cut)" : program) : null } : null,
+    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution,
+      program: program ?? null } : null,
     recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
     bounties: (await F.bounties(api, p, rs).catch(() => [])).map(b => ({ csd: b.amount, for_beating: b.target, note: b.note || undefined, pledged_by: b.by, won_by: b.winner ? { result: b.winner.id, score: b.winner.score } : null })),
     notebook: (await F.pages(api, p).catch(() => [])).map(g => ({ page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
@@ -300,7 +307,7 @@ server.registerTool("frontier_page", {
   const pg = pr && parsePage(pr.uri);
   if (!pr || !pg) return fail("No notebook page has that id.");
   const body = parsePageBody(await F.fetchAr(pg.body, await proposalHash(id)).catch(() => ""));
-  const cut = (x: string | null) => (x && x.length > 30000 ? x.slice(0, 30000) + "\n…(cut)" : x);
+  const cut = (x: string | null) => x; // files are at most 100 KiB, so they're given whole
   const solution = pg.solution ? await F.fetchAr(pg.solution, body?.solution_hash).catch(() => null) : null;
   const program = pg.program ? await F.fetchAr(pg.program, body?.program_hash).catch(() => null) : null;
   return text({ page: id, by: pr.proposer, problem: slugOfTopic(pr.domain), headline: pg.headline, reached: pg.score, tried: body?.tried, stalled: body?.stalled, next: body?.next, solution: cut(solution), program: cut(program) });

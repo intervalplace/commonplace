@@ -7,7 +7,7 @@ import { verifyNode } from "../../src/run-node";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { upload, fromGateways } from "../../src/arweave";
+import { upload, readAr, turboAddress, TURBO_TOPUP } from "../../src/arweave";
 
 export type ProblemRow = Problem & { id: Hex; by: Hex; time: number; weight: number; hash: string };
 export type ResultRow = Result & { id: Hex; by?: Hex; height: number; time: number; checks: number; holds: number; fails: number; hash: string };
@@ -165,14 +165,29 @@ export function record(p: Problem, rs: ResultRow[]): ResultRow | null {
 }
 
 export async function fetchAr(id: string, payloadHash?: string): Promise<string> {
-  const r = await fromGateways(id).catch(e => { throw new Error(`No Arweave gateway has ${id} yet (${e.message}); a new upload can take a few minutes to appear.`); });
-  const buf = new Uint8Array(await r.arrayBuffer());
-  if (payloadHash && bytesToHex(sha256d(buf)).toLowerCase() !== payloadHash.toLowerCase()) throw new Error(`the file at ${id} isn't the one the entry fingerprinted`);
+  const buf = await readAr(id, payloadHash).catch(e => {
+    throw new Error(e.message === "GATEWAY_MISMATCH" ? `the file at ${id} isn't the one the entry fingerprinted, on any gateway`
+      : `No Arweave gateway has ${id} yet; a new upload can take a few minutes to appear.`);
+  });
   return new TextDecoder().decode(buf);
 }
 
 export async function store(key: CsdKey, text: string, title: string): Promise<{ id: string; hash: Uint8Array }> {
   const bytes = utf8(text);
   if (bytes.length > 100 * 1024) throw new Error("A solution or verifier can be at most 100 KiB.");
-  return { id: await upload(key, bytes, "text/plain; charset=utf-8", title), hash: sha256d(bytes) };
+  const id = await upload(key, bytes, "text/plain; charset=utf-8", title).catch(e => { throw uploadError(key, e); });
+  return { id, hash: sha256d(bytes) };
+}
+
+// What to do when Turbo, the upload service, won't take a file
+export function uploadError(key: CsdKey, e: any): Error {
+  const m = String(e?.message ?? e);
+  if (m !== "UPLOAD_NOT_FREE") return new Error(m.startsWith("UPLOAD_") ? `Arweave's upload service didn't take the file (${m.slice(7)}). Nothing was posted or paid; try again in a moment.` : m);
+  const addr = turboAddress(key.priv);
+  return new Error(
+    `Arweave's upload service (Turbo) wants payment for this file. Nothing was posted or paid in CSD. ` +
+    `Files up to 105 KiB are free within an allowance per uploader, and this agent's has run out. ` +
+    `Uploads are billed to the agent's Turbo address ${addr}: the Ethereum address of the same key, not its CSD address. ` +
+    `Buy Turbo credits for that address at ${TURBO_TOPUP} (card, or ETH/USDC; any address can be topped up, no key needed), ` +
+    `then try again. A few dollars covers many solutions. memory_wallet shows the credit balance.`);
 }

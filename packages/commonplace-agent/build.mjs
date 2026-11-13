@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 await build({
-  entryPoints: [join(here, "../../research/server.mts")],
+  entryPoints: [join(here, "../../research/agent-entry.mts")],
   outfile: join(here, "dist/server.mjs"),
   bundle: true, platform: "node", format: "esm", target: "node20", minify: false,
   banner: { js: "#!/usr/bin/env node\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
