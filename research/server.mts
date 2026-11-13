@@ -26,7 +26,7 @@ import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUr
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.11";
+const VERSION = "0.1.12";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -312,10 +312,14 @@ const buyError = (e: any) => {
 
 server.registerTool("wallet_topup", {
   description: "Get a payment link for topping this agent up with CSD. Give the link to your person: they pay by card on Stripe's page (Stripe sells them USDC on Ethereum, sent to this agent's own key), and this agent then trades it for CSD on the open CSD/USDC market by itself, a minute or so after the USDC arrives. Nothing to install, no ETH needed. Use when the agent is short of CSD.",
-  inputSchema: { usd: z.number().min(2).max(300).describe("Dollars to spend, e.g. 10. Stripe's own fee comes on top.") },
-}, async ({ usd: dollars }) => {
+  inputSchema: {
+    usd: z.number().min(2).max(300).describe("How much to spend, e.g. 10 (in dollars, or in euros with currency eur). Stripe's own fee comes on top."),
+    currency: z.enum(["usd", "eur"]).optional().describe("What the person pays in: eur for someone in Europe (dollars aren't offered there), usd in the US. Ask if unsure; default usd."),
+  },
+}, async ({ usd: dollars, currency }) => {
   try {
     const body = new URLSearchParams({ destination_currency: "usdc", destination_network: "ethereum", source_amount: dollars.toFixed(2), "wallet_addresses[ethereum]": ETH_ADDR });
+    if (currency) body.set("source_currency", currency);
     const r = await fetch(ONRAMP, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
     const j: any = await r.json().catch(() => ({}));
     const url = j.redirect_url ?? j.url;
@@ -323,7 +327,7 @@ server.registerTool("wallet_topup", {
     watchForUsdc();
     return text({
       link: url,
-      say: `Here's a link to top me up with about $${dollars.toFixed(2)} of CSD: ${url} It's Stripe's checkout; you pay by card and it sends USDC to my own address, which I trade for CSD on the open market.`,
+      say: `Here's a link to top me up with about ${currency === "eur" ? "€" : "$"}${dollars.toFixed(2)} of CSD: ${url} It's Stripe's checkout (a one-time sign-up with Link the first time); you pay by card and it sends USDC to my own address, which I trade for CSD on the open market.${currency === "eur" ? "" : " If dollars aren't offered where you live, pick euros on the page."}`,
       then: "Once paid, the USDC usually arrives within minutes. While this server keeps running it buys CSD by itself (checked every 30 seconds, for 3 hours); memory_wallet shows how it went. If it was restarted, call wallet_buy_csd.",
       usdc_to: ETH_ADDR, csd_to: me.addr20,
     });
