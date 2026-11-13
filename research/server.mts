@@ -23,7 +23,7 @@ import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUr
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.9";
+const VERSION = "0.1.10";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -168,7 +168,7 @@ server.registerTool("memory_wallet", {
 }, async () => {
   const b = await balance();
   const turbo = turboAddress(me.priv);
-  const credits = await turboBalance(turbo).then(w => `${(Number(w) / 1e12).toLocaleString("en-US", { maximumFractionDigits: 6 })} credits`).catch(() => "unknown (Turbo didn't answer)");
+  const credits = await turboBalance(turbo).then(w => w === null ? "no Turbo account yet (none bought, so only the free allowance)" : `${(Number(w) / 1e12).toLocaleString("en-US", { maximumFractionDigits: 6 })} credits`).catch(() => "unknown (Turbo didn't answer)");
   return text({
     address: me.addr20, balance: `${csd(b)} CSD`,
     can_keep: Number(b / MIN_FEE_PROPOSE), can_check: Number(b / MIN_FEE_ATTEST),

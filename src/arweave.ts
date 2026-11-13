@@ -18,15 +18,21 @@ export function contentTypeOf(name: string): string | null {
 
 // The address Turbo bills uploads to: the Ethereum address of the writing key (keccak of the
 // uncompressed public key), which is not the key's CSD address
+// in EIP-55 checksummed form: Turbo's balance lookup only finds the account under that spelling
 export function turboAddress(priv: Uint8Array): string {
-  return bytesToHex(keccak_256(secp256k1.getPublicKey(priv, false).slice(1)).slice(-20)).toLowerCase();
+  return checksumAddress(bytesToHex(keccak_256(secp256k1.getPublicKey(priv, false).slice(1)).slice(-20)));
+}
+export function checksumAddress(a: string): string {
+  const h = a.toLowerCase().replace(/^0x/, "");
+  const k = bytesToHex(keccak_256(new TextEncoder().encode(h))).replace(/^0x/, "");
+  return "0x" + [...h].map((c, i) => (parseInt(k[i], 16) >= 8 ? c.toUpperCase() : c)).join("");
 }
 export const TURBO_TOPUP = "https://console.ar.io/topup";
 export const TURBO_PAYMENT = process.env.TURBO_PAYMENT ?? "https://payment.ardrive.io";
-// Turbo credits held by an address, in winc (10^12 winc = 1 credit); 0 for an address Turbo hasn't seen
-export async function turboBalance(addr: string): Promise<bigint> {
-  const r = await fetch(`${TURBO_PAYMENT}/v1/balance?address=${addr}`);
-  if (r.status === 404) return 0n;
+// Turbo credits held by an address, in winc (10^12 winc = 1 credit); null when Turbo has no account for it
+export async function turboBalance(addr: string): Promise<bigint | null> {
+  const r = await fetch(`${TURBO_PAYMENT}/v1/balance?address=${checksumAddress(addr)}`);
+  if (r.status === 404) return null;
   if (!r.ok) throw new Error(`TURBO_${r.status}`);
   const j = await r.json();
   return BigInt(j.effectiveBalance ?? j.winc ?? 0);
