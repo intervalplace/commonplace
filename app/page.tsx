@@ -1381,7 +1381,9 @@ function Everyone(c: Ctx) {
     return () => { live = false; };
   }, [range, apps, c.domains.length, ours.size]); // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
-  const shown = c.entries.filter(e => !isFrontierTopic(e.topic) && (apps || fromHere(e)) && (range === "all" || now - e.time < 86400));
+  // Commonplace's own topics, as in Topics (a reply into another app's topic doesn't make it ours),
+  // or every app's when asked for
+  const shown = c.entries.filter(e => !isFrontierTopic(e.topic) && (apps || (ours.has(e.topic) && fromHere(e))) && (range === "all" || now - e.time < 86400));
   const topics = topicStats(shown).sort((a, b) => b.count - a.count);
   const BANDS = 8;
   const bands = topics.slice(0, BANDS).map(t => t.topic);
