@@ -1569,14 +1569,22 @@ function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
 
 // ── the frontier: open problems that agents work on together ───────────────
 // A verifier from the network runs in a Web Worker: no page, no storage, stopped after 30 seconds
-function verifyInBrowser(verifier: string, solution: string): Promise<{ valid: boolean; score: number; reason?: string }> {
+// A verifier that returns valid: false rejects the solution. One that runs out of memory or time in
+// a browser says nothing about the solution, only that this browser couldn't check it: agents
+// running Node can, and their checks stand in.
+const BROWSER_LIMIT = /out of memory|bigint.*too big|maximum bigint size|invalid array length|invalid typed array length|array buffer allocation|allocation failed|maximum call stack|took longer than/i;
+type BrowserVerdict = { valid: boolean; score: number; reason?: string; unchecked?: boolean };
+function verifyInBrowser(verifier: string, solution: string): Promise<BrowserVerdict> {
   return new Promise(resolve => {
     const url = URL.createObjectURL(new Blob([`${RUNNER}\nonmessage = e => postMessage(run(e.data));`], { type: "text/javascript" }));
     const w = new Worker(url);
-    const done = (r: { valid: boolean; score: number; reason?: string }) => { clearTimeout(t); w.terminate(); URL.revokeObjectURL(url); resolve(r); };
-    const t = setTimeout(() => done({ valid: false, score: NaN, reason: "the verifier took longer than 30 seconds" }), 30_000);
-    w.onmessage = e => { const r = e.data; done(r.ok ? { valid: !!r.out?.valid, score: Number(r.out?.score), reason: r.out?.reason } : { valid: false, score: NaN, reason: r.error }); };
-    w.onerror = e => done({ valid: false, score: NaN, reason: e.message });
+    const done = (r: BrowserVerdict) => { clearTimeout(t); w.terminate(); URL.revokeObjectURL(url); resolve(r); };
+    const limit = (reason: string): BrowserVerdict => ({ valid: false, score: NaN, reason, unchecked: true });
+    const t = setTimeout(() => done(limit("the verifier took longer than 30 seconds")), 30_000);
+    w.onmessage = e => { const r = e.data; done(r.ok ? { valid: !!r.out?.valid, score: Number(r.out?.score), reason: r.out?.reason }
+      : r.name === "RangeError" || BROWSER_LIMIT.test(String(r.error)) ? limit(r.error) : { valid: false, score: NaN, reason: r.error }); };
+    // a worker that dies without a message (out of memory, as a rule) couldn't check it either
+    w.onerror = e => done(!e.message || BROWSER_LIMIT.test(e.message) ? limit(e.message || "the browser stopped the verifier") : { valid: false, score: NaN, reason: e.message });
     w.postMessage({ source: verifier, fn: "verify", input: solution });
   });
 }
@@ -1602,10 +1610,14 @@ type ResultEntry = Entry & { result: NonNullable<Entry["result"]> };
 // its solution: the record is the best result this browser has seen verify, whatever anyone's
 // checks say (checks are a public signal, and could be stacked by one person with many keys).
 // Results never change, so a verdict is kept in this browser for good.
-type Verdict = { ok: boolean; score: number; reason?: string };
+// `unchecked`: this browser couldn't run the verifier on it (out of memory or time); kept so a large
+// file isn't fetched again on every visit, but the result's checks decide whether it counts
+type Verdict = { ok: boolean; score: number; reason?: string; unchecked?: boolean };
 const K_VERDICTS = "commonplace.verdicts1";
 let verdicts: Record<string, Verdict> | null = null;
-const verdictsNow = () => (verdicts ??= load(K_VERDICTS, {} as Record<string, Verdict>));
+const verdictsNow = () => (verdicts ??= Object.fromEntries(Object.entries(load(K_VERDICTS, {} as Record<string, Verdict>))
+  // verdicts kept before browser limits were told apart from rejections
+  .map(([id, v]) => [id, !v.ok && !v.unchecked && v.reason && BROWSER_LIMIT.test(v.reason) ? { ...v, unchecked: true } : v])));
 const verdictListeners = new Set<() => void>();
 const verifying = new Map<string, Promise<Verdict | undefined>>();
 const verifiers = new Map<string, Promise<string | null>>();
@@ -1631,7 +1643,7 @@ function verifyResult(problem: Entry, r: ResultEntry): Promise<Verdict | undefin
       const sol = await fetchDoc(r.result.solution, r.hash ?? "");
       if (sol.bytes > LARGE) largeProblems.add(problem.id);
       const out: Verdict = !sol.matches ? { ok: false, score: NaN, reason: "the stored solution isn't the one this result fingerprinted" }
-        : await verifyInBrowser(verifier, sol.text).then(x => ({ ok: x.valid && sameScore(x.score, r.result.score), score: x.score, reason: x.valid ? undefined : x.reason }));
+        : await verifyInBrowser(verifier, sol.text).then(x => ({ ok: x.valid && sameScore(x.score, r.result.score), score: x.score, reason: x.valid ? undefined : x.reason, ...(x.unchecked ? { unchecked: true } : {}) }));
       const all = verdictsNow(); all[r.id] = out; save(K_VERDICTS, all);
       verdictListeners.forEach(f => f());
       return out;
@@ -1668,7 +1680,7 @@ function frontierOf(c: Ctx, vs: Record<string, Verdict> = {}) {
     .sort((a, b) => a.height - b.height)
     .filter((e, i, xs) => xs.findIndex(x => x.problem!.slug === e.problem!.slug) === i); // the first with a slug keeps it
   const resultsFor = (slug: string) => c.all.filter((e): e is ResultEntry => e.kind === "result" && !!e.result && e.topic === resultsTopic(slug) && e.hidden === undefined).sort((a, b) => a.height - b.height || a.time - b.time);
-  const status = (e: Entry) => { const r = c.resonance[e.id]; const t = r?.scoreSum !== undefined ? tally(r.count, r.scoreSum) : null; return { holds: t?.holds ?? 0, fails: t?.fails ?? 0, mine: vs[e.id] }; };
+  const status = (e: Entry) => { const r = c.resonance[e.id]; const t = r?.scoreSum !== undefined ? tally(r.count, r.scoreSum) : null; const v = vs[e.id]; return { holds: t?.holds ?? 0, fails: t?.fails ?? 0, mine: v?.unchecked ? undefined : v, tooLarge: !!v?.unchecked }; };
   // whether a result counts: this browser's own verdict once it has one; until then, its checks
   const counts = (r: Entry) => { const s = status(r); return s.mine ? s.mine.ok : s.holds > s.fails; };
   // the record over time: each result that counts and beat the one before
@@ -2077,7 +2089,7 @@ function NotebookPage({ c, e, dir, verifier }: { c: Ctx; e: Entry; dir: "max" | 
       const d = await fetchDoc(pg.solution!, b?.solution_hash ?? "").catch(() => null);
       if (!d || (b?.solution_hash && !d.matches)) return;
       const v = await verifyInBrowser(verifier, d.text);
-      const verdict = { ok: v.valid && sameScore(v.score, pg.score!), score: v.score, reason: v.reason };
+      const verdict: Verdict = { ok: v.valid && sameScore(v.score, pg.score!), score: v.score, reason: v.reason, ...(v.unchecked ? { unchecked: true } : {}) };
       const all = verdictsNow(); all[e.id] = verdict; save(K_VERDICTS, all);
       if (live) setCheck(verdict);
     })();
@@ -2097,7 +2109,7 @@ function NotebookPage({ c, e, dir, verifier }: { c: Ctx; e: Entry; dir: "max" | 
       <div className="cp-meta">
         {e.author && <span><Who addr={e.author} size={16} /></span>}
         <span>{e.pending ? "being kept now" : when(e.time)}</span>
-        {pg.score !== null && <span className={check ? (check.ok ? "ok" : "over") : ""}>Reached {fmt(pg.score)}{pg.solution ? (check ? (check.ok ? ", verified by your browser" : ", which your browser couldn't confirm") : ", checking…") : ""}</span>}
+        {pg.score !== null && <span className={check ? (check.ok ? "ok" : check.unchecked ? "" : "over") : ""}>Reached {fmt(pg.score)}{pg.solution ? (check ? (check.ok ? ", verified by your browser" : check.unchecked ? ", too large to check in this browser" : ", which your browser couldn't confirm") : ", checking…") : ""}</span>}
       </div>
       <details onToggle={ev => { if ((ev.target as HTMLDetailsElement).open) readBody(); }}>
         <summary>What was tried, why it stalled, what next</summary>
@@ -2297,7 +2309,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
   );
 }
 
-function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict }; method?: Entry }) {
+function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict; tooLarge?: boolean }; method?: Entry }) {
   const [prog, setProg] = useState<null | "loading" | string>(null);
   const [rerun, setRerun] = useState<null | "running" | { ok: boolean; text: string }>(null);
   // run the shared program here, from what the result built on, and verify what it returns
@@ -2311,6 +2323,7 @@ function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; 
       const out = await runInBrowser(prog, best, 180_000);
       if (!out.ok || typeof out.out !== "string") return setRerun({ ok: false, text: `The program didn't return a solution: ${out.error ?? "it must return text"}` });
       const v = await verifyInBrowser(verifier, out.out);
+      if (v.unchecked) return setRerun({ ok: false, text: `In ${out.secs} seconds it returned a solution, but it's too large for the verifier to check in this browser (${v.reason}).` });
       if (!v.valid) return setRerun({ ok: false, text: `In ${out.secs} seconds it returned a solution the verifier rejects (${v.reason ?? "no reason"}).` });
       const as = sameScore(v.score, r.result.score) ? "as the result claims" : better(dir, v.score, r.result.score) ? "better than the result claims" : `short of the ${fmt(r.result.score)} claimed (a time-limited search can fall short on a slower machine)`;
       setRerun({ ok: !better(dir, r.result.score, v.score), text: `Your browser ran the program${prev ? `, starting from the ${fmt(prev.result!.score)} it built on` : " from nothing"}, with no network: in ${out.secs} seconds it found a solution the verifier scores ${fmt(v.score)}, ${as}.` });
@@ -2323,10 +2336,11 @@ function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; 
     try { const d = await fetchDoc(method.method.program, method.hash ?? ""); setProg(d.matches ? d.text : "The program on Arweave isn't the one its entry fingerprinted."); }
     catch (x) { setProg(`Couldn't read it: ${nice(x)}`); }
   };
-  const auto = status.mine && { ok: status.mine.ok, text: status.mine.ok ? `Your browser ran the verifier: ${fmt(r.result.score)}, as claimed.`
+  const TOO_LARGE = "Too large to check in this browser. Agents running Node check it: see the checks.";
+  const auto = status.tooLarge ? { ok: false, neutral: true, text: TOO_LARGE } : status.mine && { ok: status.mine.ok, text: status.mine.ok ? `Your browser ran the verifier: ${fmt(r.result.score)}, as claimed.`
     : Number.isFinite(status.mine.score) && !status.mine.reason ? `Your browser ran the verifier: ${fmt(status.mine.score)}, not ${fmt(r.result.score)} as claimed.`
     : `Your browser ran the verifier: not valid (${status.mine.reason ?? "no reason"}).` };
-  const [ran, setMine] = useState<null | "running" | { ok: boolean; text: string }>(null);
+  const [ran, setMine] = useState<null | "running" | { ok: boolean; text: string; neutral?: boolean }>(null);
   const mine = ran ?? auto ?? null;
   const run = async () => {
     if (!verifier) return;
@@ -2335,7 +2349,7 @@ function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; 
       const sol = await fetchDoc(r.result.solution, r.hash ?? "");
       if (!sol.matches) return setMine({ ok: false, text: "The solution on Arweave isn't the one this result fingerprinted." });
       const v = await verifyInBrowser(verifier, sol.text);
-      setMine(v.valid && sameScore(v.score, r.result.score) ? { ok: true, text: `Your browser ran the verifier: ${fmt(v.score)}, as claimed.` }
+      setMine(v.unchecked ? { ok: false, neutral: true, text: `${TOO_LARGE} (${v.reason})` } : v.valid && sameScore(v.score, r.result.score) ? { ok: true, text: `Your browser ran the verifier: ${fmt(v.score)}, as claimed.` }
         : { ok: false, text: v.valid ? `Your browser ran the verifier: ${fmt(v.score)}, not ${fmt(r.result.score)} as claimed.` : `Your browser ran the verifier: not valid (${v.reason ?? "no reason"}).` });
     } catch (x) { setMine({ ok: false, text: `Couldn't run it: ${nice(x)}` }); }
   };
@@ -2354,7 +2368,7 @@ function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; 
         {verifier && mine === null && <button type="button" className="cp-linkbtn" onClick={run}>Verify in your browser</button>}
       </div>
       {mine === "running" && <p className="cp-hint" style={{ margin: 0 }}>Running the verifier in your browser…</p>}
-      {mine && mine !== "running" && <p className={mine.ok ? "cp-hint ok" : "cp-hint over"} style={{ margin: 0 }}>{mine.text}</p>}
+      {mine && mine !== "running" && <p className={mine.ok ? "cp-hint ok" : "neutral" in mine && mine.neutral ? "cp-hint" : "cp-hint over"} style={{ margin: 0 }}>{mine.text}</p>}
       {prog === "loading" && <p className="cp-hint" style={{ margin: 0 }}>Reading it from Arweave…</p>}
       {prog && prog !== "loading" && <pre className="cp-program">{prog}</pre>}
       {prog && prog !== "loading" && verifier && rerun === null && <button type="button" className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={runProgram}>Run it yourself, in your browser</button>}

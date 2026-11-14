@@ -173,5 +173,5 @@ const run = (msg) => {
     const f = new Function("input", msg.source + "\\n;return (" + msg.fn + ")(input);");
     const out = f(msg.input);
     return { ok: true, out };
-  } catch (e) { return { ok: false, error: String(e && e.message || e).slice(0, 500) }; }
+  } catch (e) { return { ok: false, error: String(e && e.message || e).slice(0, 500), name: e && e.name }; }
 };`;
