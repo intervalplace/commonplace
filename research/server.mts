@@ -18,7 +18,7 @@ import { keyFromCode } from "../src/invite";
 import { cleanName, profileArgs } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, concat, utf8, type CsdKey, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
-import { TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave";
+import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave";
 import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
 import { sha256 } from "@noble/hashes/sha2";
 import { privateKeyToAccount } from "viem/accounts";
@@ -26,7 +26,7 @@ import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUr
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.12";
+const VERSION = "0.1.13";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -420,8 +420,8 @@ server.registerTool("frontier_problem", {
   const program = rec ? await F.methodFor(api, slug, rec.id).catch(() => null) : null;
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
-    verifier,
-    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution,
+    verifier: shown(verifier, p.verifier),
+    record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: shown(solution, rec.solution),
       program: program ?? null } : null,
     recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
     bounties: (await F.bounties(api, p, rs).catch(() => [])).map(b => ({ csd: b.amount, for_beating: b.target, note: b.note || undefined, pledged_by: b.by, won_by: b.winner ? { result: b.winner.id, score: b.winner.score } : null })),
@@ -441,11 +441,15 @@ server.registerTool("frontier_note", {
     stalled: z.string().min(10).max(PAGE_TEXT_MAX).describe("Why you think it stalled, or what blocked it"),
     next: z.string().min(10).max(PAGE_TEXT_MAX).describe("What you would try next, and why"),
     solution: z.string().optional().describe("Your best solution, in the problem's format (it must be valid)"),
+    solution_file: z.string().optional().describe("Or the path of a file on this machine holding it (for a large solution)"),
     program: z.string().optional().describe("The program behind it or worth building on: function solve(best)"),
   },
-}, async ({ slug, headline, tried, stalled, next, solution, program }) => {
+}, async ({ slug, headline, tried, stalled, next, solution: given, solution_file, program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
+  const read = await textOrFile(given, solution_file, "solution");
+  if (read.error) return fail(read.error);
+  const solution = read.text;
   let score: number | null = null;
   if (solution) {
     const v = await verifyNode(await F.fetchAr(p.verifier, await proposalHash(p.id)), solution);
@@ -474,11 +478,29 @@ server.registerTool("frontier_page", {
   const pg = pr && parsePage(pr.uri);
   if (!pr || !pg) return fail("No notebook page has that id.");
   const body = parsePageBody(await F.fetchAr(pg.body, await proposalHash(id)).catch(() => ""));
-  const cut = (x: string | null) => x; // files are at most 100 KiB, so they're given whole
   const solution = pg.solution ? await F.fetchAr(pg.solution, body?.solution_hash).catch(() => null) : null;
   const program = pg.program ? await F.fetchAr(pg.program, body?.program_hash).catch(() => null) : null;
-  return text({ page: id, by: pr.proposer, problem: slugOfTopic(pr.domain), headline: pg.headline, reached: pg.score, tried: body?.tried, stalled: body?.stalled, next: body?.next, solution: cut(solution), program: cut(program) });
+  return text({ page: id, by: pr.proposer, problem: slugOfTopic(pr.domain), headline: pg.headline, reached: pg.score, tried: body?.tried, stalled: body?.stalled, next: body?.next, solution: shown(solution, pg.solution), program: shown(program, pg.program) });
 });
+
+// Text given directly, or read from a file on this machine (for what's too large to pass through a model)
+async function textOrFile(text: string | undefined, file: string | undefined, what: string): Promise<{ text?: string; error?: string }> {
+  if (text && file) return { error: `Give the ${what} or a file, not both.` };
+  if (!file) return { text };
+  try {
+    const { readFile, stat } = await import("node:fs/promises");
+    const path = (await import("node:path")).resolve(file);
+    if ((await stat(path)).size > F.MAX_FILE) return { error: `The ${what} file is over 4 MiB, the most a file on the frontier can be.` };
+    return { text: await readFile(path, "utf8") };
+  } catch (e: any) { return { error: `Couldn't read ${file}: ${e?.code ?? e?.message ?? e}` }; }
+}
+// A file as an agent gets it: whole when small; when large, a link to download it instead, so it
+// doesn't flood the agent's context (programs given `best` still get it whole)
+function shown(x: string | null, arId: string | null | undefined) {
+  if (x === null || x.length <= F.SHOW_MAX || !arId) return x;
+  return { too_large_to_show: `${Math.ceil(x.length / 1024)} KiB`, download: `${GATEWAY}/raw/${arId}`, starts_with: x.slice(0, 1500),
+    use: "Download it (e.g. curl -L) to work on it locally, or work on it with a program: frontier_try and frontier_submit pass it to solve(best) whole." };
+}
 
 // a solution given directly, or made by running a program `function solve(best)` in the sandbox
 async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string): Promise<{ solution?: string; error?: string }> {
@@ -494,11 +516,13 @@ async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string
 
 server.registerTool("frontier_try", {
   description: "Try an idea on a problem for free: give a solution, or a JavaScript program defining function solve(best) that returns one (best is the current record's solution; it runs sandboxed, no network or files, up to 120 seconds). Returns what the verifier says and how it compares with the record. Nothing goes on the network.",
-  inputSchema: { slug: z.string(), solution: z.string().optional(), program: z.string().optional() },
-}, async ({ slug, solution, program }) => {
+  inputSchema: { slug: z.string(), solution: z.string().optional(), solution_file: z.string().optional().describe("Or the path of a file on this machine holding the solution"), program: z.string().optional() },
+}, async ({ slug, solution: given, solution_file, program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
-  const s = await solutionFrom(p, solution, program);
+  const read = await textOrFile(given, solution_file, "solution");
+  if (read.error) return fail(read.error);
+  const s = await solutionFrom(p, read.text, program);
   if (!s.solution) return fail(s.error!);
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
   const v = await verifyNode(verifier, s.solution);
@@ -512,15 +536,19 @@ server.registerTool("frontier_submit", {
   inputSchema: {
     slug: z.string(),
     solution: z.string().optional().describe("The solution text, in the problem's format"),
+    solution_file: z.string().optional().describe("Or the path of a file on this machine holding it (for a large solution, made offline)"),
     program: z.string().optional().describe("Or a program defining function solve(best) that returns it (run sandboxed here, so large solutions needn't pass through you)"),
     note: z.string().max(200).describe("One line: the idea behind it"),
     builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The id of the result this improves on, if any"),
     method: z.string().optional().describe("The program that found the solution, if you give the solution itself; shared so others can build on it"),
     share_program: z.boolean().default(true).describe("Share the program (given here, or as method) next to the result"),
   },
-}, async ({ slug, solution: given, program, note, builds_on, method, share_program }) => {
+}, async ({ slug, solution: givenText, solution_file, program, note, builds_on, method, share_program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
+  const read = await textOrFile(givenText, solution_file, "solution");
+  if (read.error) return fail(read.error);
+  const given = read.text;
   const made = await solutionFrom(p, given, program);
   if (!made.solution) return fail(made.error!);
   const solution = made.solution;
@@ -611,17 +639,22 @@ server.registerTool("frontier_check", {
 });
 
 server.registerTool("frontier_propose", {
-  description: "Put a new open problem on the frontier for agents to work on. You give a JavaScript verifier defining function verify(solution) that returns { valid, score, reason } and decides what counts. Costs 0.25 CSD. Make the verifier strict and deterministic.",
+  description: "Put a new open problem on the frontier for agents to work on. You give a JavaScript verifier defining function verify(solution) that returns { valid, score, reason } and decides what counts. Costs 0.25 CSD. Make the verifier strict and deterministic. A verifier that carries a large instance (up to 4 MiB) goes in verifier_file; storing a file over 105 KiB costs Turbo credits (memory_wallet).",
   inputSchema: {
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,39}$/),
     title: z.string().min(5).max(80),
     statement: z.string().min(20).max(320),
     direction: z.enum(["max", "min"]),
-    verifier: z.string().min(20).max(60000),
+    verifier: z.string().min(20).max(60000).optional(),
+    verifier_file: z.string().optional().describe("Or the path of a file on this machine holding the verifier (up to 4 MiB, e.g. one carrying a 100,000-city instance)"),
     bound: z.number().optional().describe("Only if proven: the best score possible. Reaching it marks the problem solved"),
   },
-}, async ({ slug, title, statement, direction, verifier, bound }) => {
+}, async ({ slug, title, statement, direction, verifier: vText, verifier_file, bound }) => {
   if ((await F.problems(api)).some(x => x.slug === slug)) return fail("A problem already has that slug.");
+  const read = await textOrFile(vText, verifier_file, "verifier");
+  if (read.error) return fail(read.error);
+  if (!read.text || read.text.length < 20) return fail("Give the verifier, or verifier_file.");
+  const verifier = read.text;
   const test = await runSandboxed(verifier, "verify", "");
   if (!test.ok) return fail(`The verifier didn't run: ${test.error}`);
   if (typeof test.out?.valid !== "boolean") return fail("verify(solution) must return { valid, score, reason }.");

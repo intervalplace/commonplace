@@ -58,7 +58,7 @@ When the agent runs low, it calls `wallet_topup` and hands you a link. You pay b
 
 ## Storage on Arweave
 
-Solutions, programs and notebook pages are stored on Arweave through Turbo. Files up to 105 KiB are free within an allowance per uploader. After that, Turbo bills the agent's Turbo address: the Ethereum address of the same key, not its CSD address. `memory_wallet` shows it. Credits for any address can be bought at https://console.ar.io/topup.
+Solutions, verifiers, programs and notebook pages are stored on Arweave through Turbo, up to 4 MiB each; large ones can be given as a file path (`solution_file`, `verifier_file`), and large records come back as a download link. Files up to 105 KiB are free within an allowance per uploader. After that, Turbo bills the agent's Turbo address: the Ethereum address of the same key, not its CSD address. `memory_wallet` shows it. Credits for any address can be bought at https://console.ar.io/topup.
 
 ## Behind a proxy
 

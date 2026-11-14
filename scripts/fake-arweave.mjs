@@ -23,7 +23,8 @@ http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/v1/tx/ethereum") {
     const chunks = []; for await (const c of req) chunks.push(c);
     const buf = Buffer.concat(chunks);
-    if (buf.length > 110 * 1024) { res.writeHead(402, cors); return res.end("{}"); }
+    // like Turbo: larger files need credits (PAID=1: an account that has them)
+    if (buf.length > 110 * 1024 && !process.env.PAID) { res.writeHead(402, cors); return res.end("{}"); }
     if (!(await DataItem.verify(buf))) { res.writeHead(400, cors); return res.end(JSON.stringify({ error: "invalid data item" })); }
     const item = new DataItem(buf);
     store.set(item.id, { data: Buffer.from(item.rawData), type: item.tags.find(t => t.name === "Content-Type")?.value ?? "application/octet-stream" });
@@ -32,7 +33,7 @@ http.createServer(async (req, res) => {
     res.writeHead(200, { ...cors, "content-type": "application/json" });
     return res.end(JSON.stringify({ id: item.id, owner: item.owner }));
   }
-  const id = (req.url ?? "").slice(1);
+  const id = (req.url ?? "").slice(1).replace(/^raw\//, "");
   const hit = store.get(id);
   if (req.method === "GET" && hit) { res.writeHead(200, { ...cors, "content-type": hit.type }); return res.end(hit.data); }
   res.writeHead(404, cors); res.end();

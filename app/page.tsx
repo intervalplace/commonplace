@@ -1607,25 +1607,55 @@ const K_VERDICTS = "commonplace.verdicts1";
 let verdicts: Record<string, Verdict> | null = null;
 const verdictsNow = () => (verdicts ??= load(K_VERDICTS, {} as Record<string, Verdict>));
 const verdictListeners = new Set<() => void>();
-const verifying = new Set<string>();
+const verifying = new Map<string, Promise<Verdict | undefined>>();
 const verifiers = new Map<string, Promise<string | null>>();
-let verifyQueue: Promise<void> = Promise.resolve();
-function verifyResult(problem: Entry, r: ResultEntry) {
-  if (verdictsNow()[r.id] || verifying.has(r.id) || r.pending) return;
-  verifying.add(r.id);
-  verifyQueue = verifyQueue.then(async () => {
+// Problems whose files are large (a verifier carrying a big instance, solutions of hundreds of KB):
+// for these a browser checks results only until it finds the record, and the rest on request
+const LARGE = 256 * 1024;
+const K_LARGE = "commonplace.large1";
+const largeProblems = { has: (id: string) => load(K_LARGE, [] as string[]).includes(id),
+  add: (id: string) => { const xs = load(K_LARGE, [] as string[]); if (!xs.includes(id)) save(K_LARGE, [...xs, id]); } };
+let verifyQueue: Promise<unknown> = Promise.resolve();
+function verifyResult(problem: Entry, r: ResultEntry): Promise<Verdict | undefined> {
+  const have = verdictsNow()[r.id];
+  if (have || r.pending) return Promise.resolve(have);
+  const running = verifying.get(r.id);
+  if (running) return running;
+  const job = verifyQueue.then(async (): Promise<Verdict | undefined> => {
     try {
       let v = verifiers.get(problem.id);
       if (!v) { v = fetchDoc(problem.problem!.verifier, problem.hash ?? "").then(d => (d.matches ? d.text : null)); verifiers.set(problem.id, v); v.catch(() => verifiers.delete(problem.id)); }
       const verifier = await v;
-      if (verifier === null) return; // the stored verifier isn't the one the problem pinned: verdicts mean nothing
+      if (verifier === null) return undefined; // the stored verifier isn't the one the problem pinned: verdicts mean nothing
+      if (verifier.length > LARGE) largeProblems.add(problem.id);
       const sol = await fetchDoc(r.result.solution, r.hash ?? "");
+      if (sol.bytes > LARGE) largeProblems.add(problem.id);
       const out: Verdict = !sol.matches ? { ok: false, score: NaN, reason: "the stored solution isn't the one this result fingerprinted" }
         : await verifyInBrowser(verifier, sol.text).then(x => ({ ok: x.valid && sameScore(x.score, r.result.score), score: x.score, reason: x.valid ? undefined : x.reason }));
       const all = verdictsNow(); all[r.id] = out; save(K_VERDICTS, all);
       verdictListeners.forEach(f => f());
-    } catch { /* a gateway that didn't answer: try again next time */ } finally { verifying.delete(r.id); }
+      return out;
+    } catch { return undefined; /* a gateway that didn't answer: try again next time */ } finally { verifying.delete(r.id); }
   });
+  verifying.set(r.id, job);
+  verifyQueue = job;
+  return job;
+}
+// A problem's results, best claims first: all of them (up to 50), or for a large problem only until
+// one verifies, which is the record (and at most 5 downloads); the rest are checked on request
+const autoRunning = new Set<string>();
+async function autoVerify(problem: Entry, rs: ResultEntry[]) {
+  if (autoRunning.has(problem.id)) return;
+  autoRunning.add(problem.id);
+  try {
+    let fetched = 0;
+    for (const r of rs) {
+      const cached = verdictsNow()[r.id];
+      const v = cached ?? await verifyResult(problem, r);
+      if (!cached) fetched++;
+      if (largeProblems.has(problem.id) && (v?.ok || fetched >= 5)) break;
+    }
+  } finally { autoRunning.delete(problem.id); }
 }
 function useVerdicts() {
   const [, bump] = useState(0);
@@ -1692,7 +1722,7 @@ function useFrontier(c: Ctx) {
     for (const p of f.problems) {
       const dir = p.problem!.direction;
       const rs = f.resultsFor(p.problem!.slug).slice().sort((a, b) => (better(dir, a.result.score, b.result.score) ? -1 : 1)).slice(0, 50);
-      for (const r of rs) verifyResult(p, r);
+      autoVerify(p, rs);
     }
   }, [f.problems.length, nResults]); // eslint-disable-line react-hooks/exhaustive-deps
   return f;

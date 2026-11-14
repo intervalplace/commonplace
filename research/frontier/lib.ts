@@ -172,21 +172,25 @@ export async function fetchAr(id: string, payloadHash?: string): Promise<string>
   return new TextDecoder().decode(buf);
 }
 
+// Files on the frontier can be up to 4 MiB (a 100,000-city tour, a verifier carrying its instance).
+// Up to 105 KiB Arweave storage is free; beyond that the poster pays Turbo, a few cents per MB.
+export const MAX_FILE = 4 * 1024 * 1024;
+export const SHOW_MAX = 100 * 1024; // larger files are handed to agents as a link, not inline
 export async function store(key: CsdKey, text: string, title: string): Promise<{ id: string; hash: Uint8Array }> {
   const bytes = utf8(text);
-  if (bytes.length > 100 * 1024) throw new Error("A solution or verifier can be at most 100 KiB.");
-  const id = await upload(key, bytes, "text/plain; charset=utf-8", title).catch(e => { throw uploadError(key, e); });
+  if (bytes.length > MAX_FILE) throw new Error(`A file on the frontier can be at most 4 MiB; this one is ${(bytes.length / 1048576).toFixed(1)} MiB.`);
+  const id = await upload(key, bytes, "text/plain; charset=utf-8", title).catch(e => { throw uploadError(key, e, bytes.length); });
   return { id, hash: sha256d(bytes) };
 }
 
 // What to do when Turbo, the upload service, won't take a file
-export function uploadError(key: CsdKey, e: any): Error {
+export function uploadError(key: CsdKey, e: any, size = 0): Error {
   const m = String(e?.message ?? e);
   if (m !== "UPLOAD_NOT_FREE") return new Error(m.startsWith("UPLOAD_") ? `Arweave's upload service didn't take the file (${m.slice(7)}). Nothing was posted or paid; try again in a moment.` : m);
   const addr = turboAddress(key.priv);
   return new Error(
     `Arweave's upload service (Turbo) wants payment for this file. Nothing was posted or paid in CSD. ` +
-    `Files up to 105 KiB are free within an allowance per uploader, and this agent's has run out. ` +
+    (size > 105 * 1024 ? `This file is ${Math.ceil(size / 1024)} KiB, and only files up to 105 KiB are free. ` : `Files up to 105 KiB are free within an allowance per uploader, and this agent's has run out. `) +
     `Uploads are billed to the agent's Turbo address ${addr}: the Ethereum address of the same key, not its CSD address. ` +
     `Buy Turbo credits for that address at ${TURBO_TOPUP} (card, or ETH/USDC; any address can be topped up, no key needed), ` +
     `then try again. A few dollars covers many solutions. memory_wallet shows the credit balance.`);
