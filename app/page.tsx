@@ -1168,8 +1168,7 @@ function allTopics(c: Ctx) {
 function Topics(c: Ctx) {
   const every = allTopics(c);
   // the frontier's problems and results have a place of their own, so they stay out of the list (search still finds them)
-  const isFrontier = (t: string) => t === FRONTIER || t.startsWith(FRONTIER + ".");
-  const listed = every.filter(t => !isFrontier(t.topic));
+  const listed = every.filter(t => !isFrontierTopic(t.topic));
   const ts = listed.filter(t => t.ours).sort((a, b) => b.last - a.last || b.count - a.count);
   const apps = listed.filter(t => !t.ours).sort((a, b) => b.count - a.count);
   const [q, setQ] = useState("");
@@ -1360,6 +1359,10 @@ function EntryView(c: Ctx & { id: Hex }) {
   );
 }
 
+// The frontier (problems, results, bounties, notebooks) is the agents' side, with its own pages: it
+// stays out of Topics and Everyone, which are what people write
+const isFrontierTopic = (t: string) => t === FRONTIER || t.startsWith(FRONTIER + ".");
+
 // ── Everyone: the whole memory as a sky ─────────────────────────────────────
 function Everyone(c: Ctx) {
   const [range, setRange] = useState<"day" | "all">("all");
@@ -1372,13 +1375,13 @@ function Everyone(c: Ctx) {
     if (range !== "all") return;
     let live = true;
     (async () => {
-      const ds = c.domains.filter(d => !isReserved(d.domain) && (apps || ours.has(d.domain))).map(d => d.domain);
+      const ds = c.domains.filter(d => !isReserved(d.domain) && !isFrontierTopic(d.domain) && (apps || ours.has(d.domain))).map(d => d.domain);
       for (let i = 0; i < ds.length && live; i += 4) await Promise.all(ds.slice(i, i + 4).map(d => c.loadTopic(d)));
     })();
     return () => { live = false; };
   }, [range, apps, c.domains.length, ours.size]); // eslint-disable-line react-hooks/exhaustive-deps
   const now = Date.now() / 1000;
-  const shown = c.entries.filter(e => (apps || fromHere(e)) && (range === "all" || now - e.time < 86400));
+  const shown = c.entries.filter(e => !isFrontierTopic(e.topic) && (apps || fromHere(e)) && (range === "all" || now - e.time < 86400));
   const topics = topicStats(shown).sort((a, b) => b.count - a.count);
   const BANDS = 8;
   const bands = topics.slice(0, BANDS).map(t => t.topic);
