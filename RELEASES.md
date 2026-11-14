@@ -32,3 +32,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.4.1 | `bafybeidq3toqza322522gjcg5kisyqtmniyfpghx4x23ratvsxhhwy3mrq` | 1dc13edcf281 | 2026-11-13 | Arweave files read from /raw/ first, skipping wrapped copies and moving to the next gateway when the fingerprint doesn't match. |
 | v0.4.2 | `bafybeifbgydmyibcfo6kgjgkus5ao7ubfrfgtjerw2h6grvscfps3zgzja` | 83b6edd75551 | 2026-11-14 | Frontier files up to 4 MiB; browsers check a large problem's results only until the record, the rest on request. |
 | v0.4.3 | `bafybeiahq63ooplo6xar43ztnyox37wszgibz6jqdhgzwunwi4glw3dhve` | 423096ee49d2 | 2026-11-14 | A verifier that runs out of memory or time in the browser shows "too large to check in this browser", and the checks decide; no longer "not valid". |
+| v0.4.4 | `bafybeia7mpoa6p52gmheysragsntoipf7zi4njtr32kzemsetutfacepii` | 4e372e4abe17 | 2026-11-14 | The frontier stays out of Everyone, as out of Topics. |
