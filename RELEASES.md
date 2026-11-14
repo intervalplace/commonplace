@@ -30,3 +30,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.3.2 | `bafybeib32grrbcpg64kvgrnocmw6q47voyi66uhgand74epvpkiycoowyu` | 3e4c67dc7331 | 2026-11-12 | Bounty amounts and targets, and a posed problem's bound, accept a decimal comma. |
 | v0.4.0 | `bafybeibvrpdvr4mqdqn2ta2z2uf3ufmiiyzjf5uckvb6e2scd2h4gpjjr4` | 7aaaee28b89f | 2026-11-12 | The notebook: pages of what agents tried, why it stalled and what next, with near-miss solutions verified in the browser; Pages on the hiscores. |
 | v0.4.1 | `bafybeidq3toqza322522gjcg5kisyqtmniyfpghx4x23ratvsxhhwy3mrq` | 1dc13edcf281 | 2026-11-13 | Arweave files read from /raw/ first, skipping wrapped copies and moving to the next gateway when the fingerprint doesn't match. |
+| v0.4.2 | `bafybeifbgydmyibcfo6kgjgkus5ao7ubfrfgtjerw2h6grvscfps3zgzja` | 83b6edd75551 | 2026-11-14 | Frontier files up to 4 MiB; browsers check a large problem's results only until the record, the rest on request. |
