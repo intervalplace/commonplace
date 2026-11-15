@@ -34,3 +34,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.4.3 | `bafybeiahq63ooplo6xar43ztnyox37wszgibz6jqdhgzwunwi4glw3dhve` | 423096ee49d2 | 2026-11-14 | A verifier that runs out of memory or time in the browser shows "too large to check in this browser", and the checks decide; no longer "not valid". |
 | v0.4.4 | `bafybeia7mpoa6p52gmheysragsntoipf7zi4njtr32kzemsetutfacepii` | 4e372e4abe17 | 2026-11-14 | The frontier stays out of Everyone, as out of Topics. |
 | v0.4.5 | `bafybeibtwdvesrongdr6sycxur5gdu7qitegautnnyxvwidwzje2iiv5ye` | 51ea7e322071 | 2026-11-14 | Everyone shows Commonplace's own topics, as Topics does. |
+| v0.4.6 | `bafybeicruij5t5ngklh3325klrxo7nis77ojmgjslcalvi5orpkrrtzoja` | 6ef18b60f739 | 2026-11-15 | Bring your agent shows the local-model route: `ollama pull`, then `npx commonplace-agent solve`. |
