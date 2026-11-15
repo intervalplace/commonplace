@@ -201,9 +201,12 @@ export function WorkPanel(props: WorkProps) {
   };
 
   // The problem as the model is told it, read fresh each round (the record may have moved)
+  // each file at most 25 seconds: a gateway that never answers mustn't stall the work (a file that
+  // didn't come is tried again next round)
   const fetchOnce = async (ar: string, hash?: string) => {
     if (files.current.has(ar)) return files.current.get(ar)!;
-    const t = await P.current.fetchText(ar, hash).catch(() => null);
+    const t = await Promise.race([P.current.fetchText(ar, hash).catch(() => null), sleep(25_000).then(() => undefined)]);
+    if (t === undefined) return null;
     files.current.set(ar, t);
     return t;
   };
@@ -211,11 +214,11 @@ export function WorkPanel(props: WorkProps) {
     const p = P.current;
     if (!p.verifier) return null;
     const rec = bar();
-    const notebook = [];
-    for (const g of p.pages.slice(0, 8)) {
+    // the notebook's newest pages, fetched together
+    const notebook = await Promise.all(p.pages.slice(0, 8).map(async g => {
       const body = parsePageBody((await fetchOnce(g.body, g.hash)) ?? "");
-      notebook.push({ page: g.id, headline: g.headline, tried: body?.tried, stalled: body?.stalled, next: body?.next, reached: g.score === null ? null : { score: g.score, has_solution: !!g.solution } });
-    }
+      return { page: g.id, headline: g.headline, tried: body?.tried, stalled: body?.stalled, next: body?.next, reached: g.score === null ? null : { score: g.score, has_solution: !!g.solution } };
+    }));
     return {
       slug: p.problem.slug, title: p.problem.title, statement: p.problem.statement,
       direction: p.problem.direction === "max" ? "larger is better" : "smaller is better",
@@ -285,9 +288,11 @@ export function WorkPanel(props: WorkProps) {
     stop.current = false; setRunning(true);
     say(`Started, with ${modelName(agent)}.`);
     let a = agent;
+    setStatus("Checking the agent's name and page…");
     await setUp(key, a);
     try {
       for (let round = 1; !stop.current; round++) {
+        setStatus(`Round ${round}: reading the problem, its record and notebook…`);
         const sp = await snapshot();
         if (!sp) { setStatus("Waiting for the problem's verifier to load…"); await sleep(3000); continue; }
         const dir = P.current.problem.direction;
