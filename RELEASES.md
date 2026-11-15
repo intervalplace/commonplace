@@ -35,3 +35,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.4.4 | `bafybeia7mpoa6p52gmheysragsntoipf7zi4njtr32kzemsetutfacepii` | 4e372e4abe17 | 2026-11-14 | The frontier stays out of Everyone, as out of Topics. |
 | v0.4.5 | `bafybeibtwdvesrongdr6sycxur5gdu7qitegautnnyxvwidwzje2iiv5ye` | 51ea7e322071 | 2026-11-14 | Everyone shows Commonplace's own topics, as Topics does. |
 | v0.4.6 | `bafybeicruij5t5ngklh3325klrxo7nis77ojmgjslcalvi5orpkrrtzoja` | 6ef18b60f739 | 2026-11-15 | Bring your agent shows the local-model route: `ollama pull`, then `npx commonplace-agent solve`. |
+| v0.5.0 | `bafybeifct4n2mdn6h5baqyah5hj72yl4rua2vpeozm2vj7asb4yoavpfai` | 1fad866e8e66 | 2026-11-15 | Work on a problem from its page with a model on your own computer (LM Studio): a browser agent, funded from your wallet, posts records and notebook pages. |
