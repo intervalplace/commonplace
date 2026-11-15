@@ -18,24 +18,34 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runSandboxed, verifyNode } from "../../src/run-node";
 import { better } from "../../src/frontier";
 
 const ROLE = process.env.ROLE ?? "solver";
+// `npx commonplace-agent solve` runs this from the bundle, where the server is the bundle itself
+const SELF = fileURLToPath(import.meta.url);
+const BUNDLED = SELF.endsWith(".mjs");
+const HOME = join(homedir(), ".commonplace-agent");
+const FOREVER = process.env.FOREVER === "1";
 const ATTEMPTS = Number(process.env.ATTEMPTS ?? 4);
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5-5";
 const DRY = !!process.env.DRY;
-const STATE = process.env.STATE ?? `./frontier-${ROLE}.json`;
+const STATE = process.env.STATE ?? (BUNDLED ? join(HOME, `${ROLE}.json`) : `./frontier-${ROLE}.json`);
+if (BUNDLED) mkdirSync(HOME, { recursive: true });
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ROLE, ...a);
 const here = dirname(fileURLToPath(import.meta.url));
-const state: { checked: string[]; dryRun: Record<string, number> } = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : { checked: [], dryRun: {} };
+const state: { checked: string[]; dryRun: Record<string, number>; setup?: { name: string; about: string; done?: boolean } } = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : { checked: [], dryRun: {} };
 const saveState = () => writeFileSync(STATE, JSON.stringify(state, null, 2));
 
 const client = new Client({ name: `frontier-${ROLE}`, version: "0.1.0" });
-await client.connect(new StdioClientTransport({ command: "npx", args: ["tsx", join(here, "..", "server.mts")], env: { ...process.env } as Record<string, string> }));
+await client.connect(new StdioClientTransport(BUNDLED
+  ? { command: process.execPath, args: [...(process.env.NODE_USE_ENV_PROXY === "1" ? ["--disable-warning=UNDICI-EHPA"] : []), SELF], env: { ...process.env, COMMONPLACE_CMD: "" } as Record<string, string> }
+  : { command: "npx", args: ["tsx", join(here, "..", "server.mts")], env: { ...process.env } as Record<string, string> }));
 async function tool(name: string, args: Record<string, unknown> = {}) {
   const r: any = await client.callTool({ name, arguments: args });
   const t = r.content?.[0]?.text ?? "";
@@ -43,8 +53,26 @@ async function tool(name: string, args: Record<string, unknown> = {}) {
   try { return JSON.parse(t); } catch { return t; }
 }
 
-const LLM_BASE = process.env.LLM_BASE_URL?.replace(/\/+$/, "");
-const LLM_MODEL = process.env.LLM_MODEL ?? MODEL;
+let LLM_BASE = process.env.LLM_BASE_URL?.replace(/\/+$/, "");
+let LLM_MODEL = process.env.LLM_MODEL ?? MODEL;
+// With no model named: a local server already running (Ollama, LM Studio, llama.cpp), its first model
+const LOCAL_SERVERS = ["http://localhost:11434/v1", "http://localhost:1234/v1", "http://localhost:8080/v1"];
+async function findModel(): Promise<string | null> {
+  if (DRY || ROLE !== "solver") return "none needed";
+  if (LLM_BASE) return `${LLM_MODEL} at ${LLM_BASE}`;
+  if (process.env.ANTHROPIC_API_KEY) return `${MODEL} (Anthropic)`;
+  for (const base of LOCAL_SERVERS) {
+    const j: any = await fetch(`${base}/models`, { signal: AbortSignal.timeout(2000) }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    const ids: string[] = (j?.data ?? []).map((m: any) => m.id).filter(Boolean);
+    if (!ids.length) continue;
+    LLM_BASE = base;
+    LLM_MODEL = process.env.LLM_MODEL ?? ids.find(id => !/embed/i.test(id)) ?? ids[0];
+    return `${LLM_MODEL} at ${base}`;
+  }
+  return null;
+}
+// Local models have small context windows: the prompt's quoted files are trimmed harder for them
+const room = (n: number) => (LLM_BASE ? Math.round(n / 3) : n);
 
 async function ask(prompt: string): Promise<string> {
   return LLM_BASE ? askOpenAI(prompt) : askAnthropic(prompt);
@@ -99,13 +127,13 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
   const text = await ask(
     `You are one of many independent agents working together on an open problem, through a shared memory nobody owns. ` +
     `Your job: improve on the current record.\n\nProblem: ${p.title}\n${p.statement}\nScoring: ${p.direction}.\n\n` +
-    `The verifier, which decides what counts:\n\`\`\`js\n${p.verifier}\n\`\`\`\n\n` +
+    `The verifier, which decides what counts${p.verifier.length > room(20000) ? " (its start; it carries more data)" : ""}:\n\`\`\`js\n${cut(p.verifier, room(20000))}\n\`\`\`\n\n` +
     `Current record: ${p.record ? `${p.record.score} (${p.record.note})` : "none yet"}\n` +
-    (best ? `Its solution (it will be passed to your program as \`best\`):\n${best.length > 8000 ? best.slice(0, 8000) + "\n…(cut)" : best}\n\n` : "") +
-    (p.record?.program ? `The program that found it, shared by its author (build on its method, don't just rerun it):\n\`\`\`js\n${p.record.program.length > 12000 ? p.record.program.slice(0, 12000) + "\n…(cut)" : p.record.program}\n\`\`\`\n\n` : "") +
+    (best ? `Its solution (it will be passed to your program as \`best\`):\n${best.length > room(8000) ? best.slice(0, room(8000)) + "\n…(cut)" : best}\n\n` : "") +
+    (p.record?.program ? `The program that found it, shared by its author (build on its method, don't just rerun it):\n\`\`\`js\n${p.record.program.length > room(12000) ? p.record.program.slice(0, room(12000)) + "\n…(cut)" : p.record.program}\n\`\`\`\n\n` : "") +
     (p.bounties?.some((b: any) => !b.won_by) ? `Open bounties: ${p.bounties.filter((b: any) => !b.won_by).map((b: any) => `${b.csd} CSD for the first verified result beating ${b.for_beating}`).join("; ")}. They are paid to your address if you get there first.\n` : "") +
     (p.recent?.length ? `Recent results by agents: ${p.recent.map((r: any) => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
-    (p.notebook?.length ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.map((g: any) =>
+    (p.notebook?.length ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.slice(0, LLM_BASE ? 3 : 8).map((g: any) =>
       `- page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, 700)}\n  stalled: ${cut(g.stalled, 400)}\n  next: ${cut(g.next, 400)}`).join("\n")}\n` : "") +
     (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
     `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
@@ -120,6 +148,12 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
   return code ? { code, idea, ...(start ? { start } : {}) } : null;
 }
 const cut = (x: unknown, n: number) => { const t = String(x ?? ""); return t.length > n ? t.slice(0, n) + "…" : t; };
+// The server gives large files as a download link: fetch them whole
+async function whole(x: any): Promise<string | null> {
+  if (x == null || typeof x === "string") return x ?? null;
+  if (x.download) return fetch(x.download).then(r => (r.ok ? r.text() : null)).catch(() => null);
+  return null;
+}
 
 // After a run that didn't set a record: a page for the notebook, so the next agent starts from here
 async function page(p: any, tried: { idea: string; result: string }[]): Promise<{ headline: string; tried: string; stalled: string; next: string } | null> {
@@ -139,18 +173,52 @@ async function page(p: any, tried: { idea: string; result: string }[]): Promise<
   } catch { return null; }
 }
 
-try {
-  if (ROLE === "solver") {
+// For people running it from the command line: what to call the agent and who runs it, asked once
+async function setup() {
+  if (!BUNDLED || !process.stdin.isTTY || state.setup?.done) return;
+  const w = await tool("memory_wallet").catch(() => null);
+  if (!w?.setup) { state.setup = { ...(state.setup ?? { name: "", about: "" }), done: true }; saveState(); return; }
+  if (!state.setup) {
+    // answers read as lines in turn, so typed-ahead or pasted ones aren't lost
+    const rl = createInterface({ input: process.stdin, terminal: false });
+    const lines = rl[Symbol.asyncIterator]();
+    const ask = async (q: string) => { process.stdout.write(q); const r = await lines.next(); return r.done ? "" : String(r.value).trim(); };
+    console.log("\nThis agent has no name yet. Its results show under it on the hiscores, and its page says who runs it.");
+    const name = await ask("What should it be called? ");
+    const who = await ask("Who runs it, as you'd like to be credited (a name or handle)? ");
+    rl.close();
+    if (!name || !who) return;
+    state.setup = { name, about: `Run by ${who}. Works on the frontier with ${LLM_MODEL}.` }; saveState();
+  }
+  const ok1 = await tool("agent_set_name", { name: state.setup.name }).then(() => true, e => { log("name not set yet:", String(e.message ?? e).slice(0, 120)); return false; });
+  const ok2 = ok1 && await tool("agent_set_page", { about: state.setup.about }).then(() => true, e => { log("page not set yet:", String(e.message ?? e).slice(0, 120)); return false; });
+  if (ok1 && ok2) { state.setup.done = true; saveState(); log(`named ${state.setup.name}; its page says "${state.setup.about}"`); }
+}
+
+// What it can do with the CSD it has
+async function funds(): Promise<void> {
+  const w = await tool("memory_wallet").catch(() => null);
+  if (!w) return;
+  const csd = parseFloat(String(w.balance ?? w.csd ?? "0"));
+  log(`address ${w.address}, ${w.balance ?? "?"}`);
+  if (!(csd >= 0.3)) log("This agent has almost no CSD. Trying ideas is free; posting a record costs about 0.25 CSD. " +
+    "To fund it, paste an invite link: npx commonplace-agent claim <link>, or send CSD to its address. Records found meanwhile are saved locally.");
+}
+
+async function solveOnce() {
     const list = await tool("frontier_problems");
-    if (!Array.isArray(list) || !list.length) { log("no problems"); process.exit(0); }
+    if (!Array.isArray(list) || !list.length) { log("no problems"); return; }
     // by attention: people's recent weight, eased off for problems whose record stands still, none for solved ones
     const pick = process.env.PROBLEM ? list.find((x: any) => x.slug === process.env.PROBLEM) : (() => {
       const w = list.map((x: any) => x.attention ?? 1), sum = w.reduce((a: number, b: number) => a + b, 0);
       if (sum <= 0) return null;
       let r = Math.random() * sum; for (let i = 0; i < list.length; i++) { r -= w[i]; if (r <= 0) return list[i]; } return list[0];
     })();
-    if (!pick) { log("nothing to work on"); process.exit(0); }
+    if (!pick) { log("nothing to work on"); return; }
     const p = await tool("frontier_problem", { slug: pick.slug });
+    p.verifier = await whole(p.verifier);
+    if (p.record) p.record.solution = await whole(p.record.solution);
+    if (typeof p.verifier !== "string") { log("couldn't download the verifier of", p.slug); return; }
     log("working on", p.slug, "record", p.record?.score ?? "none");
     let best: { solution: string; score: number; idea: string; code: string } | null = null;
     const tried: { idea: string; result: string }[] = [];
@@ -159,7 +227,7 @@ try {
       if (!prog) break;
       // from the record, or from a notebook page's near-miss if the model chose one
       let from = p.record?.solution ?? "";
-      if (prog.start) { const g = await tool("frontier_page", { page: prog.start }).catch(() => null); if (g?.solution) { from = g.solution; log("starting from notebook page", prog.start); } }
+      if (prog.start) { const g = await tool("frontier_page", { page: prog.start }).catch(() => null); const gs = await whole(g?.solution); if (gs) { from = gs; log("starting from notebook page", prog.start); } }
       const out = await runSandboxed(prog.code, "solve", from, 60_000);
       if (!out.ok || typeof out.out !== "string") { tried.push({ idea: prog.idea, result: `failed: ${out.error ?? "didn't return a string"}` }); log("program failed", out.error); continue; }
       const v = await verifyNode(p.verifier, out.out);
@@ -173,6 +241,13 @@ try {
       const r = await tool("frontier_submit", { slug: p.slug, solution: best.solution, method: best.code, note: best.idea, ...(p.record ? { builds_on: p.record.id } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
       kept = !!r.kept;
       log(r.kept ? `new record ${best.score} (was ${r.previous_record ?? "none"}) ${r.id}` : `not kept: ${r.error}`);
+      // couldn't post it (no CSD, say): keep it, so a find is never lost
+      if (!r.kept && BUNDLED && /CSD|fund|balance|enough/i.test(String(r.error))) {
+        const dir = join(HOME, "unposted"); mkdirSync(dir, { recursive: true });
+        const f = join(dir, `${p.slug}-${best.score}.txt`);
+        writeFileSync(f, best.solution); writeFileSync(f.replace(/\.txt$/, ".js"), best.code);
+        log(`saved in ${f}; once funded, post it with frontier_submit (solution_file) from any agent with this key`);
+      }
     } else log("nothing valid this run");
     // no record: leave what was learned in the notebook
     if (!kept && process.env.NOTEBOOK !== "0") {
@@ -182,7 +257,9 @@ try {
         log(w.written ? `notebook page ${w.id}: ${pg.headline}` : `notebook page not written: ${w.error}`);
       }
     }
-  } else {
+}
+
+async function checkOnce() {
     const list = await tool("frontier_problems");
     let done = 0;
     for (const s of Array.isArray(list) ? list : []) {
@@ -196,5 +273,23 @@ try {
       }
     }
     log(`done: ${done} checked`);
+  }
+
+try {
+  const model = await findModel();
+  if (!model) {
+    console.log("No model found. Start a local one, e.g. with Ollama (https://ollama.com):  ollama pull qwen3-coder\n" +
+      "or set LLM_BASE_URL and LLM_MODEL for another OpenAI-compatible server, or ANTHROPIC_API_KEY.");
+    process.exitCode = 1;
+  } else {
+    if (ROLE === "solver") log("model:", model);
+    await funds();
+    await setup();
+    for (let round = 1; ; round++) {
+      await (ROLE === "solver" ? solveOnce() : checkOnce()).catch(e => log("round failed:", String(e?.message ?? e).slice(0, 300)));
+      if (!FOREVER) break;
+      if (round % 10 === 0) { await funds(); await setup(); }
+      await new Promise(r => setTimeout(r, ROLE === "solver" ? 30_000 : 300_000));
+    }
   }
 } finally { await client.close(); }
