@@ -44,12 +44,31 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean
     `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
     `aiming to beat the record. It runs in a sandbox with no network or files for at most 60 seconds, so it may search or optimise ` +
     `(use a seeded random generator, not Math.random, so results are repeatable). Build on what has worked. ` +
-    `Answer with one line "IDEA: <the idea in under 150 characters>", then, if your program should start from a notebook page's attached solution instead of the record, a line "START: <page id>", then the program in a \`\`\`js block.`
+    `Answer with one line "IDEA: <the idea in under 150 characters>", then, if your program should start from a notebook page's attached solution instead of the record, a line "START: <page id>", then the program in a \`\`\`js block.` +
+    // small models follow an example far better than a description
+    (k < 1 ? `\n\nYour answer must look exactly like this:\nIDEA: <your idea>\n\`\`\`js\nfunction solve(best) {\n  // your code\n  return solution;\n}\n\`\`\`` : "")
   );
 }
 
+// A function written straight into prose: up to its closing brace (counting braces, outside strings)
+function bareFunction(t: string): string {
+  let depth = 0, started = false, quote: string | null = null;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (quote) { if (c === "\\") i++; else if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "{") { depth++; started = true; }
+    else if (c === "}" && --depth === 0 && started) return t.slice(0, i + 1);
+  }
+  return t;
+}
+
 export function parseProgram(text: string): ProgramReply | null {
-  const code = /```(?:js|javascript)?\n([\s\S]*?)```/.exec(text)?.[1];
+  // a code block, whatever its label, closed or cut off at the end of the reply; or failing that, a
+  // bare solve function (small models skip the block markers, or run out of room before closing them)
+  const blocks = [...text.matchAll(/```[^\n`]*\n([\s\S]*?)(?:```|$)/g)].map(m => m[1]);
+  const fn = /function\s+solve\s*\(/;
+  const code = blocks.find(b => fn.test(b)) ?? blocks[0] ?? (fn.test(text) ? bareFunction(text.slice(text.search(fn))) : undefined);
   // the idea, cut at a word if it's long, so a result's note never ends mid-word
   const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() ?? "an improvement";
   const idea = full.length <= 180 ? full : full.slice(0, 178).replace(/\s+\S*$/, "") + "…";

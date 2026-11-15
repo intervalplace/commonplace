@@ -256,8 +256,9 @@ export function WorkPanel(props: WorkProps) {
   const postPage = async (k: CsdKey, sp: SolverProblem, tried: Attempt[], near: { solution: string; code: string; score: number } | null, a: Saved) => {
     setStatus("The model is writing a notebook page…");
     const ctrl = new AbortController(); abort.current = ctrl;
-    const text = await ask(a, pagePrompt(sp, tried), ctrl.signal).catch(() => "");
-    const d = parsePageDraft(text) ?? fallbackPage(sp, tried, modelName(a));
+    // a model in the browser is too small to write a useful page: the facts of what it tried, instead
+    const d = a.source === "browser" ? fallbackPage(sp, tried, modelName(a))
+      : parsePageDraft(await ask(a, pagePrompt(sp, tried), ctrl.signal).catch(() => "")) ?? fallbackPage(sp, tried, modelName(a));
     const slug = sp.slug;
     setStatus("Storing the notebook page…");
     const attach = near && utf8(near.solution).length <= ATTACH_MAX ? near : null;
@@ -287,7 +288,7 @@ export function WorkPanel(props: WorkProps) {
     if (!agent || !key || (agent.source === "browser" ? !engine.current : !agent.model)) return;
     stop.current = false; setRunning(true);
     say(`Started, with ${modelName(agent)}.`);
-    let a = agent;
+    let a = agent, toldNoCsd = false;
     setStatus("Checking the agent's name and page…");
     await setUp(key, a);
     try {
@@ -306,7 +307,12 @@ export function WorkPanel(props: WorkProps) {
           try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.2 : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
           catch (e) { if (stop.current) break; say(`The model didn't answer: ${errText(e)}`, "bad"); await sleep(5000); continue; }
           const pr = parseProgram(text);
-          if (!pr) { tried.push({ idea: "(no program)", result: "failed: the reply had no ```js block" }); say("The model's reply had no program in it.", "bad"); continue; }
+          if (!pr) {
+            tried.push({ idea: "(no program)", result: "failed: the reply had no program" });
+            const gist = text.replace(/\s+/g, " ").trim();
+            say(gist ? `The model's reply had no program in it. It began: "${gist.slice(0, 140)}${gist.length > 140 ? "…" : ""}"` : "The model's reply was empty.", "bad");
+            continue;
+          }
           let from = sp.record?.solution ?? "";
           if (pr.start) { const g = P.current.pages.find(x => x.id === pr.start); const s = g?.solution ? await fetchOnce(g.solution) : null; if (s) from = s; }
           setStatus(`Round ${round}, program ${i + 1}: running it (up to a minute)…`);
@@ -337,14 +343,16 @@ export function WorkPanel(props: WorkProps) {
           const slug = sp.slug;
           a = loadAgent() ?? a;
           const buf = [...(a.buffer[slug] ?? []), ...tried].slice(-30);
-          const due = Date.now() - (a.pageAt[slug] ?? 0) >= PAGE_EVERY && buf.length >= PAGE_MIN_ATTEMPTS;
+          // a page only once something it tried was valid: if nothing ran and verified, there's nothing
+          // worth telling the next agent
+          const due = Date.now() - (a.pageAt[slug] ?? 0) >= PAGE_EVERY && buf.length >= PAGE_MIN_ATTEMPTS && buf.some(t => /^valid/.test(t.result));
           if (due) {
             try {
               await postPage(key, sp, buf, top, a);
               a = { ...a, pageAt: { ...a.pageAt, [slug]: Date.now() }, buffer: { ...a.buffer, [slug]: [] } };
             } catch (e) {
               a = { ...a, buffer: { ...a.buffer, [slug]: buf } };
-              if (errText(e) === "NO_CSD") say("The agent has no CSD for a notebook page; its attempts are kept for the next one.", "bad");
+              if (errText(e) === "NO_CSD") { if (!toldNoCsd) say("The agent has no CSD for a notebook page; its attempts are kept for the next one.", "bad"); toldNoCsd = true; }
               else if (errText(e) !== "STOPPED") say(`The notebook page wasn't written: ${errText(e)}`, "bad");
             }
           } else a = { ...a, buffer: { ...a.buffer, [slug]: buf } };
