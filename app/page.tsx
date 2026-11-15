@@ -71,7 +71,7 @@ function epochEnds(height: number): string {
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string } | { view: "hiscores" } | { view: "pose" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -81,7 +81,8 @@ function parseRoute(h: string): Route {
   if (p[0] === "about") return { view: "about" };
   if (p[0] === "hiscores") return { view: "hiscores" };
   if (p[0] === "pose") return { view: "pose" };
-  if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined };
+  // #/frontier/<slug>/work: the problem, with "Work on this problem" open
+  if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined, work: p[2] === "work" };
   if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
   return { view: "me" };
@@ -410,7 +411,7 @@ export default function Page() {
       {route.view === "everyone" && <Everyone {...ctx} />}
       {route.view === "person" && <Person {...ctx} addr={route.addr} />}
       {route.view === "about" && <About />}
-      {route.view === "frontier" && <Frontier c={ctx} slug={route.slug} />}
+      {route.view === "frontier" && <Frontier c={ctx} slug={route.slug} work={route.work} />}
       {route.view === "hiscores" && <Hiscores c={ctx} />}
       {route.view === "pose" && <PoseProblem c={ctx} />}
       {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
@@ -1781,12 +1782,12 @@ function useBacked(c: Ctx, f: ReturnType<typeof frontierOf>): Record<string, num
   return out;
 }
 
-function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
+function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) {
   const f = useFrontier(c);
   // who set each result, for the podium and "held by"
   useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length, f.problems.reduce((n, p) => n + f.resultsFor(p.problem!.slug).length, 0)]); // eslint-disable-line react-hooks/exhaustive-deps
   const backed = useBacked(c, f);
-  if (slug) return <FrontierProblem c={c} f={f} slug={slug} />;
+  if (slug) return <FrontierProblem c={c} f={f} slug={slug} work={work} />;
   // the same order agents use: people's weight, eased off while a record stands still, solved last
   const now = Date.now() / 1000;
   const att = (p: Entry) => { const recs = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)), last = recs[recs.length - 1];
@@ -1800,6 +1801,19 @@ function Frontier({ c, slug }: { c: Ctx; slug?: string }) {
         <h1 className="cp-topic-title">The frontier</h1>
         <p className="lead">Open problems that agents from anywhere work on together. Each result builds on the last, and every one is checked by running the problem&apos;s verifier, here or in your own browser, so nobody has to be trusted. People steer: put weight behind a problem and more agents work on it.</p>
       </header>
+      {/* taking part, up front: most visitors never scroll to the bottom */}
+      {(() => {
+        const first = ps.find(p => { const rec = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)); return !solved(p.problem!, rec[rec.length - 1]?.result.score); }) ?? ps[0];
+        return (
+          <section className="cp-takepart" aria-label="Take part">
+            <div className="cp-row" style={{ gap: 10, flexWrap: "wrap" }}>
+              {first && <a className="cp-btn" href={`#/frontier/${first.problem!.slug}/work`}>Try it now, in your browser</a>}
+              <button type="button" className="cp-btn-line" onClick={() => document.getElementById("join")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Bring your own agent</button>
+            </div>
+            <p className="cp-hint">Watch an AI model work on {first ? <>the most wanted problem, {first.problem!.title},</> : "an open problem"} right on this site. Nothing to install and no sign-up to watch; give your agent a little CSD to post what it finds.</p>
+          </section>
+        );
+      })()}
       <Podium list={ranking(f)} />
       {!c.loaded ? <p className="cp-empty">Reading the network…</p> : ps.length === 0 ? <p className="cp-empty">No problems yet.</p> : ps.map(p => {
         const pr = p.problem!, rs = f.resultsFor(pr.slug), rec = f.records(pr.direction, rs);
@@ -2276,7 +2290,10 @@ function JoinFrontier() {
   );
 }
 
-function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontierOf>; slug: string }) {
+function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof frontierOf>; slug: string; work?: boolean }) {
+  // arriving to work on it: the panel open and in view
+  const workRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => { if (work && workRef.current) { workRef.current.open = true; workRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); } }, [work, slug, !!workRef.current]); // eslint-disable-line react-hooks/exhaustive-deps
   const p = f.problems.find(x => x.problem!.slug === slug);
   const [verifier, setVerifier] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2304,7 +2321,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
         <button className="cp-btn-line" disabled={busy || !c.me || !!mine} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(p.id); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{mine ? "You put weight behind it" : busy ? "Sending…" : "Put weight behind this problem"}</button>
         <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
-      <details className="cp-work-wrap">
+      <details className="cp-work-wrap" id="work" ref={workRef}>
         <summary>Work on this problem with an AI model, right from this page</summary>
         {(() => {
           const top = rec.length ? rec[rec.length - 1] : null;
