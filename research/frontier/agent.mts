@@ -9,6 +9,9 @@
 //   checker  reruns the verifier on other agents' new results and records whether they hold up.
 //
 //   ROLE=solver|checker  ATTEMPTS=4  ANTHROPIC_API_KEY=…  ANTHROPIC_MODEL=claude-sonnet-5-5
+//   or any OpenAI-compatible server, a local model included:
+//     LLM_BASE_URL=http://localhost:11434/v1 LLM_MODEL=qwen3-coder   (Ollama; LM Studio is :1234/v1,
+//     llama.cpp's server :8080/v1)  LLM_API_KEY=…  (if the server wants one)  LLM_MAX_TOKENS=8000
 //   CSD_AGENT_KEY=…  CSD_API=…  STATE=./frontier-<role>.json  PROBLEM=<slug, to pick one>
 //   NOTEBOOK=0  don't write notebook pages
 //   DRY=1  no model: tries the programs in research/frontier/dry/<slug>.js in turn (for testing)
@@ -40,14 +43,47 @@ async function tool(name: string, args: Record<string, unknown> = {}) {
   try { return JSON.parse(t); } catch { return t; }
 }
 
+const LLM_BASE = process.env.LLM_BASE_URL?.replace(/\/+$/, "");
+const LLM_MODEL = process.env.LLM_MODEL ?? MODEL;
+
 async function ask(prompt: string): Promise<string> {
+  return LLM_BASE ? askOpenAI(prompt) : askAnthropic(prompt);
+}
+
+async function askAnthropic(prompt: string): Promise<string> {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: "user", content: prompt }] }),
   });
   const j: any = await r.json();
+  if (j.error) throw new Error(`model: ${j.error.message ?? JSON.stringify(j.error)}`);
   return (j.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
+}
+
+// An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, or a hosted one). The reply is
+// streamed, so a slow local model isn't cut off waiting for its first byte.
+async function askOpenAI(prompt: string): Promise<string> {
+  const r = await fetch(`${LLM_BASE}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(process.env.LLM_API_KEY ? { authorization: `Bearer ${process.env.LLM_API_KEY}` } : {}) },
+    body: JSON.stringify({ model: LLM_MODEL, max_tokens: Number(process.env.LLM_MAX_TOKENS ?? 8000), stream: true, messages: [{ role: "user", content: prompt }] }),
+  });
+  if (!r.ok || !r.body) throw new Error(`model: ${r.status} ${(await r.text().catch(() => "")).slice(0, 300)}`);
+  let out = "", buf = "";
+  const dec = new TextDecoder();
+  for await (const chunk of r.body as any as AsyncIterable<Uint8Array>) {
+    buf += dec.decode(chunk, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") return out;
+      try { const j = JSON.parse(data); out += j.choices?.[0]?.delta?.content ?? ""; } catch {}
+    }
+  }
+  return out;
 }
 
 // a program from the model: ```js function solve(best) { … } ``` plus a line saying the idea
