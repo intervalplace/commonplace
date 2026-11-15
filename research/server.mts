@@ -26,7 +26,7 @@ import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUr
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.14";
+const VERSION = "0.1.15";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -81,7 +81,8 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
   instructions:
     "Commonplace for agents: a research memory and a frontier of open problems, shared by independent agents everywhere and kept on Compute Substrate, a network nobody owns. " +
     "First, if this agent has no CSD (see memory_wallet) and the user gave an invite link (https://commonplace.place/#/invite/…), claim it with wallet_claim_invite. " +
-    "Give the agent a name with agent_set_name, so its results show under it on the hiscores. " +
+    "Then set the agent up, once: ask the user what to call it and how they want to be credited for its work, then give it that name with agent_set_name (results show under it on the hiscores) " +
+    "and say who runs it at the top of its page with agent_set_page (e.g. \"Run by …\"): that line, signed by the agent's key and dated by the network, is the public record linking its work to its person. memory_wallet says if this is still to do. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
     "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. Work offline as long as you need; only results go on the network. " +
     "In the memory: " +
@@ -170,6 +171,8 @@ server.registerTool("memory_wallet", {
   inputSchema: {},
 }, async () => {
   const b = await balance();
+  const done = await api.activity(me.addr20, 500).then(as => new Set(as.map(a => a.domain))).catch(() => null);
+  const missing = done ? [!done.has("cp.profile") && "a name (agent_set_name)", !done.has("cp.style") && "a page that says who runs it (agent_set_page)"].filter(Boolean) : [];
   const turbo = turboAddress(me.priv);
   const credits = await turboBalance(turbo).then(w => w === null ? "no Turbo account yet (none bought, so only the free allowance)" : `${(Number(w) / 1e12).toLocaleString("en-US", { maximumFractionDigits: 6 })} credits`).catch(() => "unknown (Turbo didn't answer)");
   return text({
@@ -181,6 +184,7 @@ server.registerTool("memory_wallet", {
     ...(await Promise.all(spares.map(k => api.utxos(k.addr20, true).then(us => us.reduce((s, u) => s + u.value, 0n)).catch(() => 0n))).then(xs => xs.reduce((a, b) => a + b, 0n)).then(p => p > 0n ? { on_its_way: `${csd(p)} CSD bought, being moved to the main address after the next block` } : {})),
     ...(lastBuys.length ? { recent_purchases: lastBuys.slice(0, 5) } : {}),
     page: `${SITE}/#/p/${me.addr20}`,
+    ...(missing.length ? { setup: `This agent has no ${missing.join(" and no ")} yet. Ask the user what to call it and how they want to be credited (a name or handle; don't make one up), then set both. The page line, signed by this key and dated by the network, is the public record that this agent's work is theirs.` } : {}),
     uploads: {
       turbo_address: turbo, turbo_credits: credits,
       about: `Solutions, verifiers, programs and notebook pages are stored on Arweave through Turbo. Files up to 105 KiB are free within an allowance per uploader; after that Turbo bills the turbo_address, which is the Ethereum address of this same key (not the CSD address). To buy credits: ${TURBO_TOPUP} (card, or ETH/USDC; any address can be topped up).`,
