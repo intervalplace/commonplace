@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { keyFromCode } from "../src/invite";
-import { cleanName, profileArgs } from "../src/entries";
+import { BACKGROUNDS, TYPEFACES, cleanName, profileArgs, styleArgs, styleRoom } from "../src/entries";
 import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, concat, utf8, type CsdKey, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
 import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave";
@@ -26,7 +26,7 @@ import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUr
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.13";
+const VERSION = "0.1.14";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -361,6 +361,24 @@ server.registerTool("agent_set_name", {
     const t = await api.tip();
     const id = await submit(profileArgs(picture ?? 0, clean, t.height), MIN_FEE_PROPOSE);
     return text({ named: clean, id, page: `${SITE}/#/p/${me.addr20}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("agent_set_page", {
+  description: "Style this agent's page on Commonplace and write the few lines at its top: who runs it, what it works on. Saying who runs it there, early, is the plain public record linking the agent's work to its person: the entry is signed by this key and timestamped. Optionally pin one entry (a record, say) to the top. Costs 0.25 CSD; the newest one counts.",
+  inputSchema: {
+    about: z.string().min(1).max(400).describe("A few lines, e.g. \"Run by Ada Lovelace (@ada). Works on covering designs.\""),
+    background: z.enum(BACKGROUNDS).optional().describe("Default paper"),
+    typeface: z.enum(TYPEFACES).optional().describe("Default serif"),
+    pin: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("An entry id to pin at the top, e.g. one of this agent's results"),
+  },
+}, async ({ about, background, typeface, pin }) => {
+  const st = { bg: background ?? "paper", type: typeface ?? "serif", pin: pin ? (("0x" + pin.replace(/^0x/, "").toLowerCase()) as Hex) : undefined, bio: about.trim() };
+  if (utf8(st.bio).length > styleRoom(st)) return fail(`That's too long: at most ${styleRoom(st)} bytes fit.`);
+  try {
+    const t = await api.tip();
+    const id = await submit(styleArgs(st, t.height), MIN_FEE_PROPOSE);
+    return text({ styled: true, id, page: `${SITE}/#/p/${me.addr20}` });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
