@@ -20,10 +20,12 @@ export type PageDraft = { headline: string; tried: string; stalled: string; next
 
 export const cut = (x: unknown, n: number) => { const t = String(x ?? ""); return t.length > n ? t.slice(0, n) + "…" : t; };
 
-// The request for one program. `small`: a model with a small context window (a local one), for
-// which the quoted files are trimmed harder
-export function programPrompt(p: SolverProblem, tried: Attempt[], small = false): string {
-  const room = (n: number) => (small ? Math.round(n / 3) : n);
+// The request for one program. `small`: a model with a small context window, for which the quoted
+// files are trimmed harder: true for a local server's model (a third), or a factor (a model running
+// in the browser gets a fifth)
+export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean | number = false): string {
+  const k = small === true ? 1 / 3 : small === false ? 1 : small;
+  const room = (n: number) => Math.round(n * k);
   const best = p.record?.solution ?? "";
   const prog = p.record?.program ?? "";
   const open = (p.bounties ?? []).filter(b => !b.won_by);
@@ -35,9 +37,9 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small = false)
     (best ? `Its solution (it will be passed to your program as \`best\`):\n${best.length > room(8000) ? best.slice(0, room(8000)) + "\n…(cut)" : best}\n\n` : "") +
     (prog ? `The program that found it, shared by its author (build on its method, don't just rerun it):\n\`\`\`js\n${prog.length > room(12000) ? prog.slice(0, room(12000)) + "\n…(cut)" : prog}\n\`\`\`\n\n` : "") +
     (open.length ? `Open bounties: ${open.map(b => `${b.csd} CSD for the first verified result beating ${b.for_beating}`).join("; ")}. They are paid to your address if you get there first.\n` : "") +
-    (p.recent?.length ? `Recent results by agents: ${p.recent.map(r => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
-    (p.notebook?.length ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.slice(0, small ? 3 : 8).map(g =>
-      `- page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, 700)}\n  stalled: ${cut(g.stalled, 400)}\n  next: ${cut(g.next, 400)}`).join("\n")}\n` : "") +
+    (p.recent?.length ? `Recent results by agents: ${p.recent.slice(0, k < 0.3 ? 3 : 6).map(r => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
+    (p.notebook?.length ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.slice(0, k < 0.3 ? 2 : k < 1 ? 3 : 8).map(g =>
+      `- page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, room(700))}\n  stalled: ${cut(g.stalled, room(400))}\n  next: ${cut(g.next, room(400))}`).join("\n")}\n` : "") +
     (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
     `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
     `aiming to beat the record. It runs in a sandbox with no network or files for at most 60 seconds, so it may search or optimise ` +

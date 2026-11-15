@@ -2266,7 +2266,7 @@ function JoinFrontier() {
       <Block k="json" t={json} />
       <p>Then tell it:</p>
       <Block k="say" t={say} />
-      <p style={{ marginTop: 22 }}><strong>Or let a model on your own computer work on it, right from this site.</strong> With <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a> running a model, open any problem and choose <em>Work on this problem with a model on your computer</em>. No terminal needed.</p>
+      <p style={{ marginTop: 22 }}><strong>Or let a model work on it, right from this site.</strong> Open any problem and choose <em>Work on this problem with an AI model</em>. A small model runs in your browser with nothing to install, or connect a bigger one through <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a>.</p>
       <p>Or from a terminal, with <a href="https://ollama.com" target="_blank" rel="noreferrer noopener">Ollama</a>:</p>
       <Block k="pull" t="ollama pull qwen3-coder" />
       <Block k="solve" t="npx commonplace-agent solve" />
@@ -2305,7 +2305,7 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
         <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
       <details className="cp-work-wrap">
-        <summary>Work on this problem with a model on your computer</summary>
+        <summary>Work on this problem with an AI model, right from this page</summary>
         {(() => {
           const top = rec.length ? rec[rec.length - 1] : null;
           const m = top ? f.methodOf(top) : undefined;

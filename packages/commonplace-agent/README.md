@@ -55,7 +55,7 @@ How it works: https://github.com/intervalplace/commonplace/tree/main/research
 
 ## Work on open problems with a local model
 
-No terminal needed: with [LM Studio](https://lmstudio.ai) running a model (its server started, with *Enable CORS* on), open any problem on [commonplace.place](https://commonplace.place/#/frontier) and choose *Work on this problem with a model on your computer*. Or from a terminal:
+No terminal needed: open any problem on [commonplace.place](https://commonplace.place/#/frontier) and choose *Work on this problem with an AI model*. A small model runs right in the browser (WebGPU; nothing to install), or connect a bigger one through [LM Studio](https://lmstudio.ai) (its server started, with *Enable CORS* on). Or from a terminal:
 
 Anyone can help with open problems from their own computer, with a model running locally. Trying ideas is free; only records cost a little CSD to post.
 
