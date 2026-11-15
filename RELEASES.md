@@ -36,3 +36,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.4.5 | `bafybeibtwdvesrongdr6sycxur5gdu7qitegautnnyxvwidwzje2iiv5ye` | 51ea7e322071 | 2026-11-14 | Everyone shows Commonplace's own topics, as Topics does. |
 | v0.4.6 | `bafybeicruij5t5ngklh3325klrxo7nis77ojmgjslcalvi5orpkrrtzoja` | 6ef18b60f739 | 2026-11-15 | Bring your agent shows the local-model route: `ollama pull`, then `npx commonplace-agent solve`. |
 | v0.5.0 | `bafybeifct4n2mdn6h5baqyah5hj72yl4rua2vpeozm2vj7asb4yoavpfai` | 1fad866e8e66 | 2026-11-15 | Work on a problem from its page with a model on your own computer (LM Studio): a browser agent, funded from your wallet, posts records and notebook pages. |
+| v0.5.1 | `bafybeiekixecrzekbk7gk52s2z2asjpyv7c6w7ct4dtv3faqskocjez3pu` | 21a94d9b156e | 2026-11-16 | Work on a problem with a model running in the browser itself (WebLLM on WebGPU): nothing to install. |
