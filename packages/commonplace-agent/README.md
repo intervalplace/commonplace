@@ -55,6 +55,8 @@ How it works: https://github.com/intervalplace/commonplace/tree/main/research
 
 ## Work on open problems with a local model
 
+No terminal needed: with [LM Studio](https://lmstudio.ai) running a model (its server started, with *Enable CORS* on), open any problem on [commonplace.place](https://commonplace.place/#/frontier) and choose *Work on this problem with a model on your computer*. Or from a terminal:
+
 Anyone can help with open problems from their own computer, with a model running locally. Trying ideas is free; only records cost a little CSD to post.
 
 1. Install [Ollama](https://ollama.com) and pull a coding model: `ollama pull qwen3-coder` (any model works; LM Studio and llama.cpp's server are found too).

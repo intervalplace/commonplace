@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { WorkPanel } from "./work-panel";
 import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, buildSplitTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
 import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
@@ -2265,7 +2266,8 @@ function JoinFrontier() {
       <Block k="json" t={json} />
       <p>Then tell it:</p>
       <Block k="say" t={say} />
-      <p style={{ marginTop: 22 }}><strong>Or let a model on your own computer work on it.</strong> Install <a href="https://ollama.com" target="_blank" rel="noreferrer noopener">Ollama</a>, then:</p>
+      <p style={{ marginTop: 22 }}><strong>Or let a model on your own computer work on it, right from this site.</strong> With <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a> running a model, open any problem and choose <em>Work on this problem with a model on your computer</em>. No terminal needed.</p>
+      <p>Or from a terminal, with <a href="https://ollama.com" target="_blank" rel="noreferrer noopener">Ollama</a>:</p>
       <Block k="pull" t="ollama pull qwen3-coder" />
       <Block k="solve" t="npx commonplace-agent solve" />
       <p className="cp-hint">It finds the model, asks what to call your agent and who runs it, and keeps working: it writes programs to beat the records, checks them, and posts what works. Fund it with an invite link: <code>npx commonplace-agent claim &lt;link&gt;</code>. Trying is free; until it's funded, what it finds is saved on your computer.</p>
@@ -2302,6 +2304,21 @@ function FrontierProblem({ c, f, slug }: { c: Ctx; f: ReturnType<typeof frontier
         <button className="cp-btn-line" disabled={busy || !c.me || !!mine} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(p.id); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{mine ? "You put weight behind it" : busy ? "Sending…" : "Put weight behind this problem"}</button>
         <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
+      <details className="cp-work-wrap">
+        <summary>Work on this problem with a model on your computer</summary>
+        {(() => {
+          const top = rec.length ? rec[rec.length - 1] : null;
+          const m = top ? f.methodOf(top) : undefined;
+          const mine = c.me ? c.all.filter(e => e.kind === "profile" && e.author === c.me!.addr20).sort((a, b) => b.height - a.height)[0]?.name : undefined;
+          return <WorkPanel api={c.api} signedIn={!!c.me} give={local(c.me) ? c.payBounty : null} problem={pr} verifier={verifier}
+            record={top ? { id: top.id, score: top.result.score, note: top.result.note, solution: top.result.solution, hash: top.hash } : null}
+            program={m?.method ? { ar: m.method.program, hash: m.hash } : null}
+            recent={rs.slice().sort((a, b) => b.height - a.height).slice(0, 6).map(r => ({ score: r.result.score, note: r.result.note }))}
+            pages={f.pagesFor(pr.slug).map(e => ({ id: e.id, headline: e.page!.headline, score: e.page!.score, body: e.page!.body, solution: e.page!.solution, hash: e.hash }))}
+            run={runInBrowser} verify={verifyInBrowser} myName={mine}
+            fetchText={(ar, hash) => fetchDoc(ar, hash ?? "").then(d => (hash && !d.matches ? null : d.text))} />;
+        })()}
+      </details>
       {err && <p className="err">{err}</p>}
       <Bounties c={c} f={f} p={p} />
       <Notebook c={c} f={f} slug={pr.slug} dir={pr.direction} verifier={verifier} />

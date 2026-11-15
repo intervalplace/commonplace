@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runSandboxed, verifyNode } from "../../src/run-node";
 import { better } from "../../src/frontier";
+import { programPrompt, parseProgram, pagePrompt, parsePageDraft, fallbackPage, listModels, askOpenAI as askServer } from "../../src/solver";
 
 const ROLE = process.env.ROLE ?? "solver";
 // `npx commonplace-agent solve` runs this from the bundle, where the server is the bundle itself
@@ -32,6 +33,8 @@ const SELF = fileURLToPath(import.meta.url);
 const BUNDLED = SELF.endsWith(".mjs");
 const HOME = join(homedir(), ".commonplace-agent");
 const FOREVER = process.env.FOREVER === "1";
+// at most one notebook page per problem this often (PAGE_HOURS=0: a page after every round, as before)
+const PAGE_EVERY = Number(process.env.PAGE_HOURS ?? 2) * 3600_000;
 const ATTEMPTS = Number(process.env.ATTEMPTS ?? 4);
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5-5";
 const DRY = !!process.env.DRY;
@@ -39,7 +42,7 @@ const STATE = process.env.STATE ?? (BUNDLED ? join(HOME, `${ROLE}.json`) : `./fr
 if (BUNDLED) mkdirSync(HOME, { recursive: true });
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ROLE, ...a);
 const here = dirname(fileURLToPath(import.meta.url));
-const state: { checked: string[]; dryRun: Record<string, number>; setup?: { name: string; about: string; done?: boolean } } = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : { checked: [], dryRun: {} };
+const state: { checked: string[]; dryRun: Record<string, number>; setup?: { name: string; about: string; done?: boolean }; pageAt?: Record<string, number>; buffer?: Record<string, { idea: string; result: string }[]> } = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : { checked: [], dryRun: {} };
 const saveState = () => writeFileSync(STATE, JSON.stringify(state, null, 2));
 
 const client = new Client({ name: `frontier-${ROLE}`, version: "0.1.0" });
@@ -59,7 +62,11 @@ let LLM_MODEL = process.env.LLM_MODEL ?? MODEL;
 const LOCAL_SERVERS = ["http://localhost:11434/v1", "http://localhost:1234/v1", "http://localhost:8080/v1"];
 async function findModel(): Promise<string | null> {
   if (DRY || ROLE !== "solver") return "none needed";
-  if (LLM_BASE) return `${LLM_MODEL} at ${LLM_BASE}`;
+  if (LLM_BASE) {
+    // a server named without a model: the one it has loaded
+    if (!process.env.LLM_MODEL) { const ids = await listModels(LLM_BASE, process.env.LLM_API_KEY, AbortSignal.timeout(5000)).catch(() => []); if (!ids.length) return null; LLM_MODEL = ids[0]; }
+    return `${LLM_MODEL} at ${LLM_BASE}`;
+  }
   if (process.env.ANTHROPIC_API_KEY) return `${MODEL} (Anthropic)`;
   for (const base of LOCAL_SERVERS) {
     const j: any = await fetch(`${base}/models`, { signal: AbortSignal.timeout(2000) }).then(r => (r.ok ? r.json() : null)).catch(() => null);
@@ -71,8 +78,6 @@ async function findModel(): Promise<string | null> {
   }
   return null;
 }
-// Local models have small context windows: the prompt's quoted files are trimmed harder for them
-const room = (n: number) => (LLM_BASE ? Math.round(n / 3) : n);
 
 async function ask(prompt: string): Promise<string> {
   return LLM_BASE ? askOpenAI(prompt) : askAnthropic(prompt);
@@ -89,30 +94,8 @@ async function askAnthropic(prompt: string): Promise<string> {
   return (j.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
 }
 
-// An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, or a hosted one). The reply is
-// streamed, so a slow local model isn't cut off waiting for its first byte.
-async function askOpenAI(prompt: string): Promise<string> {
-  const r = await fetch(`${LLM_BASE}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(process.env.LLM_API_KEY ? { authorization: `Bearer ${process.env.LLM_API_KEY}` } : {}) },
-    body: JSON.stringify({ model: LLM_MODEL, max_tokens: Number(process.env.LLM_MAX_TOKENS ?? 8000), stream: true, messages: [{ role: "user", content: prompt }] }),
-  });
-  if (!r.ok || !r.body) throw new Error(`model: ${r.status} ${(await r.text().catch(() => "")).slice(0, 300)}`);
-  let out = "", buf = "";
-  const dec = new TextDecoder();
-  for await (const chunk of r.body as any as AsyncIterable<Uint8Array>) {
-    buf += dec.decode(chunk, { stream: true });
-    let i;
-    while ((i = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (data === "[DONE]") return out;
-      try { const j = JSON.parse(data); out += j.choices?.[0]?.delta?.content ?? ""; } catch {}
-    }
-  }
-  return out;
-}
+// An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, or a hosted one), streamed
+const askOpenAI = (prompt: string) => askServer({ base: LLM_BASE!, model: LLM_MODEL, prompt, apiKey: process.env.LLM_API_KEY, maxTokens: Number(process.env.LLM_MAX_TOKENS ?? 8000) });
 
 // a program from the model: ```js function solve(best) { … } ``` plus a line saying the idea
 async function program(p: any, tried: { idea: string; result: string }[]): Promise<{ code: string; idea: string; start?: string } | null> {
@@ -123,31 +106,9 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
     state.dryRun[p.slug] = n + 1; saveState();
     return { code: progs[n], idea: /\/\/ idea: (.*)/.exec(progs[n])?.[1] ?? "a test program" };
   }
-  const best = p.record?.solution ?? "";
-  const text = await ask(
-    `You are one of many independent agents working together on an open problem, through a shared memory nobody owns. ` +
-    `Your job: improve on the current record.\n\nProblem: ${p.title}\n${p.statement}\nScoring: ${p.direction}.\n\n` +
-    `The verifier, which decides what counts${p.verifier.length > room(20000) ? " (its start; it carries more data)" : ""}:\n\`\`\`js\n${cut(p.verifier, room(20000))}\n\`\`\`\n\n` +
-    `Current record: ${p.record ? `${p.record.score} (${p.record.note})` : "none yet"}\n` +
-    (best ? `Its solution (it will be passed to your program as \`best\`):\n${best.length > room(8000) ? best.slice(0, room(8000)) + "\n…(cut)" : best}\n\n` : "") +
-    (p.record?.program ? `The program that found it, shared by its author (build on its method, don't just rerun it):\n\`\`\`js\n${p.record.program.length > room(12000) ? p.record.program.slice(0, room(12000)) + "\n…(cut)" : p.record.program}\n\`\`\`\n\n` : "") +
-    (p.bounties?.some((b: any) => !b.won_by) ? `Open bounties: ${p.bounties.filter((b: any) => !b.won_by).map((b: any) => `${b.csd} CSD for the first verified result beating ${b.for_beating}`).join("; ")}. They are paid to your address if you get there first.\n` : "") +
-    (p.recent?.length ? `Recent results by agents: ${p.recent.map((r: any) => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
-    (p.notebook?.length ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.slice(0, LLM_BASE ? 3 : 8).map((g: any) =>
-      `- page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, 700)}\n  stalled: ${cut(g.stalled, 400)}\n  next: ${cut(g.next, 400)}`).join("\n")}\n` : "") +
-    (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
-    `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
-    `aiming to beat the record. It runs in a sandbox with no network or files for at most 60 seconds, so it may search or optimise ` +
-    `(use a seeded random generator, not Math.random, so results are repeatable). Build on what has worked. ` +
-    `Answer with one line "IDEA: <the idea in under 150 characters>", then, if your program should start from a notebook page's attached solution instead of the record, a line "START: <page id>", then the program in a \`\`\`js block.`);
-  const code = /```(?:js|javascript)?\n([\s\S]*?)```/.exec(text)?.[1];
-  // the idea, cut at a word if it's long, so a result's note never ends mid-word
-  const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() ?? "an improvement";
-  const idea = full.length <= 180 ? full : full.slice(0, 178).replace(/\s+\S*$/, "") + "…";
-  const start = /START:\s*(0x[0-9a-fA-F]{64})/.exec(text)?.[1];
-  return code ? { code, idea, ...(start ? { start } : {}) } : null;
+  // local models have small context windows: the quoted files are trimmed harder for them
+  return parseProgram(await ask(programPrompt(p, tried, !!LLM_BASE)));
 }
-const cut = (x: unknown, n: number) => { const t = String(x ?? ""); return t.length > n ? t.slice(0, n) + "…" : t; };
 // The server gives large files as a download link: fetch them whole
 async function whole(x: any): Promise<string | null> {
   if (x == null || typeof x === "string") return x ?? null;
@@ -159,18 +120,8 @@ async function whole(x: any): Promise<string | null> {
 async function page(p: any, tried: { idea: string; result: string }[]): Promise<{ headline: string; tried: string; stalled: string; next: string } | null> {
   if (!tried.length) return null;
   if (DRY) return { headline: `Tried ${tried.length} programs; none beat ${p.record?.score ?? "nothing"}`, tried: tried.map(t => `${t.idea}: ${t.result}`).join("\n"), stalled: "These were test programs.", next: "Try a different search." };
-  const text = await ask(
-    `You just spent a session on this open problem and didn't beat the record. Write a page for the problem's shared notebook, ` +
-    `so the next agent picks up where you hit a wall instead of starting over.\n\nProblem: ${p.title}\n${p.statement}\n` +
-    `Record: ${p.record ? `${p.record.score} (${p.record.note})` : "none"}\n\nYour attempts:\n${tried.map(t => `- ${t.idea} -> ${t.result}`).join("\n")}\n\n` +
-    `Answer with JSON only: {"headline": "<one line, the lesson, under 180 characters>", "tried": "<what you tried, with the scores each reached>", ` +
-    `"stalled": "<why you think it stalled>", "next": "<what you would try next, concretely, and why>"}. Be specific: parameters, symmetries, numbers.`);
-  try {
-    const j = JSON.parse(/\{[\s\S]*\}/.exec(text)?.[0] ?? "");
-    const ok = (x: unknown, n: number) => (typeof x === "string" && x.trim().length >= n ? x.trim() : null);
-    const h = ok(j.headline, 10), t = ok(j.tried, 20), st = ok(j.stalled, 10), nx = ok(j.next, 10);
-    return h && t && st && nx ? { headline: h.length <= 200 ? h : h.slice(0, 198).replace(/\s+\S*$/, "") + "…", tried: t.slice(0, 4000), stalled: st.slice(0, 4000), next: nx.slice(0, 4000) } : null;
-  } catch { return null; }
+  // a small model may not answer in the shape asked: the attempts themselves still make a page
+  return parsePageDraft(await ask(pagePrompt(p, tried))) ?? fallbackPage(p, tried, LLM_BASE ? LLM_MODEL : MODEL);
 }
 
 // For people running it from the command line: what to call the agent and who runs it, asked once
@@ -249,13 +200,22 @@ async function solveOnce() {
         log(`saved in ${f}; once funded, post it with frontier_submit (solution_file) from any agent with this key`);
       }
     } else log("nothing valid this run");
-    // no record: leave what was learned in the notebook
-    if (!kept && process.env.NOTEBOOK !== "0") {
-      const pg = await page(p, tried).catch(e => { log("page failed", String(e)); return null; });
-      if (pg) {
-        const w = await tool("frontier_note", { slug: p.slug, ...pg, ...(best ? { solution: best.solution, program: best.code } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
-        log(w.written ? `notebook page ${w.id}: ${pg.headline}` : `notebook page not written: ${w.error}`);
-      }
+    // no record: leave what was learned in the notebook. Attempts are collected per problem and
+    // written up at most every PAGE_EVERY, so an agent running all day writes a few good pages, not
+    // a page every few minutes
+    if (!kept && process.env.NOTEBOOK !== "0" && tried.length) {
+      const buf = [...(state.buffer?.[p.slug] ?? []), ...tried].slice(-30);
+      const due = Date.now() - (state.pageAt?.[p.slug] ?? 0) >= PAGE_EVERY && buf.length >= 4;
+      state.buffer = { ...state.buffer, [p.slug]: buf };
+      if (due) {
+        const pg = await page(p, buf).catch(e => { log("page failed", String(e)); return null; });
+        if (pg) {
+          const w = await tool("frontier_note", { slug: p.slug, ...pg, ...(best ? { solution: best.solution, program: best.code } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
+          log(w.written ? `notebook page ${w.id}: ${pg.headline}` : `notebook page not written: ${w.error}`);
+          if (w.written) { state.pageAt = { ...state.pageAt, [p.slug]: Date.now() }; state.buffer = { ...state.buffer, [p.slug]: [] }; }
+        }
+      } else log(`notebook: ${buf.length} attempts collected for the next page on ${p.slug}`);
+      saveState();
     }
 }
 
