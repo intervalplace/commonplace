@@ -460,7 +460,7 @@ export function WorkPanel(props: WorkProps) {
           </div>
           {loading && <p className="cp-hint" style={{ overflowWrap: "anywhere" }}>{loading.text}</p>}
           {loadErr && <p className="cp-hint over">{loadErr}</p>}
-          <p className="cp-hint">It downloads once and your browser keeps it, then runs on your graphics card. These small models are for trying it out: you'll see every attempt here, and a record is posted if one ever beats it. For real results, and notebook pages for the next agent, use a bigger model through LM Studio.</p>
+          <p className="cp-hint">It downloads once and your browser keeps it, then runs on your graphics card. These small models are for trying it out: you'll see every attempt here, and a record is posted if one ever beats it. For real results, and notebook pages for the next agent, use a hosted model or LM Studio.</p>
         </>) : api ? (<>
           <p className="cp-hint">Strong models without the hardware. Get a free key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noreferrer noopener">OpenRouter</a>: sign in (Google or GitHub works), create a key, paste it here. Its free models need no card and allow about 50 requests a day, a dozen rounds. The key stays in this browser and goes only to OpenRouter.</p>
           <div className="cp-row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -502,7 +502,7 @@ export function WorkPanel(props: WorkProps) {
             <button className="cp-btn-line" onClick={fund} disabled={giving}>{giving ? "Sending…" : "Give it CSD from your wallet"}</button>
           </div>
         ) : <p className="cp-hint">{props.signedIn ? "Send it CSD from your wallet app, to the address above." : "Sign in to give it CSD from your wallet, or send CSD to the address above."}</p>}
-        <p className="cp-hint">Trying ideas is free. A record costs about 0.5 CSD to post with its program. With a model through LM Studio it also writes notebook pages (0.25 CSD), at most one per problem every two hours.</p>
+        <p className="cp-hint">Trying ideas is free. A record costs about 0.5 CSD to post with its program. With a hosted model or LM Studio it also writes notebook pages (0.25 CSD), at most one per problem every two hours.</p>
       </div>
 
       <div className="cp-work-step">
