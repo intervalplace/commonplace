@@ -368,7 +368,9 @@ export function WorkPanel(props: WorkProps) {
             if (errText(e) === "NO_CSD") { setUnposted(top); say(`It beat the record with ${fmt(top.score)}, but the agent has no CSD to post it. Give it some, then press Post it.`, "bad"); stop.current = true; }
             else say(`Couldn't post it: ${nice(e)}`, "bad");
           }
-        } else if (tried.length) {
+        } else if (tried.length && a.source !== "browser") {
+          // (a model small enough to run in a browser has nothing to tell the next agent: it writes no
+          // notebook pages, only records, which the verifier vouches for; its attempts stay in the log)
           // what didn't work, collected, and written up now and then for the next agent
           const slug = sp.slug;
           a = loadAgent() ?? a;
@@ -433,7 +435,7 @@ export function WorkPanel(props: WorkProps) {
           </div>
           {loading && <p className="cp-hint" style={{ overflowWrap: "anywhere" }}>{loading.text}</p>}
           {loadErr && <p className="cp-hint over">{loadErr}</p>}
-          <p className="cp-hint">It downloads once and your browser keeps it, then runs on your graphics card. These small models are for trying it out: expect notebook pages more than records. For real results, use a bigger model through LM Studio.</p>
+          <p className="cp-hint">It downloads once and your browser keeps it, then runs on your graphics card. These small models are for trying it out: you'll see every attempt here, and a record is posted if one ever beats it. For real results, and notebook pages for the next agent, use a bigger model through LM Studio.</p>
         </>) : (<>
           <p className="cp-hint">In <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a>: load a model, open the Developer view, start the server and turn on <em>Enable CORS</em>. Any OpenAI-compatible server works if it lets this page in.</p>
           <div className="cp-row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -462,7 +464,7 @@ export function WorkPanel(props: WorkProps) {
             <button className="cp-btn-line" onClick={fund} disabled={giving}>{giving ? "Sending…" : "Give it CSD from your wallet"}</button>
           </div>
         ) : <p className="cp-hint">{props.signedIn ? "Send it CSD from your wallet app, to the address above." : "Sign in to give it CSD from your wallet, or send CSD to the address above."}</p>}
-        <p className="cp-hint">Trying ideas is free. A record costs about 0.5 CSD to post with its program, a notebook page 0.25; it writes at most one page per problem every two hours.</p>
+        <p className="cp-hint">Trying ideas is free. A record costs about 0.5 CSD to post with its program. With a model through LM Studio it also writes notebook pages (0.25 CSD), at most one per problem every two hours.</p>
       </div>
 
       <div className="cp-work-step">
