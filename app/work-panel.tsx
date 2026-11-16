@@ -107,6 +107,7 @@ export function WorkPanel(props: WorkProps) {
   const [loaded, setLoaded] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const engine = useRef<any>(null);
+  const lastEnd = useRef(""); // how the last in-browser reply ended: "length", "blank", "stop"…
   const stop = useRef(false);
   const abort = useRef<AbortController | null>(null);
   const files = useRef(new Map<string, string | null>()); // fetched solutions, programs and page bodies
@@ -184,10 +185,27 @@ export function WorkPanel(props: WorkProps) {
     if (!eng) throw new Error("the model in this browser isn't loaded");
     const stop = () => eng.interruptGenerate();
     signal.addEventListener("abort", stop);
+    lastEnd.current = "";
     try {
-      const chunks = await eng.chat.completions.create({ messages: [{ role: "user", content: prompt }], stream: true, max_tokens: 1500, temperature: 0.7 });
-      let out = "";
-      for await (const ch of chunks) { const d = ch.choices?.[0]?.delta?.content ?? ""; if (d) { out += d; onText?.(out); } }
+      // small models drift: a format to keep to, a nudge against repeating itself, and a shorter limit
+      const chunks = await eng.chat.completions.create({
+        messages: [
+          { role: "system", content: "You write short JavaScript programs. Answer only in the exact format the user shows: an IDEA line, then one ```js code block defining function solve(best)." },
+          { role: "user", content: prompt },
+        ],
+        stream: true, max_tokens: 1024, temperature: 0.6, repetition_penalty: 1.1,
+      });
+      let out = "", why = "";
+      for await (const ch of chunks) {
+        const d = ch.choices?.[0]?.delta?.content ?? "";
+        if (ch.choices?.[0]?.finish_reason) why = ch.choices[0].finish_reason;
+        if (!d) continue;
+        out += d; onText?.(out);
+        // done as soon as a whole program is there; and no point waiting out a run of blank lines
+        if (/function\s+solve[\s\S]*\n```/.test(out)) { eng.interruptGenerate(); why = "done"; break; }
+        if (out.length > 300 && !out.trim()) { eng.interruptGenerate(); why = "blank"; break; }
+      }
+      lastEnd.current = why;
       return out;
     } finally { signal.removeEventListener("abort", stop); }
   };
@@ -307,13 +325,15 @@ export function WorkPanel(props: WorkProps) {
           const ctrl = new AbortController(); abort.current = ctrl;
           let text: string;
           // a model in the browser has the smallest window: its prompt is trimmed hardest
-          try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.2 : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
+          try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.12 : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
           catch (e) { if (stop.current) break; say(`The model didn't answer: ${errText(e)}`, "bad"); await sleep(5000); continue; }
           const pr = parseProgram(text);
           if (!pr) {
             tried.push({ idea: "(no program)", result: "failed: the reply had no program" });
             const gist = text.replace(/\s+/g, " ").trim();
-            say(gist ? `The model's reply had no program in it. It began: "${gist.slice(0, 140)}${gist.length > 140 ? "…" : ""}"` : "The model's reply was empty.", "bad");
+            const end = lastEnd.current === "length" ? " (it ran out of room before writing one)" : lastEnd.current === "blank" ? "" : "";
+            say(gist ? `The model's reply had no program in it${end}. It began: "${gist.slice(0, 140)}${gist.length > 140 ? "…" : ""}"`
+              : lastEnd.current === "blank" ? "The model wrote only blank lines; stopped it." : `The model's reply was empty${end}.`, "bad");
             continue;
           }
           let from = sp.record?.solution ?? "";
