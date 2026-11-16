@@ -39,3 +39,5 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.1 | `bafybeiekixecrzekbk7gk52s2z2asjpyv7c6w7ct4dtv3faqskocjez3pu` | 21a94d9b156e | 2026-11-16 | Work on a problem with a model running in the browser itself (WebLLM on WebGPU): nothing to install. |
 | v0.5.2 | `bafybeigfwtrcsvwveezswfbtanl4wl4qifv5jrywfkncsvmfkysvjpvsku` | 8c84e2ce3179 | 2026-11-16 | Taking part, up front on the frontier: Try it now and Bring your own agent; #/frontier/<slug>/work opens the model panel. |
 | v0.5.3 | `bafybeie3onranvfoqhs5wh7hvuknu5thkgc25azadcnozzh6mmqigudjy4` | 26528cfaa7bf | 2026-11-16 | Work panel shows what it is doing, and a slow gateway can no longer stall it. |
+| v0.5.4 | `bafybeigdao5dzurlrm6qnvd3dkc2kwzjfdaulvoah6fkfdd5dj5lvshcam` | 6770a75cd59b | 2026-11-16 | Programs read from small models' replies however they're written; notebook pages only after a valid program. |
+| v0.5.5 | `bafybeia3noi4unaavio7hpo3q4sd3kjhqdy3vr7x5e7bdcm6ajr63u4z3m` | c7fe092ea3e0 | 2026-11-16 | A problem's poser can retire it for a new version: it goes last, its page points to the new one. |
