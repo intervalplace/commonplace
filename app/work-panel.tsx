@@ -200,7 +200,8 @@ export function WorkPanel(props: WorkProps) {
   // One request to the chosen model, streamed: the one in the browser, or the server's
   const ask = async (a: Saved, prompt: string, signal: AbortSignal, onText?: (t: string) => void): Promise<string> => {
     if (a.source === "api") return askOpenAI({ base: a.apiBase ?? OPENROUTER, model: a.apiModel ?? "", apiKey: a.apiKey, prompt, signal, onText });
-    if (a.source !== "browser") return askOpenAI({ base: a.base, model: a.model, prompt, signal, onText });
+    // a local server's own limit is its context length; room for a thinking model to think first
+    if (a.source !== "browser") return askOpenAI({ base: a.base, model: a.model, prompt, signal, onText, maxTokens: 32000 });
     const eng = engine.current;
     if (!eng) throw new Error("the model in this browser isn't loaded");
     const stop = () => eng.interruptGenerate();

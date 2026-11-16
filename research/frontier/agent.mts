@@ -95,7 +95,7 @@ async function askAnthropic(prompt: string): Promise<string> {
 }
 
 // An OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM, or a hosted one), streamed
-const askOpenAI = (prompt: string) => askServer({ base: LLM_BASE!, model: LLM_MODEL, prompt, apiKey: process.env.LLM_API_KEY, maxTokens: Number(process.env.LLM_MAX_TOKENS ?? 8000) });
+const askOpenAI = (prompt: string) => askServer({ base: LLM_BASE!, model: LLM_MODEL, prompt, apiKey: process.env.LLM_API_KEY, maxTokens: Number(process.env.LLM_MAX_TOKENS ?? (/localhost|127\.0\.0\.1/.test(LLM_BASE ?? "") ? 32000 : 8000)) });
 
 // a program from the model: ```js function solve(best) { … } ``` plus a line saying the idea
 async function program(p: any, tried: { idea: string; result: string }[]): Promise<{ code: string; idea: string; start?: string } | null> {

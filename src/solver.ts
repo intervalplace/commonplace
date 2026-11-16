@@ -139,7 +139,7 @@ export async function askOpenAI(o: { base: string; model: string; prompt: string
     signal: o.signal,
   });
   if (!r.ok || !r.body) throw new Error(`model: ${r.status} ${(await r.text().catch(() => "")).slice(0, 300)}`);
-  let out = "", buf = "";
+  let out = "", buf = "", thought = "";
   const dec = new TextDecoder();
   const reader = r.body.getReader();
   for (;;) {
@@ -151,9 +151,23 @@ export async function askOpenAI(o: { base: string; model: string; prompt: string
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line.startsWith("data:")) continue;
       const data = line.slice(5).trim();
-      if (data === "[DONE]") return out;
-      try { const j = JSON.parse(data); const d = j.choices?.[0]?.delta?.content ?? ""; if (d) { out += d; o.onText?.(out); } } catch {}
+      if (data === "[DONE]") return withoutThinking(out);
+      try {
+        const delta = JSON.parse(data).choices?.[0]?.delta ?? {};
+        const d = delta.content ?? "";
+        if (d) { out += d; o.onText?.(out); }
+        // a thinking model that the server reports apart from its answer (LM Studio, llama.cpp, OpenRouter)
+        else if (delta.reasoning_content || delta.reasoning) { thought += String(delta.reasoning_content || delta.reasoning); if (!out) o.onText?.(`(thinking… ${thought.length} characters so far)`); }
+      } catch {}
     }
   }
-  return out;
+  return withoutThinking(out);
+}
+
+// A thinking model's reasoning, when it comes inline: its drafts would otherwise be read as the answer.
+// Cut off while still thinking, it gave no answer at all.
+export function withoutThinking(text: string): string {
+  const t = text.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const open = t.indexOf("<think>");
+  return (open >= 0 ? t.slice(0, open) : t).replace(/^[\s\S]*?<\/think>/, "").trim();
 }
