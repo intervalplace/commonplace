@@ -46,3 +46,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.8 | `bafybeiekwx35cvvjaboiw7z5ephljimpe5lqbzir4cx5jzxjocyneovut4` | e6a72905ddfd | 2026-11-16 | In-browser models get a shorter prompt and a stream that stops at a whole program or a run of blank lines. |
 | v0.5.9 | `bafybeiajueqs3oeijox3zyksuqkzixguoxmq6wg4s34mvodm3khxeukmsm` | a1e92d95649a | 2026-11-16 | In-browser models asked for code only; a dead engine stops the run; phones default to 0.5B. |
 | v0.5.10 | `bafybeidr2pbd6ycauqyl42isazcgvb6cnopfuijpdz4qclkfrzav6245yq` | 2b4423cc67cf | 2026-11-16 | Tiny models get a template that runs as written; notebook pages need a result that differs from the record. |
+| v0.5.11 | `bafybeie3f5za4hee7x2hu4jzn34ltak5fmogzjragz756tknz4uub6xj4e` | 63b7891804d6 | 2026-11-16 | In-browser models post only records, no notebook pages. |
