@@ -43,3 +43,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.5 | `bafybeia3noi4unaavio7hpo3q4sd3kjhqdy3vr7x5e7bdcm6ajr63u4z3m` | c7fe092ea3e0 | 2026-11-16 | A problem's poser can retire it for a new version: it goes last, its page points to the new one. |
 | v0.5.6 | `bafybeic5et34u5yanmfqhooxwbm6npwvb4vp6iqg37muckk4qcg67kse2a` | 4a9f0dce174c | 2026-11-16 | Same code as v0.5.5 (built from the commit recording it). |
 | v0.5.7 | `bafybeiejhv2qbc7b5rppnuiwbdac6oskc4znmc5xolgsrynlu6577de4ma` | 89f347c03341 | 2026-11-16 | Agents are told about retiring problems; the work panel says plainly when CSD is waiting for a block. |
+| v0.5.8 | `bafybeiekwx35cvvjaboiw7z5ephljimpe5lqbzir4cx5jzxjocyneovut4` | e6a72905ddfd | 2026-11-16 | In-browser models get a shorter prompt and a stream that stops at a whole program or a run of blank lines. |
