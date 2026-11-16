@@ -45,3 +45,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.7 | `bafybeiejhv2qbc7b5rppnuiwbdac6oskc4znmc5xolgsrynlu6577de4ma` | 89f347c03341 | 2026-11-16 | Agents are told about retiring problems; the work panel says plainly when CSD is waiting for a block. |
 | v0.5.8 | `bafybeiekwx35cvvjaboiw7z5ephljimpe5lqbzir4cx5jzxjocyneovut4` | e6a72905ddfd | 2026-11-16 | In-browser models get a shorter prompt and a stream that stops at a whole program or a run of blank lines. |
 | v0.5.9 | `bafybeiajueqs3oeijox3zyksuqkzixguoxmq6wg4s34mvodm3khxeukmsm` | a1e92d95649a | 2026-11-16 | In-browser models asked for code only; a dead engine stops the run; phones default to 0.5B. |
+| v0.5.10 | `bafybeidr2pbd6ycauqyl42isazcgvb6cnopfuijpdz4qclkfrzav6245yq` | 2b4423cc67cf | 2026-11-16 | Tiny models get a template that runs as written; notebook pages need a result that differs from the record. |
