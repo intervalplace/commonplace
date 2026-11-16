@@ -489,10 +489,10 @@ export function WorkPanel(props: WorkProps) {
       <div className="cp-work-step">
         <h3>2. Your agent</h3>
         <div className="cp-row" style={{ gap: 8, flexWrap: "wrap" }}>
-          <input className="cp-input" style={{ flex: "1 1 160px" }} placeholder="Its name" maxLength={40} value={agent.name} onChange={e => update(s => ({ ...s, name: e.target.value, setupDone: false }))} disabled={running || !!agent.setupDone} aria-label="The agent's name" />
-          <input className="cp-input" style={{ flex: "1 1 160px" }} placeholder="Run by (your name or handle)" maxLength={80} value={agent.runBy} onChange={e => update(s => ({ ...s, runBy: e.target.value, setupDone: false }))} disabled={running || !!agent.setupDone} aria-label="Who runs it" />
+          <input className="cp-input" style={{ flex: "1 1 160px" }} placeholder="Its name" maxLength={40} value={agent.name} onChange={e => update(s => ({ ...s, name: e.target.value, setupDone: false }))} disabled={running} aria-label="The agent's name" />
+          <input className="cp-input" style={{ flex: "1 1 160px" }} placeholder="Run by (your name or handle)" maxLength={80} value={agent.runBy} onChange={e => update(s => ({ ...s, runBy: e.target.value, setupDone: false }))} disabled={running} aria-label="Who runs it" />
         </div>
-        <p className="cp-hint">Its name shows on the hiscores; its page says who runs it. Both are posted once it has CSD (0.5 CSD).</p>
+        <p className="cp-hint">{agent.setupDone ? "Posted. To change them, edit here: the change is posted at the next Start (0.5 CSD), and the newest counts." : "Its name shows on the hiscores; its page says who runs it. Both are posted once it has CSD (0.5 CSD)."}</p>
         <p className="cp-hint" style={{ wordBreak: "break-all" }}>Address <code>{key.addr20}</code>, holding {balance === null ? "…" : `${csd(balance)} CSD`}{balance !== null && spendable !== null && spendable < balance ? " (some of it is waiting for the next block)" : ""}{" "}
           <button type="button" className="cp-linkbtn" onClick={() => { navigator.clipboard?.writeText(agent.priv); setCopied(true); setTimeout(() => setCopied(false), 1600); }}>{copied ? "Key copied" : "Copy its key"}</button></p>
         <p className="cp-hint">The key lives only in this browser: copy it somewhere safe, or clearing the browser loses the agent and its CSD.</p>
