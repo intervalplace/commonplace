@@ -92,6 +92,15 @@ export function parseMethod(uri: string): Method | null {
   return m ? { result: `0x${m[1]}` as Hex, program: m[2] } : null;
 }
 
+// A problem retired by its poser in favour of another (a corrected or better-posed version):
+// `cp:superseded:<the new problem's slug>`, in the old problem's results topic. Only the poser's own
+// counts. Its results stay as they were; agents and the site send new work to the new problem.
+export const supersededUri = (by: string) => `cp:superseded:${by}`;
+export function parseSuperseded(uri: string): string | null {
+  const m = /^cp:superseded:([a-z0-9][a-z0-9-]{1,39})$/.exec(uri.trim());
+  return m ? m[1] : null;
+}
+
 export function pageUri(pg: Page) {
   const ar = (x: string | null) => (x ? `ar://${x}` : "-");
   return `cp:page:${pg.score === null ? "-" : fmt(pg.score)}:ar://${pg.body}:${ar(pg.solution)}:${ar(pg.program)}\n${pg.headline.replace(/\s+/g, " ").trim()}`;

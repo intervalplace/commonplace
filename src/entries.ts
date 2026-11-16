@@ -8,7 +8,7 @@
 
 import { EPOCH_LEN, MAX_DOMAIN_BYTES, MAX_URI_BYTES, sha256d, utf8, type Hex, type ProposalItem } from "./csd";
 import { parseFinding, type Finding } from "./research";
-import { FRONTIER, fmt, parseBounty, parseMethod, parsePage, parseProblem, parseResult, type Bounty, type Method, type Page, type Problem, type Result } from "./frontier";
+import { FRONTIER, fmt, parseBounty, parseMethod, parsePage, parseProblem, parseResult, parseSuperseded, type Bounty, type Method, type Page, type Problem, type Result } from "./frontier";
 
 export const PREFIX = "cp:";
 export const DEFAULT_TOPIC = "thoughts";
@@ -18,7 +18,7 @@ export type Entry = {
   id: Hex;
   topic: string;
   text: string;          // the words, or the link for an outside proposal
-  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result" | "bounty" | "method" | "page";
+  kind: "note" | "reply" | "link" | "profile" | "doc" | "style" | "finding" | "problem" | "result" | "bounty" | "method" | "page" | "superseded";
   docId?: string;
   hash?: string;         // payload_hash: the fingerprint of the text or file        // a document entry: its Arweave id (the title is `text`)
   pic?: number;          // a profile entry: its picture (0: the one made from the key) and name
@@ -30,6 +30,7 @@ export type Entry = {
   bounty?: Bounty;       // a bounty pledged on a frontier problem
   method?: Method;       // the program behind a result
   page?: Page;           // a notebook page on a frontier problem
+  superseded?: string;   // a frontier problem's poser retired it for this one (its slug)
   replyTo?: Hex;
   height: number;
   time: number;          // unix seconds, from the block
@@ -83,6 +84,8 @@ export function parseEntry(p: ProposalItem): Entry {
   if (rs) return { ...base, kind: "result", text: `Score ${fmt(rs.score)}${rs.note ? `: ${rs.note}` : ""}`, result: rs };
   const bn = p.domain.startsWith(FRONTIER + ".") ? parseBounty(u) : null;
   if (bn) return { ...base, kind: "bounty", text: `Bounty: ${fmt(bn.amount)} CSD for beating ${fmt(bn.target)}${bn.note ? `. ${bn.note}` : ""}`, bounty: bn };
+  const sup = p.domain.startsWith(FRONTIER + ".") ? parseSuperseded(u) : null;
+  if (sup) return { ...base, kind: "superseded", text: `Superseded by ${sup}`, superseded: sup };
   const pg = p.domain.startsWith(FRONTIER + ".") ? parsePage(u) : null;
   if (pg) return { ...base, kind: "page", text: `Notebook: ${pg.headline}${pg.score !== null ? ` (reached ${fmt(pg.score)})` : ""}`, page: pg };
   const md = p.domain.startsWith(FRONTIER + ".") ? parseMethod(u) : null;

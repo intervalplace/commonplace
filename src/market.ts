@@ -12,7 +12,9 @@
 //   4. the contract pays the maker only once it proves that CSD payment with enough CSD blocks
 //      on top. If it never does, the USDC goes back to the buyer when the lock runs out.
 
-import { finalizeObject, hashObject } from "@intervalplace/aon-sdk";
+// The AON SDK ships as an ES module only; loaded when first needed, so code run as CommonJS (the
+// agent server under tsx) can still import this file
+const aonSdk = () => import("@intervalplace/aon-sdk");
 import { createPublicClient, createWalletClient, custom, defineChain, getAddress, hashTypedData, recoverMessageAddress, toHex, type Address } from "viem";
 import { mainnet } from "viem/chains";
 import { secp256k1 } from "@noble/curves/secp256k1";
@@ -71,6 +73,7 @@ async function objectSigner(o: any): Promise<string | null> {
   try {
     if (o?.signature?.scheme !== "eip191-object") return null;
     const { signature, objectHash, ...unsigned } = o;
+    const { hashObject } = await aonSdk();
     if (hashObject({ ...unsigned, signature }).toLowerCase() !== String(objectHash).toLowerCase()) return null;
     return (await recoverMessageAddress({ message: { raw: hashObject(unsigned) as Hex }, signature: signature.signature })).toLowerCase();
   } catch { return null; }
@@ -237,6 +240,7 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Csd
       message: { owner: buyer, spender: SETTLEMENT, value: q.total, nonce, deadline } });
     const strs = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === "bigint" ? String(v) : v])) as Record<string, string>;
     const authorization = strs(auth);
+    const { finalizeObject } = await aonSdk();
     const obj: any = finalizeObject({
       objectType: "authorization", schemaVersion: "1", namespace: NS, createdAt: Date.now(), references: [String(q.offer.objectHash).toLowerCase()],
       payload: { authorizationType: "csd_usdc_release", authorization, csdAddressProof: addressProof(key, authHash),

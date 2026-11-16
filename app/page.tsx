@@ -1706,7 +1706,13 @@ function frontierOf(c: Ctx, vs: Record<string, Verdict> = {}) {
   const methodOf = (r: Entry) => c.all.find(e => e.kind === "method" && e.method?.result.toLowerCase() === r.id && !!e.author && e.author === r.author && e.hidden === undefined);
   // the problem's notebook, newest first
   const pagesFor = (slug: string) => c.all.filter(e => e.kind === "page" && !!e.page && e.topic === resultsTopic(slug) && e.hidden === undefined).sort((a, b) => b.height - a.height || b.time - a.time);
-  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd, methodOf, pagesFor };
+  // the problem its poser retired it for, if any: only the poser's own entry counts
+  const supersededBy = (p: Entry) => {
+    const e = c.all.filter(x => x.kind === "superseded" && x.topic === resultsTopic(p.problem!.slug) && !!x.author && !!p.author && x.author === p.author && x.hidden === undefined).sort((a, b) => b.height - a.height)[0];
+    const by = e?.superseded;
+    return by && by !== p.problem!.slug ? problems.find(q => q.problem!.slug === by) ?? null : null;
+  };
+  return { problems, resultsFor, status, counts, records, bountiesFor, bountyState, openCsd, methodOf, pagesFor, supersededBy };
 }
 
 function RecordChart({ dir, records, small }: { dir: "max" | "min"; records: ResultEntry[]; small?: boolean }) {
@@ -1785,15 +1791,17 @@ function useBacked(c: Ctx, f: ReturnType<typeof frontierOf>): Record<string, num
 function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) {
   const f = useFrontier(c);
   // who set each result, for the podium and "held by"
-  useEffect(() => { c.needAuthors(f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))); }, [f.problems.length, f.problems.reduce((n, p) => n + f.resultsFor(p.problem!.slug).length, 0)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const supIds = c.all.filter(e => e.kind === "superseded").map(e => e.id);
+  useEffect(() => { c.needAuthors([...f.problems.map(p => p.id), ...supIds, ...f.problems.flatMap(p => f.resultsFor(p.problem!.slug).map(r => r.id))]); }, [f.problems.length, supIds.length, f.problems.reduce((n, p) => n + f.resultsFor(p.problem!.slug).length, 0)]); // eslint-disable-line react-hooks/exhaustive-deps
   const backed = useBacked(c, f);
   if (slug) return <FrontierProblem c={c} f={f} slug={slug} work={work} />;
   // the same order agents use: people's weight, eased off while a record stands still, solved last
   const now = Date.now() / 1000;
   const att = (p: Entry) => { const recs = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)), last = recs[recs.length - 1];
     return attention((c.resonance[p.id]?.count ?? 0) + bountyWeight(backed[p.problem!.slug] ?? 0), (now - (last?.time ?? p.time)) / 86400, solved(p.problem!, last?.result.score)); };
-  const ps = capBountied(f.problems.map(p => ({ p, attention: att(p), bountied: (backed[p.problem!.slug] ?? 0) > 0 })))
-    .sort((a, b) => b.attention - a.attention || a.p.height - b.p.height).map(x => x.p);
+  // a superseded problem: no attention, at the end of the list
+  const ps = capBountied(f.problems.map(p => { const sup = !!f.supersededBy(p); return { p, sup, attention: sup ? 0 : att(p), bountied: !sup && (backed[p.problem!.slug] ?? 0) > 0 }; }))
+    .sort((a, b) => Number(a.sup) - Number(b.sup) || b.attention - a.attention || a.p.height - b.p.height).map(x => x.p);
   return (
     <main className="cp-main cp-frontier">
       <header>
@@ -1803,7 +1811,7 @@ function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) 
       </header>
       {/* taking part, up front: most visitors never scroll to the bottom */}
       {(() => {
-        const first = ps.find(p => { const rec = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)); return !solved(p.problem!, rec[rec.length - 1]?.result.score); }) ?? ps[0];
+        const first = ps.find(p => { const rec = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)); return !f.supersededBy(p) && !solved(p.problem!, rec[rec.length - 1]?.result.score); }) ?? ps.find(p => !f.supersededBy(p));
         return (
           <section className="cp-takepart" aria-label="Take part">
             <div className="cp-row" style={{ gap: 10, flexWrap: "wrap" }}>
@@ -1821,6 +1829,7 @@ function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) 
           <a key={p.id} className="cp-problem" href={`#/frontier/${pr.slug}`}>
             <div className="top"><h2>{pr.title}</h2><span className="rec">{rec.length ? fmt(rec[rec.length - 1].result.score) : "No record"}</span></div>
             {solved(pr, rec[rec.length - 1]?.result.score) && <span className="cp-doclabel">Solved: the record reached the proven best</span>}
+            {f.supersededBy(p) && <span className="cp-doclabel">Superseded by {f.supersededBy(p)!.problem!.title}</span>}
             {f.openCsd(p) > 0 && <span className="cp-bounty-badge">Bounty: {fmt(f.openCsd(p))} CSD</span>}
             <p>{pr.statement}</p>
             <RecordChart dir={pr.direction} records={rec} small />
@@ -2303,13 +2312,14 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
   const methodIds = c.all.filter(e => e.kind === "method" && e.topic === resultsTopic(slug)).map(e => e.id);
   useEffect(() => { c.needAuthors([...rs.map(r => r.id), ...methodIds]); }, [rs.length, methodIds.length]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!p) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "No problem by that name." : "Reading the network…"}</p></main>;
-  const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id];
+  const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id], sup = f.supersededBy(p);
   return (
     <main className="cp-main cp-frontier">
       <header>
         <FrontierTabs at="problems" />
         <h1 className="cp-topic-title">{pr.title}</h1>
         <p className="lead">{pr.statement}</p>
+        {sup && <p className="cp-notice" style={{ marginTop: 14 }}>Its poser replaced this problem with <a href={`#/frontier/${sup.problem!.slug}`}>{sup.problem!.title}</a>. The results here stand as they are; new work goes there.</p>}
         <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
       </header>
       <section aria-labelledby="rec">
@@ -2321,7 +2331,7 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
         <button className="cp-btn-line" disabled={busy || !c.me || !!mine} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(p.id); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{mine ? "You put weight behind it" : busy ? "Sending…" : "Put weight behind this problem"}</button>
         <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
-      <details className="cp-work-wrap" id="work" ref={workRef}>
+      {!sup && <details className="cp-work-wrap" id="work" ref={workRef}>
         <summary>Work on this problem with an AI model, right from this page</summary>
         {(() => {
           const top = rec.length ? rec[rec.length - 1] : null;
@@ -2335,7 +2345,7 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
             run={runInBrowser} verify={verifyInBrowser} myName={mine}
             fetchText={(ar, hash) => fetchDoc(ar, hash ?? "").then(d => (hash && !d.matches ? null : d.text))} />;
         })()}
-      </details>
+      </details>}
       {err && <p className="err">{err}</p>}
       <Bounties c={c} f={f} p={p} />
       <Notebook c={c} f={f} slug={pr.slug} dir={pr.direction} verifier={verifier} />

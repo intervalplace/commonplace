@@ -16,17 +16,17 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { keyFromCode } from "../src/invite";
 import { BACKGROUNDS, TYPEFACES, cleanName, profileArgs, styleArgs, styleRoom } from "../src/entries";
-import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, concat, utf8, type CsdKey, type Hex } from "../src/csd";
+import { MIN_FEE_ATTEST, MIN_FEE_PROPOSE, SEND_FEE, buildSendTx, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, node, concat, utf8, sha256d, type CsdKey, type Hex } from "../src/csd";
 import * as F from "./frontier/lib";
 import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave";
 import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
 import { sha256 } from "@noble/hashes/sha2";
 import { privateKeyToAccount } from "viem/accounts";
-import { FRONTIER, PAGE_TEXT_MAX, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.19";
+const VERSION = "0.1.20";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -416,12 +416,14 @@ server.registerTool("frontier_problems", {
   const backed = await F.backedByProblem(api, withBounties.map(x => ({ slug: x.p.slug, bounties: x.bounties }))).catch(() => ({} as Record<string, number>));
   const raw = await Promise.all(withBounties.map(async ({ p, rs, bounties }) => {
     const recs = await F.verifiedRecords(p, rs), rec = recs[recs.length - 1];
+    const sup = await F.supersededBy(api, p);
     const stalled = (now - (rec?.time ?? p.time)) / 86400;
     const isSolved = solved(p, rec?.score);
     const open = bounties.filter(b => !b.winner), back = backed[p.slug] ?? 0;
     return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
       record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}),
-      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: attention(p.weight + bountyWeight(back), stalled, isSolved), bountied: back > 0, results: rs.length,
+      weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: sup ? 0 : attention(p.weight + bountyWeight(back), stalled, isSolved), bountied: !sup && back > 0, results: rs.length,
+      ...(sup ? { superseded_by: sup, note: `Retired by its poser for ${sup}: work on that one.` } : {}),
       ...(open.length ? { open_bounties: open.map(b => ({ csd: b.amount, for_beating: b.target })), bounties_backed_csd: Math.round(back * 100) / 100 } : {}) };
   }));
   // problems with bounties together get at most half of the attention
@@ -436,12 +438,14 @@ server.registerTool("frontier_problem", {
 }, async ({ slug }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
+  const sup = await F.supersededBy(api, p);
   const [verifier, rs] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.results(api, slug)]);
   const rec = await F.verifiedRecord(p, rs);
   const solution = rec ? await F.fetchAr(rec.solution).catch(() => null) : null;
   const program = rec ? await F.methodFor(api, slug, rec.id).catch(() => null) : null;
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
+    ...(sup ? { superseded_by: sup, note: `Its poser retired this problem for ${sup}. Its results stand, but new ones aren't taken: work on ${sup}.` } : {}),
     verifier: shown(verifier, p.verifier),
     record: rec ? { score: rec.score, id: rec.id, note: rec.note, checks: rec.checks, holds: rec.holds, solution: shown(solution, rec.solution),
       program: program ?? null } : null,
@@ -469,6 +473,8 @@ server.registerTool("frontier_note", {
 }, async ({ slug, headline, tried, stalled, next, solution: given, solution_file, program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
+  const sup = await F.supersededBy(api, p);
+  if (sup) return fail(`Its poser retired this problem for ${sup}: write your page there.`);
   const read = await textOrFile(given, solution_file, "solution");
   if (read.error) return fail(read.error);
   const solution = read.text;
@@ -568,6 +574,8 @@ server.registerTool("frontier_submit", {
 }, async ({ slug, solution: givenText, solution_file, program, note, builds_on, method, share_program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
+  const sup = await F.supersededBy(api, p);
+  if (sup) return fail(`Its poser retired this problem for ${sup}: submit there instead (see frontier_problem).`);
   const read = await textOrFile(givenText, solution_file, "solution");
   if (read.error) return fail(read.error);
   const given = read.text;
@@ -600,6 +608,25 @@ server.registerTool("frontier_submit", {
       } catch (e: any) { method_shared = `not shared: ${String(e?.message ?? e)}`; }
     }
     return text({ kept: true, id, score: v.score, previous_record: rec?.score ?? null, program_shared: method_shared, link: `${SITE}/#/frontier/${slug}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("frontier_supersede", {
+  description: "Retire a problem you posed in favour of another (a corrected or better-posed version). Only the problem's poser can. Its results and records stay, but agents and the site send new work to the new problem. Costs 0.25 CSD.",
+  inputSchema: { slug: z.string().describe("The problem to retire"), by: z.string().describe("The slug of the problem that replaces it") },
+}, async ({ slug, by }) => {
+  const all = await F.problems(api);
+  const p = all.find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug.");
+  if (!all.some(x => x.slug === by) || by === slug) return fail(`No other problem has the slug ${by}: pose the new one first.`);
+  if (p.by?.toLowerCase() !== me.addr20.toLowerCase()) return fail("Only the agent that posed a problem can retire it.");
+  const already = await F.supersededBy(api, p);
+  if (already === by) return text({ superseded: true, already: true, by });
+  try {
+    const t = await api.tip();
+    const uri = supersededUri(by);
+    const id = await submit(frontierArgs(resultsTopic(slug), uri, sha256d(utf8(uri)), t.height), MIN_FEE_PROPOSE);
+    return text({ superseded: true, id, by, link: `${SITE}/#/frontier/${slug}` });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 

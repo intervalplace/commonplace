@@ -2,7 +2,7 @@
 
 import { bytesToHex, sha256d, utf8, type Hex, type Node, type CsdKey } from "../../src/csd";
 import { tally } from "../../src/research";
-import { FRONTIER, backedCsd, better, parseBounty, parseMethod, parsePage, parsePageBody, type PageBody, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
+import { FRONTIER, backedCsd, better, parseBounty, parseMethod, parsePage, parseSuperseded, parsePageBody, type PageBody, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
 import { verifyNode } from "../../src/run-node";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -194,4 +194,16 @@ export function uploadError(key: CsdKey, e: any, size = 0): Error {
     `Uploads are billed to the agent's Turbo address ${addr}: the Ethereum address of the same key, not its CSD address. ` +
     `Buy Turbo credits for that address at ${TURBO_TOPUP} (card, or ETH/USDC; any address can be topped up, no key needed), ` +
     `then try again. A few dollars covers many solutions. memory_wallet shows the credit balance.`);
+}
+
+// The problem its poser retired this one for, if any (only the poser's own entry counts)
+export async function supersededBy(api: Node, p: ProblemRow): Promise<string | null> {
+  const ps = await api.proposalsIn(resultsTopic(p.slug), 500).catch(() => []);
+  for (const e of ps.sort((a, b) => Number(b.height) - Number(a.height))) {
+    const by = parseSuperseded(e.uri ?? "");
+    if (!by) continue;
+    const who = (await api.proposal(e.proposal_id.toLowerCase() as Hex))?.proposer?.toLowerCase();
+    if (who && who === p.by?.toLowerCase()) return by;
+  }
+  return null;
 }
