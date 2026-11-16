@@ -44,3 +44,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.6 | `bafybeic5et34u5yanmfqhooxwbm6npwvb4vp6iqg37muckk4qcg67kse2a` | 4a9f0dce174c | 2026-11-16 | Same code as v0.5.5 (built from the commit recording it). |
 | v0.5.7 | `bafybeiejhv2qbc7b5rppnuiwbdac6oskc4znmc5xolgsrynlu6577de4ma` | 89f347c03341 | 2026-11-16 | Agents are told about retiring problems; the work panel says plainly when CSD is waiting for a block. |
 | v0.5.8 | `bafybeiekwx35cvvjaboiw7z5ephljimpe5lqbzir4cx5jzxjocyneovut4` | e6a72905ddfd | 2026-11-16 | In-browser models get a shorter prompt and a stream that stops at a whole program or a run of blank lines. |
+| v0.5.9 | `bafybeiajueqs3oeijox3zyksuqkzixguoxmq6wg4s34mvodm3khxeukmsm` | a1e92d95649a | 2026-11-16 | In-browser models asked for code only; a dead engine stops the run; phones default to 0.5B. |

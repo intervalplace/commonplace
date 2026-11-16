@@ -45,7 +45,8 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean
     // the smallest models can write a code block, but not prose and then a code block: code only
     (k < 0.15 ? `\nWrite a JavaScript function solve(best) that returns a solution string in the problem's format, aiming to beat the record. ` +
       `It runs in a sandbox for at most 60 seconds, with no network. Reply with only a \`\`\`js code block, no explanation, ` +
-      `and make its first line a // comment saying the idea in a few words:\n\`\`\`js\n// <the idea>\nfunction solve(best) {\n  // your code\n  return solution;\n}\n\`\`\`` : "") +
+      `and make its first line a // comment saying your idea in a few words. Start from the record (\`best\`), change it, and return the changed copy, like this:\n` +
+      `\`\`\`js\n// nudge each value a little\nfunction solve(best) {\n  let s = best;\n  // change s here, keeping the format\n  return s;\n}\n\`\`\`` : "") +
     (k < 0.15 ? "" : `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
     `aiming to beat the record. It runs in a sandbox with no network or files for at most 60 seconds, so it may search or optimise ` +
     `(use a seeded random generator, not Math.random, so results are repeatable). Build on what has worked. ` +
@@ -76,7 +77,9 @@ export function parseProgram(text: string): ProgramReply | null {
   const code = blocks.find(b => fn.test(b)) ?? blocks[0] ?? (fn.test(text) ? bareFunction(text.slice(text.search(fn))) : undefined);
   // the idea, cut at a word if it's long, so a result's note never ends mid-word
   // the idea: its IDEA line, or else the program's first // comment
-  const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() || (code ? /^\s*\/\/\s*(.+)$/m.exec(code)?.[1]?.trim() : undefined) || "an improvement";
+  const template = /^(your code|your code here|<.*>|the idea.*|change s here.*|nudge each value a little)$/i;
+  const comment = code ? [...code.matchAll(/^\s*\/\/\s*(.+)$/gm)].map(m => m[1].trim()).find(c => !template.test(c)) : undefined;
+  const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() || comment || "an improvement";
   const idea = full.length <= 180 ? full : full.slice(0, 178).replace(/\s+\S*$/, "") + "…";
   const start = /START:\s*(0x[0-9a-fA-F]{64})/.exec(text)?.[1];
   return code ? { code, idea, ...(start ? { start } : {}) } : null;
@@ -108,7 +111,7 @@ export function fallbackPage(p: SolverProblem, tried: Attempt[], model: string):
   const valid = tried.filter(t => /^valid/.test(t.result));
   return {
     headline: cut(`${tried.length} programs from ${model}${valid.length ? `, ${valid.length} valid` : ", none valid"}; none beat ${p.record ? p.record.score : "an empty board"}`, 190),
-    tried: tried.map(t => `${t.idea}: ${t.result}`).join("\n").slice(0, 4000),
+    tried: tried.filter(t => t.idea !== "(no program)").map(t => `${t.idea}: ${t.result}`).join("\n").slice(0, 4000),
     stalled: valid.length ? "The valid programs didn't improve on the record." : "The programs didn't produce valid solutions: see the verifier's reasons above.",
     next: "Start from the record's solution and make small, verified changes; read the verifier's reasons for what was rejected.",
   };

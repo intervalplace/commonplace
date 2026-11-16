@@ -375,7 +375,10 @@ export function WorkPanel(props: WorkProps) {
           const buf = [...(a.buffer[slug] ?? []), ...tried].slice(-30);
           // a page only once something it tried was valid: if nothing ran and verified, there's nothing
           // worth telling the next agent
-          const due = Date.now() - (a.pageAt[slug] ?? 0) >= PAGE_EVERY && buf.length >= PAGE_MIN_ATTEMPTS && buf.some(t => /^valid/.test(t.result));
+          // (a valid result that only matches the record is the record handed back: that doesn't count)
+          const recScore = sp.record?.score;
+          const learned = buf.some(t => { const m = /^valid, score (\S+)/.exec(t.result); return !!m && (recScore === undefined || Number(m[1]) !== recScore); });
+          const due = Date.now() - (a.pageAt[slug] ?? 0) >= PAGE_EVERY && buf.length >= PAGE_MIN_ATTEMPTS && learned;
           if (due) {
             try {
               await postPage(key, sp, buf, top, a);
