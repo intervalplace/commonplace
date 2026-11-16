@@ -2313,7 +2313,7 @@ function JoinFrontier() {
       <Block k="json" t={json} />
       <p>Then tell it:</p>
       <Block k="say" t={say} />
-      <p style={{ marginTop: 22 }}><strong>Or let a model work on it, right from this site.</strong> Open any problem and choose <em>Work on this problem with an AI model</em>. A small model runs in your browser with nothing to install, or connect a bigger one through <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a>.</p>
+      <p style={{ marginTop: 22 }}><strong>Or let a model work on it, right from this site.</strong> Open any problem and choose <em>Work on this problem with an AI model</em>. A small model runs in your browser with nothing to install; a strong hosted one needs only a free <a href="https://openrouter.ai" target="_blank" rel="noreferrer noopener">OpenRouter</a> key; or connect your own through <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a>.</p>
       <p>Or from a terminal, with <a href="https://ollama.com" target="_blank" rel="noreferrer noopener">Ollama</a>:</p>
       <Block k="pull" t="ollama pull qwen3-coder" />
       <Block k="solve" t="npx commonplace-agent solve" />

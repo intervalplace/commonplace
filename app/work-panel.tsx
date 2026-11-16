@@ -40,13 +40,15 @@ const ATTACH_MAX = 100 * 1024;     // near-misses attached to a page only up to 
 type Saved = {
   priv: string; name: string; runBy: string; setupDone?: boolean;
   base: string; model: string;
-  source?: "browser" | "server"; webModel?: string; // the model in the browser: one of BROWSER_MODELS
+  source?: "browser" | "server" | "api"; webModel?: string; // the model in the browser: one of BROWSER_MODELS
+  apiBase?: string; apiKey?: string; apiModel?: string;    // a hosted model (OpenRouter by default), with the visitor's own key
   pageAt: Record<string, number>; buffer: Record<string, Attempt[]>;
 };
 const loadAgent = (): Saved | null => { try { const s = localStorage.getItem(K_AGENT); return s ? JSON.parse(s) : null; } catch { return null; } };
 const saveAgent = (s: Saved) => { try { localStorage.setItem(K_AGENT, JSON.stringify(s)); } catch {} };
 // Small coding models that run in a browser. Weak, but enough to try it out; a bigger model through
 // LM Studio does much better. The weights download once and the browser keeps them.
+const OPENROUTER = "https://openrouter.ai/api/v1";
 const BROWSER_MODELS = [
   { size: "0.5B", label: "Smallest, fastest", gb: 0.4, vram: 1 },
   { size: "1.5B", label: "Small", gb: 1, vram: 1.7 },
@@ -91,6 +93,7 @@ export function WorkPanel(props: WorkProps) {
   const [spendable, setSpendable] = useState<bigint | null>(null); // without what's waiting for a block
   const [models, setModels] = useState<string[] | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
+  const [apiModels, setApiModels] = useState<string[] | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
@@ -164,6 +167,20 @@ export function WorkPanel(props: WorkProps) {
         : `Couldn't reach a model at ${agent.base}. Is the server running, with CORS turned on? (${errText(e)})`);
     } finally { setConnecting(false); }
   };
+  // A hosted service's models, its free ones first (on OpenRouter those end in ":free")
+  const connectApi = async () => {
+    if (!agent) return;
+    setConnecting(true); setConnErr(null); setApiModels(null);
+    try {
+      const all = await listModels(agent.apiBase ?? OPENROUTER, agent.apiKey, AbortSignal.timeout(10_000));
+      const ms = [...all.filter(m => m.endsWith(":free")).sort(), ...all.filter(m => !m.endsWith(":free")).sort()];
+      if (!ms.length) throw new Error("NO_MODELS");
+      setApiModels(ms);
+      if (!ms.includes(agent.apiModel ?? "")) update(s => ({ ...s, apiModel: ms.find(m => /qwen3-coder.*:free/.test(m)) ?? ms[0] }));
+    } catch (e) {
+      setConnErr(errText(e) === "NO_MODELS" ? "The service answered, but listed no models." : `Couldn't reach ${agent.apiBase ?? OPENROUTER}: ${errText(e)}`);
+    } finally { setConnecting(false); }
+  };
   const loadBrowserModel = async () => {
     if (!agent || gpu === "none" || gpu === null) return;
     const id = webModelId(agent.webModel ?? "1.5B", gpu === "f16");
@@ -182,6 +199,7 @@ export function WorkPanel(props: WorkProps) {
   };
   // One request to the chosen model, streamed: the one in the browser, or the server's
   const ask = async (a: Saved, prompt: string, signal: AbortSignal, onText?: (t: string) => void): Promise<string> => {
+    if (a.source === "api") return askOpenAI({ base: a.apiBase ?? OPENROUTER, model: a.apiModel ?? "", apiKey: a.apiKey, prompt, signal, onText });
     if (a.source !== "browser") return askOpenAI({ base: a.base, model: a.model, prompt, signal, onText });
     const eng = engine.current;
     if (!eng) throw new Error("the model in this browser isn't loaded");
@@ -211,7 +229,7 @@ export function WorkPanel(props: WorkProps) {
       return out;
     } finally { signal.removeEventListener("abort", stop); }
   };
-  const modelName = (a: Saved) => (a.source === "browser" ? `Qwen2.5-Coder ${a.webModel ?? "1.5B"} in the browser` : a.model);
+  const modelName = (a: Saved) => (a.source === "browser" ? `Qwen2.5-Coder ${a.webModel ?? "1.5B"} in the browser` : a.source === "api" ? (a.apiModel ?? "a hosted model") : a.model);
 
   const fund = async () => {
     if (!key || !props.give) return;
@@ -308,7 +326,7 @@ export function WorkPanel(props: WorkProps) {
   };
 
   const work = async () => {
-    if (!agent || !key || (agent.source === "browser" ? !engine.current : !agent.model)) return;
+    if (!agent || !key || (agent.source === "browser" ? !engine.current : agent.source === "api" ? !agent.apiKey || !agent.apiModel : !agent.model)) return;
     stop.current = false; setRunning(true);
     say(`Started, with ${modelName(agent)}.`);
     let a = agent, toldNoCsd = false, dead = 0;
@@ -328,8 +346,13 @@ export function WorkPanel(props: WorkProps) {
           let text: string;
           const askedAt = Date.now();
           // a model in the browser has the smallest window: its prompt is trimmed hardest
-          try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.12 : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
-          catch (e) { if (stop.current) break; say(`The model didn't answer: ${errText(e)}`, "bad"); await sleep(5000); continue; }
+          try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.12 : a.source === "api" ? false : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
+          catch (e) {
+            if (stop.current) break;
+            if (/\b40[13]\b/.test(errText(e))) { say("The service refused the key. Check it was pasted whole, or make a new one.", "bad"); stop.current = true; break; }
+            if (/\b429\b/.test(errText(e))) { say("The service's limit is reached for now (on OpenRouter's free models, about 50 requests a day). Try again later, or add credit there to raise it.", "bad"); stop.current = true; break; }
+            say(`The model didn't answer: ${errText(e)}`, "bad"); await sleep(5000); continue;
+          }
           // an engine that died (a phone out of memory, as a rule) answers nothing, instantly: stop
           if (a.source === "browser" && !text.trim() && Date.now() - askedAt < 2000) {
             if (++dead >= 3) { say("The model in this browser stopped answering: the device may have run out of memory. Reload the page, load the model again, and pick a smaller one if it happens again.", "bad"); stop.current = true; break; }
@@ -413,7 +436,8 @@ export function WorkPanel(props: WorkProps) {
   );
 
   const browser = agent.source === "browser";
-  const ready = browser ? !!loaded : !!models && !!agent.model;
+  const api = agent.source === "api";
+  const ready = browser ? !!loaded : api ? !!agent.apiKey && !!agent.apiModel && !!apiModels : !!models && !!agent.model;
   const funded = balance !== null && balance > MIN_FEE_PROPOSE;
   return (
     <div className="cp-work">
@@ -421,7 +445,8 @@ export function WorkPanel(props: WorkProps) {
         <h3>1. A model</h3>
         <div className="cp-row" style={{ gap: 18, flexWrap: "wrap" }} role="radiogroup" aria-label="Where the model runs">
           <label className="cp-hint"><input type="radio" name="cp-src" checked={browser} disabled={running || gpu === "none"} onChange={() => update(s => ({ ...s, source: "browser" }))} /> In this browser, nothing to install{gpu === "none" ? " (needs WebGPU, which this browser lacks: try Chrome or Edge on a computer)" : ""}</label>
-          <label className="cp-hint"><input type="radio" name="cp-src" checked={!browser} disabled={running} onChange={() => update(s => ({ ...s, source: "server" }))} /> LM Studio, or another server</label>
+          <label className="cp-hint"><input type="radio" name="cp-src" checked={api} disabled={running} onChange={() => update(s => ({ ...s, source: "api" }))} /> A hosted model, with a free API key</label>
+          <label className="cp-hint"><input type="radio" name="cp-src" checked={!browser && !api} disabled={running} onChange={() => update(s => ({ ...s, source: "server" }))} /> LM Studio, or another server</label>
         </div>
         {browser ? (<>
           {gpu === "none" && <p className="cp-hint over">This browser can't run a model itself: it needs WebGPU. Try a recent Chrome or Edge on a computer, or use LM Studio.</p>}
@@ -436,6 +461,19 @@ export function WorkPanel(props: WorkProps) {
           {loading && <p className="cp-hint" style={{ overflowWrap: "anywhere" }}>{loading.text}</p>}
           {loadErr && <p className="cp-hint over">{loadErr}</p>}
           <p className="cp-hint">It downloads once and your browser keeps it, then runs on your graphics card. These small models are for trying it out: you'll see every attempt here, and a record is posted if one ever beats it. For real results, and notebook pages for the next agent, use a bigger model through LM Studio.</p>
+        </>) : api ? (<>
+          <p className="cp-hint">Strong models without the hardware. Get a free key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noreferrer noopener">OpenRouter</a>: sign in (Google or GitHub works), create a key, paste it here. Its free models need no card and allow about 50 requests a day, a dozen rounds. The key stays in this browser and goes only to OpenRouter.</p>
+          <div className="cp-row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <input className="cp-input" style={{ flex: "1 1 220px" }} type="password" placeholder="Your API key" value={agent.apiKey ?? ""} onChange={e => update(s => ({ ...s, apiKey: e.target.value.trim() }))} disabled={running} aria-label="API key" autoComplete="off" />
+            <button className="cp-btn-line" onClick={connectApi} disabled={connecting || running || !agent.apiKey}>{connecting ? "Connecting…" : apiModels ? "Reconnect" : "Connect"}</button>
+          </div>
+          {connErr && <p className="cp-hint over">{connErr}</p>}
+          {apiModels && <label className="cp-hint" style={{ display: "block", marginTop: 6 }}>Model{" "}
+            <select value={agent.apiModel ?? ""} onChange={e => update(s => ({ ...s, apiModel: e.target.value }))} disabled={running}>{apiModels.map(m => <option key={m} value={m}>{m}</option>)}</select></label>}
+          <details className="cp-hint"><summary>Another service</summary>
+            <p style={{ marginTop: 6 }}>Any OpenAI-compatible service that lets web pages in: its address here, its key above.</p>
+            <input className="cp-input" style={{ width: "100%" }} value={agent.apiBase ?? OPENROUTER} onChange={e => update(s => ({ ...s, apiBase: e.target.value.trim() }))} disabled={running} aria-label="Service address" />
+          </details>
         </>) : (<>
           <p className="cp-hint">In <a href="https://lmstudio.ai" target="_blank" rel="noreferrer noopener">LM Studio</a>: load a model, open the Developer view, start the server and turn on <em>Enable CORS</em>. Any OpenAI-compatible server works if it lets this page in.</p>
           <div className="cp-row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -473,7 +511,7 @@ export function WorkPanel(props: WorkProps) {
           {!running
             ? <button className="cp-btn" onClick={work} disabled={!ready}>Start working on this problem</button>
             : <button className="cp-btn-line" onClick={() => { stop.current = true; abort.current?.abort(); setStatus("Stopping after this step…"); }}>Stop</button>}
-          {!ready && <span className="cp-hint">{browser ? "Load the model first." : "Connect to a model first."}</span>}
+          {!ready && <span className="cp-hint">{browser ? "Load the model first." : api && !agent.apiKey ? "Paste a key and connect first." : "Connect to a model first."}</span>}
           {ready && !funded && !running && <span className="cp-hint">It can work unfunded; it needs CSD to post.</span>}
         </div>
         {unposted && <p className="cp-hint ok">A record waiting to be posted: {fmt(unposted.score)}. <button type="button" className="cp-linkbtn" onClick={postUnposted} disabled={!funded}>Post it</button></p>}
