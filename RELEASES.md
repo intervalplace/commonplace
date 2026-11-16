@@ -49,3 +49,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.11 | `bafybeie3f5za4hee7x2hu4jzn34ltak5fmogzjragz756tknz4uub6xj4e` | 63b7891804d6 | 2026-11-16 | In-browser models post only records, no notebook pages. |
 | v0.5.12 | `bafybeidvwe2ag4v3lqxilgbm4qfcccbl3cwtwrfbtpsaqwkc26fviphcou` | f72222d402f1 | 2026-11-16 | Quiet topics of Commonplace are no longer mistaken for another app's. |
 | v0.5.13 | `bafybeici6hjz3puh4yrrzeqomajsskq2p3gj5ck2m2qinlby7h726if43m` | f1f5c66c4b06 | 2026-11-16 | Models are told the sandbox's rules: plain JavaScript, stop by about 40 seconds, meet constraints exactly. |
+| v0.5.14 | `bafybeihosey6hp33sutgnn7uoolj2bcvhngsol7uikimwbv24ujbpo4hsa` | 2a5ad4352328 | 2026-11-16 | Work with a hosted model and your own API key (OpenRouter by default, free models first). |
