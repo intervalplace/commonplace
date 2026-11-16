@@ -1157,8 +1157,30 @@ const fromHere = (e: Entry) => e.kind !== "link";
 // whether an entry makes its topic Commonplace's: a reply doesn't, since a reply to another app's
 // proposal sits in that app's topic (one reply would otherwise pull the whole topic in)
 const ownsTopic = (e: Entry) => e.kind !== "link" && e.kind !== "reply";
+// Commonplace's own topics. Seen from the entries in view, which are mostly the network's newest:
+// a quiet topic's own entries can fall out of that window, so this browser remembers each topic it
+// has seen be Commonplace's (one can't stop being so), and topics with nothing in view are read
+// before they're counted as another app's (useOwnership)
+const K_OURS = "commonplace.ours1";
+let oursKnown: Set<string> | null = null;
+function oursOf(entries: Entry[]): Set<string> {
+  oursKnown ??= new Set(load(K_OURS, [] as string[]));
+  const before = oursKnown.size;
+  for (const e of entries) if (ownsTopic(e)) oursKnown.add(e.topic);
+  if (oursKnown.size !== before) save(K_OURS, [...oursKnown]);
+  return oursKnown;
+}
+function useOwnership(c: Ctx) {
+  useEffect(() => {
+    const inView = new Set(c.entries.map(e => e.topic)), known = oursOf(c.entries);
+    const unsure = c.domains.map(d => d.domain).filter(d => !isReserved(d) && !isFrontierTopic(d) && !known.has(d) && !inView.has(d));
+    let live = true;
+    (async () => { for (let i = 0; i < unsure.length && live; i += 4) await Promise.all(unsure.slice(i, i + 4).map(d => c.loadTopic(d))); })();
+    return () => { live = false; };
+  }, [c.domains.length]); // eslint-disable-line react-hooks/exhaustive-deps
+}
 function allTopics(c: Ctx) {
-  const ours = new Set(c.entries.filter(ownsTopic).map(e => e.topic));
+  const ours = oursOf(c.entries);
   const seen = new Map(topicStats(c.entries).map(t => [t.topic, { ...t, ours: ours.has(t.topic) }]));
   for (const d of c.domains) if (!isReserved(d.domain)) {
     const s = seen.get(d.domain);
@@ -1168,6 +1190,7 @@ function allTopics(c: Ctx) {
 }
 
 function Topics(c: Ctx) {
+  useOwnership(c);
   const every = allTopics(c);
   // the frontier's problems and results have a place of their own, so they stay out of the list (search still finds them)
   const listed = every.filter(t => !isFrontierTopic(t.topic));
@@ -1370,7 +1393,8 @@ function Everyone(c: Ctx) {
   const [range, setRange] = useState<"day" | "all">("all");
   const [picked, setPicked] = useState<string | null>(null);
   const [apps, setApps] = useState(false);
-  const ours = useMemo(() => new Set(c.entries.filter(ownsTopic).map(e => e.topic)), [c.entries]);
+  useOwnership(c);
+  const ours = useMemo(() => new Set(oursOf(c.entries)), [c.entries]);
   // since the first entry means every topic, not just the newest entries: read each one
   // (only Commonplace's own, unless other apps are asked for too)
   useEffect(() => {
