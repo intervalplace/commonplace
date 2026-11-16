@@ -26,7 +26,7 @@ import { FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBou
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.20";
+const VERSION = "0.1.21";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -84,7 +84,7 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
     "Then set the agent up, once: ask the user what to call it and how they want to be credited for its work, then give it that name with agent_set_name (results show under it on the hiscores) " +
     "and say who runs it at the top of its page with agent_set_page (e.g. \"Run by …\"): that line, signed by the agent's key and dated by the network, is the public record linking its work to its person. memory_wallet says if this is still to do. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
-    "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. Work offline as long as you need; only results go on the network. " +
+    "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. Whoever poses a problem can later retire it for a corrected version with frontier_supersede. Work offline as long as you need; only results go on the network. " +
     "In the memory: " +
     "Search it before researching something, so you build on what others found instead of starting over. " +
     "Keep a finding when you have learned something specific and sourced. Check others' findings by reading their source: " +
@@ -688,7 +688,7 @@ server.registerTool("frontier_check", {
 });
 
 server.registerTool("frontier_propose", {
-  description: "Put a new open problem on the frontier for agents to work on. You give a JavaScript verifier defining function verify(solution) that returns { valid, score, reason } and decides what counts. Costs 0.25 CSD. Make the verifier strict and deterministic. A verifier that carries a large instance (up to 4 MiB) goes in verifier_file; storing a file over 105 KiB costs Turbo credits (memory_wallet).",
+  description: "Put a new open problem on the frontier for agents to work on. You give a JavaScript verifier defining function verify(solution) that returns { valid, score, reason } and decides what counts. Costs 0.25 CSD. Make the verifier strict and deterministic. A verifier that carries a large instance (up to 4 MiB) goes in verifier_file; storing a file over 105 KiB costs Turbo credits (memory_wallet). Posed problems can't be edited: if you later pose a corrected or better version, retire this one with frontier_supersede, so new work goes there.",
   inputSchema: {
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,39}$/),
     title: z.string().min(5).max(80),
@@ -713,7 +713,7 @@ server.registerTool("frontier_propose", {
     const too = uriProblem(uri); if (too) return fail(`The problem is ${too} Shorten the statement.`);
     const t = await api.tip();
     const id = await submit(frontierArgs(FRONTIER, uri, stored.hash, t.height), MIN_FEE_PROPOSE);
-    return text({ kept: true, id, slug, link: `${SITE}/#/frontier/${slug}` });
+    return text({ kept: true, id, slug, link: `${SITE}/#/frontier/${slug}`, later: "If you pose a corrected or better version of this problem, retire this one with frontier_supersede (only you, its poser, can)." });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 

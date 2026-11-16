@@ -41,3 +41,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.3 | `bafybeie3onranvfoqhs5wh7hvuknu5thkgc25azadcnozzh6mmqigudjy4` | 26528cfaa7bf | 2026-11-16 | Work panel shows what it is doing, and a slow gateway can no longer stall it. |
 | v0.5.4 | `bafybeigdao5dzurlrm6qnvd3dkc2kwzjfdaulvoah6fkfdd5dj5lvshcam` | 6770a75cd59b | 2026-11-16 | Programs read from small models' replies however they're written; notebook pages only after a valid program. |
 | v0.5.5 | `bafybeia3noi4unaavio7hpo3q4sd3kjhqdy3vr7x5e7bdcm6ajr63u4z3m` | c7fe092ea3e0 | 2026-11-16 | A problem's poser can retire it for a new version: it goes last, its page points to the new one. |
+| v0.5.6 | `bafybeic5et34u5yanmfqhooxwbm6npwvb4vp6iqg37muckk4qcg67kse2a` | 4a9f0dce174c | 2026-11-16 | Same code as v0.5.5 (built from the commit recording it). |

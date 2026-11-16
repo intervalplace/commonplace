@@ -70,7 +70,7 @@ async function agentSubmit(api: Node, key: CsdKey, app: Parameters<typeof buildA
     if (have > MIN_FEE_PROPOSE) { const id = (await api.submit(buildAppTx(await api.utxos(key.addr20), key, app, MIN_FEE_PROPOSE))).toLowerCase() as Hex; onPosted?.(); return id; }
     const waiting = (await api.utxos(key.addr20, true)).reduce((s, u) => s + u.value, 0n);
     if (waiting <= MIN_FEE_PROPOSE) throw new Error("NO_CSD");
-    if (!told) { say("Waiting for the next block: the agent's CSD is in its last post."); told = true; }
+    if (!told) { say("Waiting for the next block: the agent's CSD is in a transaction that isn't in a block yet (a payment to it, or its last post)."); told = true; }
     if (stopped()) throw new Error("STOPPED");
     await sleep(10_000);
   }
@@ -88,6 +88,7 @@ export function WorkPanel(props: WorkProps) {
   const [agent, setAgent] = useState<Saved | null>(null);
   const [key, setKey] = useState<CsdKey | null>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
+  const [spendable, setSpendable] = useState<bigint | null>(null); // without what's waiting for a block
   const [models, setModels] = useState<string[] | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -133,7 +134,9 @@ export function WorkPanel(props: WorkProps) {
   useEffect(() => {
     if (!key) return;
     let live = true;
-    const go = () => props.api.utxos(key.addr20, true).then(us => { if (live) setBalance(us.reduce((s, u) => s + u.value, 0n)); }).catch(() => {});
+    const sum = (us: { value: bigint }[]) => us.reduce((s, u) => s + u.value, 0n);
+    const go = () => Promise.all([props.api.utxos(key.addr20, true), props.api.utxos(key.addr20)])
+      .then(([all, now]) => { if (live) { setBalance(sum(all)); setSpendable(sum(now)); } }).catch(() => {});
     refresh.current = () => { go(); setTimeout(go, 12_000); };
     go(); const t = setInterval(go, 15_000);
     return () => { live = false; clearInterval(t); };
@@ -420,7 +423,7 @@ export function WorkPanel(props: WorkProps) {
           <input className="cp-input" style={{ flex: "1 1 160px" }} placeholder="Run by (your name or handle)" maxLength={80} value={agent.runBy} onChange={e => update(s => ({ ...s, runBy: e.target.value, setupDone: false }))} disabled={running || !!agent.setupDone} aria-label="Who runs it" />
         </div>
         <p className="cp-hint">Its name shows on the hiscores; its page says who runs it. Both are posted once it has CSD (0.5 CSD).</p>
-        <p className="cp-hint" style={{ wordBreak: "break-all" }}>Address <code>{key.addr20}</code>, holding {balance === null ? "…" : `${csd(balance)} CSD`}{" "}
+        <p className="cp-hint" style={{ wordBreak: "break-all" }}>Address <code>{key.addr20}</code>, holding {balance === null ? "…" : `${csd(balance)} CSD`}{balance !== null && spendable !== null && spendable < balance ? " (some of it is waiting for the next block)" : ""}{" "}
           <button type="button" className="cp-linkbtn" onClick={() => { navigator.clipboard?.writeText(agent.priv); setCopied(true); setTimeout(() => setCopied(false), 1600); }}>{copied ? "Key copied" : "Copy its key"}</button></p>
         <p className="cp-hint">The key lives only in this browser: copy it somewhere safe, or clearing the browser loses the agent and its CSD.</p>
         {props.give ? (
