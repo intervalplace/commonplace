@@ -107,6 +107,8 @@ export function WorkPanel(props: WorkProps) {
   const [loaded, setLoaded] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const engine = useRef<any>(null);
+  // a phone's browser gets far less memory than a computer's: larger models can crash the tab
+  const phone = typeof navigator !== "undefined" && /iPhone|iPad|Android|Mobile/i.test(navigator.userAgent);
   const lastEnd = useRef(""); // how the last in-browser reply ended: "length", "blank", "stop"…
   const stop = useRef(false);
   const abort = useRef<AbortController | null>(null);
@@ -146,7 +148,7 @@ export function WorkPanel(props: WorkProps) {
 
   const create = () => {
     const priv = crypto.getRandomValues(new Uint8Array(32));
-    const s: Saved = { priv: bytesToHex(priv), name: "", runBy: props.myName ?? "", base: "http://localhost:1234/v1", model: "", source: gpu === "none" ? "server" : "browser", webModel: "1.5B", pageAt: {}, buffer: {} };
+    const s: Saved = { priv: bytesToHex(priv), name: "", runBy: props.myName ?? "", base: "http://localhost:1234/v1", model: "", source: gpu === "none" ? "server" : "browser", webModel: phone ? "0.5B" : "1.5B", pageAt: {}, buffer: {} };
     saveAgent(s); setAgent(s); setKey(keyFromPrivate(priv));
   };
   const connect = async () => {
@@ -190,7 +192,7 @@ export function WorkPanel(props: WorkProps) {
       // small models drift: a format to keep to, a nudge against repeating itself, and a shorter limit
       const chunks = await eng.chat.completions.create({
         messages: [
-          { role: "system", content: "You write short JavaScript programs. Answer only in the exact format the user shows: an IDEA line, then one ```js code block defining function solve(best)." },
+          { role: "system", content: "You write short JavaScript programs. Reply with only one ```js code block defining function solve(best), starting with a // comment line. No explanation." },
           { role: "user", content: prompt },
         ],
         stream: true, max_tokens: 1024, temperature: 0.6, repetition_penalty: 1.1,
@@ -309,7 +311,7 @@ export function WorkPanel(props: WorkProps) {
     if (!agent || !key || (agent.source === "browser" ? !engine.current : !agent.model)) return;
     stop.current = false; setRunning(true);
     say(`Started, with ${modelName(agent)}.`);
-    let a = agent, toldNoCsd = false;
+    let a = agent, toldNoCsd = false, dead = 0;
     setStatus("Checking the agent's name and page…");
     await setUp(key, a);
     try {
@@ -324,9 +326,14 @@ export function WorkPanel(props: WorkProps) {
           setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing…`);
           const ctrl = new AbortController(); abort.current = ctrl;
           let text: string;
+          const askedAt = Date.now();
           // a model in the browser has the smallest window: its prompt is trimmed hardest
           try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.12 : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
           catch (e) { if (stop.current) break; say(`The model didn't answer: ${errText(e)}`, "bad"); await sleep(5000); continue; }
+          // an engine that died (a phone out of memory, as a rule) answers nothing, instantly: stop
+          if (a.source === "browser" && !text.trim() && Date.now() - askedAt < 2000) {
+            if (++dead >= 3) { say("The model in this browser stopped answering: the device may have run out of memory. Reload the page, load the model again, and pick a smaller one if it happens again.", "bad"); stop.current = true; break; }
+          } else dead = 0;
           const pr = parseProgram(text);
           if (!pr) {
             tried.push({ idea: "(no program)", result: "failed: the reply had no program" });
@@ -415,7 +422,7 @@ export function WorkPanel(props: WorkProps) {
           {gpu === "none" && <p className="cp-hint over">This browser can't run a model itself: it needs WebGPU. Try a recent Chrome or Edge on a computer, or use LM Studio.</p>}
           <label className="cp-hint" style={{ display: "block" }}>Model{" "}
             <select value={agent.webModel ?? "1.5B"} onChange={e => { update(s => ({ ...s, webModel: e.target.value })); setLoaded(null); }} disabled={running || !!loading}>
-              {BROWSER_MODELS.map(m => <option key={m.size} value={m.size}>Qwen2.5-Coder {m.size}: {m.label} (about {m.gb} GB download)</option>)}
+              {BROWSER_MODELS.map(m => <option key={m.size} value={m.size}>Qwen2.5-Coder {m.size}: {m.label} (about {m.gb} GB download){phone && m.size !== "0.5B" ? ", may crash a phone's browser" : ""}</option>)}
             </select></label>
           <div className="cp-row" style={{ gap: 10, flexWrap: "wrap" }}>
             <button className="cp-btn-line" onClick={loadBrowserModel} disabled={!!loading || running || gpu === "none" || gpu === null}>{loading ? "Loading…" : loaded ? "Loaded" : "Load it"}</button>

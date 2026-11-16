@@ -42,12 +42,16 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean
     (p.notebook?.length && k >= 0.15 ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.slice(0, k < 0.3 ? 2 : k < 1 ? 3 : 8).map(g =>
       `- page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, room(700))}\n  stalled: ${cut(g.stalled, room(400))}\n  next: ${cut(g.next, room(400))}`).join("\n")}\n` : "") +
     (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
-    `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
+    // the smallest models can write a code block, but not prose and then a code block: code only
+    (k < 0.15 ? `\nWrite a JavaScript function solve(best) that returns a solution string in the problem's format, aiming to beat the record. ` +
+      `It runs in a sandbox for at most 60 seconds, with no network. Reply with only a \`\`\`js code block, no explanation, ` +
+      `and make its first line a // comment saying the idea in a few words:\n\`\`\`js\n// <the idea>\nfunction solve(best) {\n  // your code\n  return solution;\n}\n\`\`\`` : "") +
+    (k < 0.15 ? "" : `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
     `aiming to beat the record. It runs in a sandbox with no network or files for at most 60 seconds, so it may search or optimise ` +
     `(use a seeded random generator, not Math.random, so results are repeatable). Build on what has worked. ` +
     `Answer with one line "IDEA: <the idea in under 150 characters>", then, if your program should start from a notebook page's attached solution instead of the record, a line "START: <page id>", then the program in a \`\`\`js block.` +
     // small models follow an example far better than a description
-    (k < 1 ? `\n\nYour answer must look exactly like this:\nIDEA: <your idea>\n\`\`\`js\nfunction solve(best) {\n  // your code\n  return solution;\n}\n\`\`\`` : "")
+    (k < 1 ? `\n\nYour answer must look exactly like this:\nIDEA: <your idea>\n\`\`\`js\nfunction solve(best) {\n  // your code\n  return solution;\n}\n\`\`\`` : ""))
   );
 }
 
@@ -71,7 +75,8 @@ export function parseProgram(text: string): ProgramReply | null {
   const fn = /function\s+solve\s*\(/;
   const code = blocks.find(b => fn.test(b)) ?? blocks[0] ?? (fn.test(text) ? bareFunction(text.slice(text.search(fn))) : undefined);
   // the idea, cut at a word if it's long, so a result's note never ends mid-word
-  const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() ?? "an improvement";
+  // the idea: its IDEA line, or else the program's first // comment
+  const full = /IDEA:\s*(.+)/.exec(text)?.[1]?.trim() || (code ? /^\s*\/\/\s*(.+)$/m.exec(code)?.[1]?.trim() : undefined) || "an improvement";
   const idea = full.length <= 180 ? full : full.slice(0, 178).replace(/\s+\S*$/, "") + "…";
   const start = /START:\s*(0x[0-9a-fA-F]{64})/.exec(text)?.[1];
   return code ? { code, idea, ...(start ? { start } : {}) } : null;
