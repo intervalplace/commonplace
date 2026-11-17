@@ -2,22 +2,26 @@
 // server are stood in for: a name-history and the proven transactions behind it.
 //   npx tsx test/cns.test.mts
 import { nameClaim, nameSet, nameProfile, nameRegFee, TREASURY_ADDR } from "@inversealtruism/cairnx-core";
-import { hexToBytes, type Hex, type Tx } from "../src/csd";
+import { txid as txidOf, hexToBytes, keyFromPrivate, signTx, serializeTx, bytesToHex, type Hex, type Tx } from "../src/csd";
 import { lookupCsdName, targetOf, nodeOf } from "../src/cns";
 import type { Verified } from "../src/light";
 let failures = 0;
 const ok = (cond: unknown, what: string) => { console.log(`${cond ? "ok  " : "FAIL"} ${what}`); if (!cond) failures++; };
-const A = ("0x" + "aa".repeat(20)) as Hex, B = ("0x" + "bb".repeat(20)) as Hex;
+const kA = keyFromPrivate(new Uint8Array(32).fill(1)), kB = keyFromPrivate(new Uint8Array(32).fill(2));
+const A = kA.addr20.toLowerCase() as Hex, B = kB.addr20.toLowerCase() as Hex;
+const keyOf = (a: Hex) => (a === A ? kA : kB);
 const H0 = 40_100; // after names leases, before sealed registration: a direct claim with its fee
 type Built = { uri: string; payloadHash: string };
 const proven = new Map<string, Verified>(), history: { txid: string; height: number; pos: number; kind: string }[] = [];
+const raw: { txid: string; height: number; pos: number; tx_raw: string }[] = [];
 let n = 0;
 const add = (by: Hex, b: Built, height: number, pay: { addr: Hex; value: bigint }[] = []) => {
-  const txid = ("0x" + (++n).toString(16).padStart(64, "0")) as Hex;
-  const tx: Tx = { version: 1, inputs: [], outputs: pay.map(p => ({ addr20: p.addr, value: p.value })), locktime: 0,
-    app: { kind: "propose", domain: "cairnx:v1", payloadHash: hexToBytes(b.payloadHash), uri: b.uri, expiresEpoch: BigInt(Math.floor(height / 30) + 100) } };
+  const tx: Tx = signTx({ version: 1, inputs: [{ txid: ("0x" + (++n).toString(16).padStart(64, "0")) as Hex, vout: 0, scriptSig: new Uint8Array() }], outputs: pay.map(p => ({ addr20: p.addr, value: p.value })), locktime: 0,
+    app: { kind: "propose", domain: "cairnx:v1", payloadHash: hexToBytes(b.payloadHash), uri: b.uri, expiresEpoch: BigInt(Math.floor(height / 30) + 100) } }, keyOf(by));
+  const txid = txidOf(tx);
   proven.set(txid, { txid, tx, author: by, height, index: 1, blockHash: ("0x" + "00".repeat(32)) as Hex, depth: 10 });
   history.push({ txid, height, pos: 1, kind: "x" });
+  raw.push({ txid, height, pos: 1, tx_raw: bytesToHex(serializeTx(tx)) });
 };
 add(A, nameClaim({ name: "alice" }), H0, [{ addr: TREASURY_ADDR as Hex, value: nameRegFee("alice", H0) }]);
 add(B, nameClaim({ name: "alice" }), H0 + 5, [{ addr: TREASURY_ADDR as Hex, value: nameRegFee("alice", H0 + 5) }]);
@@ -44,4 +48,21 @@ ok(free.state === "free", "a name Cairn has no record of is free");
 let refused = false;
 try { await lookupCsdName("alice", { ...light, checkTx: async () => { throw new Error("BAD_PROOF: not in that block"); } }, { fetch: fakeCairn(hist({ addr: B, owner: A })) }); } catch { refused = true; }
 ok(refused, "an event that doesn't prove stops the lookup");
+// Cairn's server gone: the name is rebuilt from a node's whole CairnX history
+let pages = 0;
+const nodeFetch = (async (u: string) => {
+  const m = /\/events\/[^/]+\/(\d+)\/(\d+)$/.exec(String(u))!; pages++;
+  const from = +m[1], to = from + +m[2] - 1;
+  return new Response(JSON.stringify({ ok: true, events: raw.filter(e => e.height >= from && e.height <= to) }), { status: 200 });
+}) as unknown as typeof fetch;
+const down = (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
+const fb = await lookupCsdName("alice", light, { fetch: down, node: { base: "http://node", fetch: nodeFetch } });
+ok(fb.source === "node" && fb.state === "held" && fb.owner === A && fb.addr === B && fb.checked, "with Cairn's server down, the node's own history decides the same, proven");
+ok(pages > 0, `it read the history in pages (${pages})`);
+const again = await lookupCsdName("alice", light, { fetch: down, node: { base: "http://node", fetch: nodeFetch } });
+ok(again.addr === B, "and a second lookup reuses what it read");
+const lyingNode = (async (u: string) => { const r = await nodeFetch(u as any); const j = await r.json(); for (const e of j.events) e.tx_raw = e.tx_raw.slice(0, -2) + (e.tx_raw.endsWith("00") ? "01" : "00"); return new Response(JSON.stringify(j)); }) as unknown as typeof fetch;
+let caught = false;
+try { await lookupCsdName("alice", light, { fetch: down, node: { base: "http://other-node", fetch: lyingNode } }); } catch { caught = true; }
+ok(caught, "a node that alters a record is caught");
 console.log(failures ? `\n${failures} failed` : "\nall passed"); process.exit(failures ? 1 : 0);

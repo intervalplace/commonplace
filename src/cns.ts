@@ -16,7 +16,7 @@
 //
 // What a name points to: its address (`nset`, else its owner), and, by convention between apps, keys
 // in its profile (`nprofile`): `ipfs` for a site on IPFS, `csd.node` for a node, `url` for a link.
-import type { Hex } from "./csd";
+import { bytesToHex, deserializeTx, hexToBytes, signerOf, txid, type Hex, type Tx } from "./csd";
 import type { Verified } from "./light";
 
 export const CAIRN = "https://cairn-substrate.com";
@@ -32,6 +32,7 @@ export type CsdName = {
   checked: boolean;                   // every event proven, and the replay decides the name on its own
   why?: string;                       // why not, when not
   serverDisagrees?: boolean;          // Cairn's server says otherwise than the proven replay
+  source?: "cairn" | "node";          // whose list of the name's records it was read from
 };
 
 type Light = { checkTx: (txid: Hex) => Promise<Verified>; syncTail: () => Promise<{ height: number }> };
@@ -56,14 +57,104 @@ function eventOf(v: Verified, paidToFromOutputs: (o: { addr: string; value: numb
   return null;
 }
 
-export async function lookupCsdName(name: string, light: Light, opts: { cairn?: string; fetch?: typeof fetch } = {}): Promise<CsdName> {
-  const f = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+// The whole CairnX history, from a node, block by block (`/events/cairnx:v1/<from>/<count>`), kept per
+// node so a later lookup reads only the blocks since. Each event is its raw transaction, which must
+// hash to its txid.
+type RawEvent = { txid: Hex; height: number; pos: number; tx: Tx };
+const histories = new Map<string, { to: number; events: RawEvent[] }>();
+async function nodeHistory(node: NodeSource, tip: number, activation: number): Promise<RawEvent[]> {
+  const key = node.base;
+  const had = histories.get(key) ?? { to: activation - 1, events: [] };
+  const url = (from: number) => `${node.base.replace(/\/$/, "")}/events/${encodeURIComponent("cairnx:v1")}/${from}/2000`;
+  const pages: number[] = [];
+  for (let from = had.to + 1; from <= tip; from += 2000) pages.push(from);
+  const got: RawEvent[][] = new Array(pages.length);
+  // four requests at a time
+  for (let i = 0; i < pages.length; i += 4) {
+    await Promise.all(pages.slice(i, i + 4).map(async (from, k) => {
+      const r = await node.fetch(url(from), { signal: AbortSignal.timeout(60_000) });
+      if (!r.ok) throw new Error(r.status === 404 ? "NODE_404" : `NODE_${r.status}`);
+      const j = await r.json();
+      got[i + k] = (j.events ?? []).map((e: any) => {
+        const tx = deserializeTx(hexToBytes(e.tx_raw));
+        if (txid(tx).toLowerCase() !== String(e.txid).toLowerCase()) throw new Error("BAD_PROOF: an event isn't the transaction it claims to be");
+        return { txid: String(e.txid).toLowerCase() as Hex, height: Number(e.height), pos: Number(e.pos), tx };
+      });
+    }));
+  }
+  const all = { to: tip, events: [...had.events, ...got.flat()] };
+  histories.set(key, all);
+  return all.events;
+}
+
+// The events that decide one name: its own records, offers selling it, what claims and fills those
+// offers, and the commitment a sealed registration of it revealed
+function touching(core: any, name: string, evs: RawEvent[]): Set<string> {
+  const ids = new Set<string>(), offers = new Set<string>(), commits = new Set<string>();
+  const recs = evs.map(e => (e.tx.app.kind === "propose" ? { e, rec: core.parseRecord(e.tx.app.uri, bytesToHex(e.tx.app.payloadHash)) } : { e, rec: null }));
+  for (const { e, rec } of recs) {
+    if (!rec) continue;
+    if (rec.name === name) {
+      ids.add(e.txid);
+      if (rec.salt && signerOf(e.tx)) commits.add(core.nameCommit(name, rec.salt, signerOf(e.tx)!).toLowerCase());
+    }
+    if (rec.t === "offer" && rec.give?.name === name) { ids.add(e.txid); offers.add(e.txid); }
+  }
+  for (const { e, rec } of recs) {
+    if (rec?.t === "ncommit" && commits.has(String(rec.commit).toLowerCase())) ids.add(e.txid);
+    if (rec?.t === "fclaim" && offers.has(String(rec.offer).toLowerCase())) { ids.add(e.txid); offers.add(e.txid); }
+  }
+  for (const e of evs) if (e.tx.app.kind === "attest" && offers.has(e.tx.app.proposalId.toLowerCase())) ids.add(e.txid);
+  return ids;
+}
+
+const asEvent = (e: RawEvent, paidToFromOutputs: any) => eventOf({ txid: e.txid, tx: e.tx, author: signerOf(e.tx), height: e.height, index: e.pos, blockHash: "0x" as Hex, depth: 0 }, paidToFromOutputs);
+
+export type NodeSource = { base: string; fetch: typeof fetch };
+
+// A name, from Cairn's server's list of its records when it answers, or else rebuilt from a node's
+// full CairnX history; either way the records that decide it are proven here, and Cairn's own
+// resolver decides.
+export async function lookupCsdName(name: string, light: Light, opts: { cairn?: string; fetch?: typeof fetch; node?: NodeSource } = {}): Promise<CsdName> {
   if (!NAME_RE.test(name)) throw new Error("A .csd name is 1 to 32 lowercase letters, digits and dashes, not starting or ending with a dash.");
   // the rules, loaded only when a name is looked up
   const core = await import("@inversealtruism/cairnx-core");
   if (core.RESERVED_NAMES.has(name)) return { name, state: "free", profile: {}, checked: true, why: "a reserved name" };
+  let viaCairn: CsdName | null = null, cairnFailed: unknown = null;
+  try { viaCairn = await fromCairn(core, name, light, opts); } catch (x) { cairnFailed = x; }
+  // Cairn's answer stands when it is fully proven; otherwise the node's whole history decides
+  if (viaCairn?.checked || !opts.node) {
+    if (viaCairn) return viaCairn;
+    throw cairnFailed;
+  }
+  try {
+    const tip = (await light.syncTail()).height;
+    const evs = await nodeHistory(opts.node, tip, core.ACTIVATION_HEIGHT);
+    const decide = touching(core, name, evs);
+    for (const e of evs) if (decide.has(e.txid)) {
+      const v = await light.checkTx(e.txid);
+      if (v.height !== e.height || v.index !== e.pos) throw new Error("BAD_PROOF: a record isn't where the node said it is");
+    }
+    const st = core.resolve(evs.map(e => asEvent(e, core.paidToFromOutputs)).filter((x): x is NonNullable<typeof x> => !!x), tip).names[name];
+    const out: CsdName = { name, state: "free", profile: {}, checked: true, source: "node" };
+    if (st) {
+      out.owner = st.owner as Hex; out.profile = st.profile ?? {};
+      out.state = st.pending ? "pending" : st.expired ? "lapsed" : "held";
+      if (out.state === "held") out.addr = (st.addr ?? st.owner) as Hex;
+    }
+    if (viaCairn && (viaCairn.addr ?? null) !== (out.addr ?? null)) out.serverDisagrees = true;
+    return out;
+  } catch (x: any) {
+    // the node can't do it either (older node software, say): Cairn's partial answer, or the first error
+    if (viaCairn) return viaCairn;
+    throw /NODE_404/.test(String(x?.message)) && cairnFailed ? cairnFailed : x;
+  }
+}
+
+async function fromCairn(core: any, name: string, light: Light, opts: { cairn?: string; fetch?: typeof fetch }): Promise<CsdName> {
+  const f = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const r = await f(`${(opts.cairn ?? CAIRN).replace(/\/$/, "")}/trade/api/cairnx/name-history/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(15_000) });
-  if (r.status === 404) return { name, state: "free", profile: {}, checked: false, why: "Cairn's server has no record of it" };
+  if (r.status === 404) return { name, state: "free", profile: {}, checked: false, why: "Cairn's server has no record of it", source: "cairn" };
   if (!r.ok) throw new Error(`CAIRN_${r.status}`);
   const h = (await r.json()) as History;
   if (h?.name !== name || !Array.isArray(h.events)) throw new Error("CAIRN_BAD_ANSWER");
@@ -84,7 +175,7 @@ export async function lookupCsdName(name: string, light: Light, opts: { cairn?: 
   }
   const tip = (await light.syncTail()).height;
   const st = core.resolve(events, tip).names[name];
-  const out: CsdName = { name, state: "free", profile: {}, checked: h.scopedReplaySufficient, why: h.scopedReplaySufficient ? undefined : h.caveat ?? "this name's history can't be decided from its own events alone" };
+  const out: CsdName = { name, state: "free", profile: {}, checked: h.scopedReplaySufficient, source: "cairn", why: h.scopedReplaySufficient ? undefined : h.caveat ?? "this name's history can't be decided from its own events alone" };
   if (st) {
     out.owner = st.owner as Hex;
     out.profile = st.profile ?? {};
@@ -99,7 +190,7 @@ export async function lookupCsdName(name: string, light: Light, opts: { cairn?: 
 function serversWord(name: string, h: History): CsdName {
   const addr = h.resolve?.addr?.toLowerCase() as Hex | undefined;
   return { name, state: addr ? "held" : h.resolve?.lapsed ? "lapsed" : "free", owner: h.resolve?.owner?.toLowerCase() as Hex | undefined, addr, profile: {},
-    checked: false, why: "this node can't be checked against the proof-of-work, so this is Cairn's server's word" };
+    checked: false, source: "cairn", why: "this node can't be checked against the proof-of-work, so this is Cairn's server's word" };
 }
 
 // Where a name sends someone who opens it

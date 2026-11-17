@@ -211,6 +211,8 @@ export default function Page() {
   const api = useMemo(() => node(base, fetchFor(base)), [base]);
   // checks what the node says against the network's proof-of-work, so the node needn't be trusted
   const light = useMemo(() => lightClient(base, { fetch: fetchFor(base) }), [base]);
+  // the node, for reading an app's whole history (.csd names when Cairn's server doesn't answer)
+  const nodeSrc = useMemo(() => ({ base, fetch: fetchFor(base) }), [base]);
 
   // the shared memory: every proposal on chain, refreshed every 30 s
   const [height, setHeight] = useState(0);
@@ -514,7 +516,7 @@ export default function Page() {
   };
 
   const switchNode = (n: string) => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); };
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -543,7 +545,7 @@ export default function Page() {
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
         {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
-      {choosingNode && <NodeDialog byName={async n => nodeOf(await lookupCsdName(n, light))} current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}
+      {choosingNode && <NodeDialog byName={async n => nodeOf(await lookupCsdName(n, light, { node: nodeSrc }))} current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}
       {keeping && (
         <KeepDialog
           {...keeping} keyState={[key, setKey]} balance={balance}
@@ -603,7 +605,7 @@ type Ctx = {
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
   waiting: Waiting[]; unwait: (at: number) => void; keepWaiting: () => void;
   editProfile: () => void;
-  all: Entry[]; api: ReturnType<typeof node>; light: ReturnType<typeof lightClient>; switchNode: (n: string) => void; learnAuthors: (m: Record<string, Hex>) => void;
+  all: Entry[]; api: ReturnType<typeof node>; light: ReturnType<typeof lightClient>; nodeSrc: { base: string; fetch: typeof fetch }; switchNode: (n: string) => void; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
   styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
   poseProblem: (pb: Omit<Problem, "verifier">, verifier: string, step?: (s: string) => void) => Promise<Hex>;
@@ -1561,10 +1563,10 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
     setQ(name ?? ""); setRes(null); setErr(null);
     if (!name) return;
     let live = true;
-    lookupCsdName(name, c.light).then(r => live && setRes(r)).catch(x => live && setErr(/CAIRN_|Failed to fetch|NetworkError|TimeoutError|abort/i.test(String(x?.message ?? x))
-      ? "Cairn's server, which lists a name's records, didn't answer. Try again in a moment." : nice(x)));
+    lookupCsdName(name, c.light, { node: c.nodeSrc }).then(r => live && setRes(r)).catch(x => live && setErr(/CAIRN_|Failed to fetch|NetworkError|TimeoutError|abort/i.test(String(x?.message ?? x))
+      ? "Neither Cairn's server nor this node could list this name's records just now. Try again in a moment, or another node." : /NODE_404/.test(String(x?.message)) ? "Cairn's server didn't answer, and this node can't list a name's history on its own (it needs newer node software). Try another node." : nice(x)));
     return () => { live = false; };
-  }, [name, c.light]);
+  }, [name, c.light, c.nodeSrc]);
   // from a web+csd: link: go straight where it points
   const target = res ? targetOf(res) : null;
   useEffect(() => {
@@ -1605,7 +1607,7 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
           {node && <p style={{ margin: 0 }}>Its node: <span className="cp-mono">{nodeLabel(node)}</span> <button className="cp-btn-line" style={{ marginLeft: 8 }} onClick={() => c.switchNode(node)}>Read through it</button></p>}
           <p className="cp-hint" style={{ margin: 0 }}>
             Held by <Who addr={res.owner!} size={18} you={res.owner === c.me?.addr20.toLowerCase()} />.{" "}
-            {res.checked ? <span className="cp-checkmark ok" title="Every record of this name was proven against the network's proof-of-work here, and replayed through Cairn's own rules.">✓ checked</span>
+            {res.checked ? <span className="cp-checkmark ok" title={`Every record that decides this name was proven against the network's proof-of-work here, and replayed through Cairn's own rules. Its records were listed by ${res.source === "node" ? "the node, from the network's whole CairnX history" : "Cairn's server"}.`}>✓ checked</span>
               : <span className="cp-checkmark" title={res.why}>not checked</span>}
           </p>
           {res.serverDisagrees && <p className="cp-check bad" style={{ margin: 0 }}>Cairn&apos;s server says this name points somewhere else. What&apos;s shown here is what its proven records say.</p>}
