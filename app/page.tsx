@@ -25,13 +25,33 @@ type Me = CsdKey | CairnMe;
 const local = (k: Me | null | undefined): k is CsdKey => !!k && "priv" in k;
 
 // ── settings and small stores ───────────────────────────────────────────────
-const DEFAULT_NODE = process.env.NEXT_PUBLIC_CSD_API ?? "https://csd.aon.network";
-function nodeUrl(): string {
+// Public nodes, tried in this order when one doesn't answer. A visitor's own choice (`?node=…`,
+// remembered in this browser; `?node=default` forgets it) comes first.
+const NODES = (process.env.NEXT_PUBLIC_CSD_APIS ?? process.env.NEXT_PUBLIC_CSD_API ?? "https://csd.aon.network").split(",").map(s => s.trim()).filter(Boolean);
+const DEFAULT_NODE = NODES[0];
+let workingNode: string | null = null;
+function chosenNode(): string | null {
   try {
     const q = new URLSearchParams(window.location.search).get("node");
-    if (q) localStorage.setItem("commonplace.node", q);
-    return localStorage.getItem("commonplace.node") || DEFAULT_NODE;
-  } catch { return DEFAULT_NODE; }
+    if (q === "default") localStorage.removeItem("commonplace.node");
+    else if (q) localStorage.setItem("commonplace.node", q);
+    return localStorage.getItem("commonplace.node");
+  } catch { return null; }
+}
+function nodeCandidates(): string[] {
+  const c = chosenNode();
+  return [...new Set([...(c ? [c] : []), ...NODES])];
+}
+// the node in use: the last one that answered, or else the first to try
+function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
+// the first node that answers, starting after the one that just failed
+async function findNode(failed: string): Promise<string | null> {
+  const all = nodeCandidates();
+  const order = [...all.slice(all.indexOf(failed) + 1), ...all.slice(0, Math.max(0, all.indexOf(failed)))].filter(n => n !== failed);
+  for (const n of order) {
+    try { const r = await fetch(`${n.replace(/\/$/, "")}/tip`, { signal: AbortSignal.timeout(6000) }); if (r.ok) return n; } catch {}
+  }
+  return null;
 }
 function load<T>(k: string, d: T): T { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } }
 function save(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
@@ -129,6 +149,7 @@ export default function Page() {
   const [authors, setAuthors] = useState<Record<string, Hex>>({});
   useEffect(() => { setPending(load(K_PENDING, [])); setAuthors(load(K_AUTHORS, {})); }, []);
 
+  const switches = useRef(0);
   const refresh = useCallback(async () => {
     try {
       const [t, ps] = await Promise.all([api.tip(), api.proposals(500)]);
@@ -137,7 +158,7 @@ export default function Page() {
       const es = ps.map(parseEntry).sort((a, b) => b.height - a.height || (a.id < b.id ? -1 : 1));
       setChain(es);
       api.resonance().then(setAllTime).catch(() => {});
-      setNetError(null);
+      setNetError(null); setLoaded(true); switches.current = 0;
       // anything of ours that has landed in a block is no longer pending; give up on a send after a day
       setPending(prev => {
         const ids = new Set(es.map(e => e.id));
@@ -146,8 +167,15 @@ export default function Page() {
         return next;
       });
     } catch (e: any) {
-      setNetError(`Can't reach the CSD node at ${base}.`);
-    } finally { setLoaded(true); }
+      // another node, if one answers; this one is tried again only when the others fail too
+      // (at most once round the list, so two half-working nodes can't hand the page back and forth)
+      const other = switches.current < nodeCandidates().length ? await findNode(base) : null;
+      // (still loading: the page waits for that node's answer instead of showing an empty memory)
+      if (other) { switches.current++; workingNode = other; setBase(other); return; }
+      setLoaded(true);
+      const all = nodeCandidates();
+      setNetError(all.length > 1 ? `Can't reach any CSD node (tried ${all.join(", ")}).` : `Can't reach the CSD node at ${base}.`);
+    }
   }, [api, base]);
   useEffect(() => { refresh(); const t = setInterval(refresh, 30_000); return () => clearInterval(t); }, [refresh]);
 

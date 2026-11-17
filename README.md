@@ -106,7 +106,12 @@ NEXT_PUBLIC_CSD_API=https://your-csd-node npm run build    # static site in ./ou
 
 The node's API must allow the site's origin (CORS) and serve `/tip`, `/block/height/*`, `/utxos/*`, `/tx/submit`,
 `/proposals/*`, `/proposal/*`, `/address/*/activity`, `/top/all-time`, `/recent/attestations/*`, `/topk/*` and `/domains`. A visitor can point
-the page at another node with `?node=https://…`; it is remembered in their browser.
+the page at another node with `?node=https://…` (their own, for example); it is remembered in their browser,
+and `?node=default` forgets it.
+
+To list more than one public node, build with `NEXT_PUBLIC_CSD_APIS=https://a,https://b`. When the node in use
+stops answering, the page moves to the next one that does, so one node going down doesn't take the page with it.
+A visitor's own node, when they have chosen one, is tried first.
 
 ## Testing against a local network
 
