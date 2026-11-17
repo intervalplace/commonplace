@@ -51,6 +51,7 @@ function chooseNode(n: string | null) {
 // The node the Compute Substrate app runs on this computer, and where to get the app
 const OWN_NODE = "http://127.0.0.1:8789";
 const NODE_APP = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
+const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.1.0/";
 // the node in use: the last one that answered, or else the first to try
 function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
 // the first node that answers, starting after the one that just failed
@@ -161,7 +162,7 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
           <Row n={null} label="The public nodes" hint={`${NODES.map(n => n.replace(/^https?:\/\//, "")).join(", ")}${NODES.length > 1 ? ", whichever answers" : ""}`} />
           <Row n={OWN_NODE} label="Your own, on this computer" hint="Run by the Compute Substrate app, while it's open" />
         </div>
-        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? The <a href={NODE_APP} target="_blank" rel="noreferrer noopener">Compute Substrate app</a> runs one on a Mac or a Windows PC: download it, open it, and choose it here once it&apos;s up to date.</p>
+        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? The Compute Substrate app runs one: download it for <a href={`${NODE_APP_DL}Compute-Substrate-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Compute-Substrate-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
         <form className="cp-row" style={{ gap: 10 }} onSubmit={e => { e.preventDefault(); if (other.trim()) pick(other); }}>
           <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: https://…" spellCheck={false} aria-label="Another node's address" />
           <button className="cp-btn-line" disabled={!other.trim() || !!trying}>Use it</button>
