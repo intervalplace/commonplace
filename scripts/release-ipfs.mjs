@@ -38,8 +38,13 @@ for (const f of [".env.local", ".env.production.local"]) {
 if (!existsSync(".env.production")) { console.error("✗ No .env.production. Create it from .env.production.example and commit it."); process.exit(1); }
 {
   const env = readFileSync(".env.production", "utf8");
-  const node = (env.match(/^NEXT_PUBLIC_CSD_API=(.*)$/m)?.[1] ?? "").trim();
-  if (!/^https:\/\//.test(node)) { console.error(`✗ .env.production: NEXT_PUBLIC_CSD_API is "${node}". Set it to a public CSD node (https) and commit.`); process.exit(1); }
+  // the node list (NEXT_PUBLIC_CSD_APIS, or the older single NEXT_PUBLIC_CSD_API): the first must be a
+  // public https node; the others may be https nodes or peer addresses (/ip4/…/webrtc-direct/…)
+  const nodes = (env.match(/^NEXT_PUBLIC_CSD_APIS=(.*)$/m)?.[1] ?? env.match(/^NEXT_PUBLIC_CSD_API=(.*)$/m)?.[1] ?? "").split(",").map(s => s.trim()).filter(Boolean);
+  const node = nodes[0] ?? "";
+  if (!/^https:\/\//.test(node)) { console.error(`✗ .env.production: the first node in NEXT_PUBLIC_CSD_APIS is "${node}". Make it a public CSD node (https) and commit.`); process.exit(1); }
+  const bad = nodes.find(n => !/^https:\/\//.test(n) && !/^\/(ip4|ip6|dns4|dns6|dns)\/.+\/webrtc-direct\//.test(n));
+  if (bad) { console.error(`✗ .env.production: "${bad}" is neither an https node nor a peer address.`); process.exit(1); }
 }
 
 let commit = "unknown";
