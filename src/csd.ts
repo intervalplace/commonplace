@@ -241,10 +241,12 @@ export function txToJson(tx: Tx) {
 // ── the node's API ──────────────────────────────────────────────────────────
 export type ProposalItem = { proposal_id: Hex; height: number; time: number; domain: string; payload_hash: Hex; uri: string };
 
-export function node(base: string) {
+// `f` is how to reach it: plain fetch for a URL, or a stand-in for a node reached another way
+// (src/p2p.ts, over WebRTC)
+export function node(base: string, f: typeof fetch = (...a) => fetch(...a)) {
   const url = (p: string) => `${base.replace(/\/$/, "")}${p}`;
   const get = async (p: string) => {
-    const r = await fetch(url(p));
+    const r = await f(url(p));
     if (!r.ok) throw new Error(`NODE_${r.status}`);
     return r.json();
   };
@@ -329,7 +331,7 @@ export function node(base: string) {
       return sum;
     },
     submit: async (tx: Tx): Promise<Hex> => {
-      const r = await fetch(url("/tx/submit"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: txToJson(tx) }) });
+      const r = await f(url("/tx/submit"), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: txToJson(tx) }) });
       const j = await r.json().catch(() => ({}));
       if (!j.ok) throw new Error(j.err ?? `NODE_${r.status}`);
       return j.txid;

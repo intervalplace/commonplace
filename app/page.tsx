@@ -15,6 +15,7 @@ import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
 import { sha256d, utf8 } from "@/csd";
 import { lightClient, type Verified } from "@/light";
+import { fetchFor, isPeerAddr } from "@/p2p";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
@@ -43,6 +44,8 @@ function nodeCandidates(): string[] {
   const c = chosenNode();
   return [...new Set([...(c ? [c] : []), ...NODES])];
 }
+// a node's address, short: the host of a URL, or "peer …" and the end of a peer's id, reached directly
+const nodeLabel = (n: string) => (isPeerAddr(n) ? `peer ${n.split("/").filter(Boolean).at(1)}, …${n.slice(-6)}, direct` : n.replace(/^https?:\/\//, ""));
 // a visitor's choice of node, kept in this browser; null goes back to the public ones
 function chooseNode(n: string | null) {
   try { n ? localStorage.setItem("commonplace.node", n) : localStorage.removeItem("commonplace.node"); } catch {}
@@ -61,7 +64,7 @@ async function findNode(failed: string): Promise<string | null> {
   const all = nodeCandidates();
   const order = [...all.slice(all.indexOf(failed) + 1), ...all.slice(0, Math.max(0, all.indexOf(failed)))].filter(n => n !== failed);
   for (const n of order) {
-    try { const r = await fetch(`${n.replace(/\/$/, "")}/tip`, { signal: AbortSignal.timeout(6000) }); if (r.ok) return n; } catch {}
+    try { const r = await fetchFor(n)(`${n.replace(/\/$/, "")}/tip`, { signal: AbortSignal.timeout(isPeerAddr(n) ? 15000 : 6000) }); if (r.ok) return n; } catch {}
   }
   return null;
 }
@@ -134,9 +137,9 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
     setErr(null);
     const url = n?.trim().replace(/\/+$/, "") ?? null;
     if (url) {
-      if (!/^https?:\/\/[^\s]+$/.test(url)) return setErr("That doesn't look like a node's address. It starts with https:// (or http:// for one on this computer).");
+      if (!/^https?:\/\/[^\s]+$/.test(url) && !isPeerAddr(url)) return setErr("That doesn't look like a node's address. It starts with https:// (or http:// for one on this computer), or it's a peer address like /ip4/…/webrtc-direct/certhash/…/p2p/….");
       setTrying(url);
-      try { const r = await fetch(`${url}/tip`, { signal: AbortSignal.timeout(6000) }); if (!r.ok) throw new Error(); }
+      try { const r = await fetchFor(url)(`${url}/tip`, { signal: AbortSignal.timeout(isPeerAddr(url) ? 15000 : 6000) }); if (!r.ok) throw new Error(); }
       catch {
         setTrying(null);
         return setErr(url === OWN_NODE
@@ -166,7 +169,7 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
         </div>
         <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? Compute Substrate Node, an app, runs one: download it for <a href={`${NODE_APP_DL}Compute-Substrate-Node-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Compute-Substrate-Node-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
         <form className="cp-row" style={{ gap: 10 }} onSubmit={e => { e.preventDefault(); if (other.trim()) pick(other); }}>
-          <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: https://…" spellCheck={false} aria-label="Another node's address" />
+          <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: https://… or a peer address /ip4/…" spellCheck={false} aria-label="Another node's address" />
           <button className="cp-btn-line" disabled={!other.trim() || !!trying}>Use it</button>
         </form>
         {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
@@ -187,9 +190,10 @@ export default function Page() {
     on(); window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
-  const api = useMemo(() => node(base), [base]);
+  // a URL is reached over HTTP; a peer address directly, over WebRTC (src/p2p.ts)
+  const api = useMemo(() => node(base, fetchFor(base)), [base]);
   // checks what the node says against the network's proof-of-work, so the node needn't be trusted
-  const light = useMemo(() => lightClient(base), [base]);
+  const light = useMemo(() => lightClient(base, { fetch: fetchFor(base) }), [base]);
 
   // the shared memory: every proposal on chain, refreshed every 30 s
   const [height, setHeight] = useState(0);
@@ -515,7 +519,7 @@ export default function Page() {
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
         <a href="#/about">About</a>
         <a href="#/frontier">The frontier</a>
-        <span>Node: <button type="button" className="cp-linkbtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{base.replace(/^https?:\/\//, "")}</button></span>
+        <span>Node: <button type="button" className="cp-linkbtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{nodeLabel(base)}</button></span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
         {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
@@ -1342,7 +1346,7 @@ function Topic(c: Ctx & { topic: string }) {
   useEffect(() => {
     if (!c.height) return;
     const ep = Math.floor(c.height / EPOCH_LEN);
-    const api = node(nodeUrl());
+    const api = c.api;
     // this epoch's ranking; early in an epoch, when nobody has resonated yet, the last one's
     Promise.allSettled([ep, ep - 1].filter(e => e >= 0).map(e => api.topk(e, c.topic))).then(rs => {
       const ids = (i: number) => { const r = rs[i]; return r && r.status === "fulfilled" ? r.value.filter(x => Number(x.score) > 0).map(x => String(x.proposal_id).toLowerCase() as Hex) : []; };

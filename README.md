@@ -131,6 +131,21 @@ npx tsx scripts/anchors.mts https://csd.aon.network
 
 Anyone can run the same command against their own node to check a release's anchors.
 
+## Reaching a node directly
+
+A node's address can also be a peer address, for a node running `csd-gateway` (compute-substrate,
+`gateway/`):
+
+```
+/ip4/203.0.113.7/udp/18001/webrtc-direct/certhash/uEiB…/p2p/12D3KooW…
+```
+
+The page then connects to the node over WebRTC, with no web server, domain name or certificate
+authority in between, and asks it what it would ask an HTTP node (`src/p2p.ts`). Peer addresses work
+anywhere a URL does: in `?node=`, in the node chooser, and in `NEXT_PUBLIC_CSD_APIS`. Everything
+the page shows is still checked against the proof-of-work, so a peer needn't be trusted. The
+networking library loads only when a peer address is used.
+
 ## Testing against a local network
 
 A CSD node built for tests (`cargo build --features test-bypass`) with its genesis check relaxed
