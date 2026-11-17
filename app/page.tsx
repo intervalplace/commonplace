@@ -139,7 +139,7 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
       catch {
         setTrying(null);
         return setErr(url === OWN_NODE
-          ? "No node answers on this computer. Is the Compute Substrate app open? If your browser asked whether this site may reach devices on your network, allow it and try again."
+          ? "No node answers on this computer. Is Compute Substrate Node open? If your browser asked whether this site may reach devices on your network, allow it and try again."
           : `${url} doesn't answer, or doesn't let this site read it.`);
       }
       setTrying(null);
@@ -161,9 +161,9 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
         <p className="cp-hint" style={{ margin: 0 }}>Everything on this page comes from a Compute Substrate node, and what you write goes out through it. Any node holds the same network; with your own, you don&apos;t rely on anyone else&apos;s.</p>
         <div className="cp-node-rows">
           <Row n={null} label="The public nodes" hint={`${NODES.map(n => n.replace(/^https?:\/\//, "")).join(", ")}${NODES.length > 1 ? ", whichever answers" : ""}`} />
-          <Row n={OWN_NODE} label="Your own, on this computer" hint="Run by the Compute Substrate app, while it's open" />
+          <Row n={OWN_NODE} label="Your own, on this computer" hint="Run by Compute Substrate Node, while it's open" />
         </div>
-        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? The Compute Substrate app runs one: download it for <a href={`${NODE_APP_DL}Compute-Substrate-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Compute-Substrate-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
+        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? Compute Substrate Node, an app, runs one: download it for <a href={`${NODE_APP_DL}Compute-Substrate-Node-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Compute-Substrate-Node-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
         <form className="cp-row" style={{ gap: 10 }} onSubmit={e => { e.preventDefault(); if (other.trim()) pick(other); }}>
           <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: https://…" spellCheck={false} aria-label="Another node's address" />
           <button className="cp-btn-line" disabled={!other.trim() || !!trying}>Use it</button>
