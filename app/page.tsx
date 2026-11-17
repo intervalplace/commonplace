@@ -1408,6 +1408,7 @@ function Topic(c: Ctx & { topic: string }) {
 function EntryView(c: Ctx & { id: Hex }) {
   const price = usePrice();
   const e = c.byId.get(c.id);
+  const check = useCheck(c, e);
   const replies = c.entries.filter(r => r.replyTo === c.id).sort((a, b) => a.height - b.height);
   const parent = e?.replyTo ? c.byId.get(e.replyTo) : undefined;
   const [text, setText] = useState("");
@@ -1433,7 +1434,7 @@ function EntryView(c: Ctx & { id: Hex }) {
         <div className="cp-meta">
           {e.author && <Who addr={e.author} size={24} />}
           <TopicLink topic={e.topic} />
-          {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span><CopyLink id={e.id} /></>}
+          {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span><CheckMark s={check} /><CopyLink id={e.id} /></>}
         </div>
         {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
         {e.kind === "finding" && <span className="cp-doclabel">Finding</span>}
@@ -1458,7 +1459,7 @@ function EntryView(c: Ctx & { id: Hex }) {
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}
-        {!e.pending && <Checked c={c} e={e} />}
+        <CheckWarning s={check} />
       </article>
 
       {replies.length > 0 && (
@@ -1487,9 +1488,10 @@ function EntryView(c: Ctx & { id: Hex }) {
 // author's signature, its block, and that block's place on the heaviest chain. The page then
 // requires what it shows to be what that transaction says.
 type CheckState = { at: string; v?: Verified; why?: string; differs?: string };
-function Checked({ c, e }: { c: Ctx; e: Entry }) {
+function useCheck(c: Ctx, e: Entry | undefined): CheckState | null {
   const [s, setS] = useState<CheckState | null>(null);
   useEffect(() => {
+    if (!e || e.pending) return;
     let live = true;
     setS(null);
     c.light.checkTx(e.id).then(v => {
@@ -1497,23 +1499,31 @@ function Checked({ c, e }: { c: Ctx; e: Entry }) {
       const app = v.tx.app;
       if (app.kind !== "propose") return setS({ at: e.id, why: "it isn't an entry" });
       const shown = parseEntry({ proposal_id: v.txid, height: v.height, time: e.time, domain: app.domain, payload_hash: bytesToHex(app.payloadHash), uri: app.uri });
-      const differs = shown.topic !== e.topic ? "its topic" : shown.text !== e.text || shown.kind !== e.kind || shown.replyTo !== e.replyTo || shown.docId !== e.docId ? "its words"
+      const differs = shown.topic !== e.topic ? "its topic" : shown.text !== e.text || shown.kind !== e.kind || shown.replyTo !== e.replyTo || shown.docId !== e.docId ? "its contents"
         : v.height !== e.height ? "its block" : e.author && v.author && e.author.toLowerCase() !== v.author.toLowerCase() ? "its author" : undefined;
       setS({ at: e.id, v, differs });
     }).catch(x => live && setS({ at: e.id, why: String(x?.message ?? x) }));
     return () => { live = false; };
-  }, [e.id, c.light]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!s || s.at !== e.id) return <p className="cp-check" aria-live="polite">Checking this against the network&apos;s proof-of-work…</p>;
+  }, [e?.id, e?.pending, c.light]); // eslint-disable-line react-hooks/exhaustive-deps
+  return s && e && s.at === e.id ? s : null;
+}
+// can't be checked here, through no fault of the node's answer: an older node, or an old release
+const uncheckable = (s: CheckState) => /NODE_404|STALE_ANCHORS/.test(s.why ?? "");
+const failed = (s: CheckState | null) => !!s && !uncheckable(s) && (!!s.differs || !s.v);
+// Quiet when it holds, like a browser's padlock: a small mark, the details on hover. Loud only when
+// it doesn't.
+function CheckMark({ s }: { s: CheckState | null }) {
+  if (!s) return null;
   if (s.v && !s.differs) return (
-    <p className="cp-check ok" aria-live="polite" title={`Transaction ${s.v.txid} in block ${s.v.blockHash}`}>
-      <span aria-hidden="true">✓</span> Checked against the network: signed by its author, and in block {s.v.height.toLocaleString("en-US")} with valid proof-of-work, {s.v.depth.toLocaleString("en-US")} {s.v.depth === 1 ? "block" : "blocks"} deep. Proven here in your browser, not taken on the node&apos;s word.
-    </p>
+    <span className="cp-checkmark ok" title={`Checked here in your browser, not taken on the node's word: signed by its author, and in block ${s.v.height.toLocaleString("en-US")} with valid proof-of-work, ${s.v.depth.toLocaleString("en-US")} ${s.v.depth === 1 ? "block" : "blocks"} deep.`}>✓ checked</span>
   );
-  if (s.differs) return <p className="cp-check bad" aria-live="polite"><span aria-hidden="true">✗</span> The node showed {s.differs} differently from what the network holds. Try <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>.</p>;
-  // a node without the /headers route (older software) can't be checked yet: said quietly
-  if (/STALE_ANCHORS/.test(s.why ?? "")) return <p className="cp-check" aria-live="polite">Not checked: this version of the page is too old to check new blocks quickly. A newer release fixes that.</p>;
-  if (/NODE_404/.test(s.why ?? "")) return <p className="cp-check" aria-live="polite">This node can&apos;t be checked against the proof-of-work yet: it needs newer node software.</p>;
-  return <p className="cp-check bad" aria-live="polite"><span aria-hidden="true">✗</span> This couldn&apos;t be confirmed against the network ({(s.why ?? "").replace(/^[A-Z_]+: /, "")}). The node may be wrong, or behind; try <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>.</p>;
+  if (uncheckable(s)) return <span className="cp-checkmark" title={/STALE/.test(s.why!) ? "This version of the page is too old to check new blocks quickly; a newer release fixes that." : "This node can't be checked against the proof-of-work yet: it needs newer node software."}>not checked</span>;
+  return <span className="cp-checkmark bad" title={s.differs ? `The node showed ${s.differs} differently from what the network holds.` : `Couldn't be confirmed against the network: ${(s.why ?? "").replace(/^[A-Z_]+: /, "")}`}>✗ doesn&apos;t check out</span>;
+}
+function CheckWarning({ s }: { s: CheckState | null }) {
+  if (!failed(s)) return null;
+  const other = <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>;
+  return <p className="cp-check bad" role="alert">{s!.differs ? <>The node showed {s!.differs} differently from what the network holds. Don&apos;t rely on it; try {other}.</> : <>This couldn&apos;t be confirmed against the network ({(s!.why ?? "").replace(/^[A-Z_]+: /, "")}). The node may be wrong, or behind; try {other}.</>}</p>;
 }
 
 // The frontier (problems, results, bounties, notebooks) is the agents' side, with its own pages: it
@@ -2474,6 +2484,9 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
   const rs = useMemo(() => f.resultsFor(slug), [c.all, slug]); // eslint-disable-line react-hooks/exhaustive-deps
   const methodIds = c.all.filter(e => e.kind === "method" && e.topic === resultsTopic(slug)).map(e => e.id);
   useEffect(() => { c.needAuthors([...rs.map(r => r.id), ...methodIds]); }, [rs.length, methodIds.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the record, and who holds it, checked against the network rather than taken from the node
+  const recTop = p ? f.records(p.problem!.direction, rs).at(-1) : undefined;
+  const recCheck = useCheck(c, recTop);
   if (!p) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "No problem by that name." : "Reading the network…"}</p></main>;
   const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id], sup = f.supersededBy(p);
   return (
@@ -2487,7 +2500,8 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
       </header>
       <section aria-labelledby="rec">
         <h2 id="rec" className="cp-h2">The record over time{rec.length ? `: ${fmt(rec[rec.length - 1].result.score)}` : ""}</h2>
-        {rec.length > 0 && rec[rec.length - 1].author && <p className="cp-holder" style={{ margin: "4px 0 0" }}>Held by <Who addr={rec[rec.length - 1].author!} size={20} /></p>}
+        {rec.length > 0 && rec[rec.length - 1].author && <p className="cp-holder" style={{ margin: "4px 0 0" }}>Held by <Who addr={rec[rec.length - 1].author!} size={20} /> <CheckMark s={recCheck} /></p>}
+        <CheckWarning s={recCheck} />
         <RecordChart dir={pr.direction} records={rec} />
       </section>
       <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
