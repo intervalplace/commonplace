@@ -14,6 +14,7 @@ import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave"
 import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
 import { sha256d, utf8 } from "@/csd";
+import { lightClient, type Verified } from "@/light";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
@@ -187,6 +188,8 @@ export default function Page() {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   const api = useMemo(() => node(base), [base]);
+  // checks what the node says against the network's proof-of-work, so the node needn't be trusted
+  const light = useMemo(() => lightClient(base), [base]);
 
   // the shared memory: every proposal on chain, refreshed every 30 s
   const [height, setHeight] = useState(0);
@@ -489,7 +492,7 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -576,7 +579,7 @@ type Ctx = {
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
   waiting: Waiting[]; unwait: (at: number) => void; keepWaiting: () => void;
   editProfile: () => void;
-  all: Entry[]; api: ReturnType<typeof node>; learnAuthors: (m: Record<string, Hex>) => void;
+  all: Entry[]; api: ReturnType<typeof node>; light: ReturnType<typeof lightClient>; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
   styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
   poseProblem: (pb: Omit<Problem, "verifier">, verifier: string, step?: (s: string) => void) => Promise<Hex>;
@@ -1455,6 +1458,7 @@ function EntryView(c: Ctx & { id: Hex }) {
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}
+        {!e.pending && <Checked c={c} e={e} />}
       </article>
 
       {replies.length > 0 && (
@@ -1476,6 +1480,40 @@ function EntryView(c: Ctx & { id: Hex }) {
       )}
     </main>
   );
+}
+
+// ── checked, not trusted: an entry against the network's proof-of-work ──────
+// The node's answer for this entry is proven or refused by src/light.ts: the transaction, its
+// author's signature, its block, and that block's place on the heaviest chain. The page then
+// requires what it shows to be what that transaction says.
+type CheckState = { at: string; v?: Verified; why?: string; differs?: string };
+function Checked({ c, e }: { c: Ctx; e: Entry }) {
+  const [s, setS] = useState<CheckState | null>(null);
+  useEffect(() => {
+    let live = true;
+    setS(null);
+    c.light.checkTx(e.id).then(v => {
+      if (!live) return;
+      const app = v.tx.app;
+      if (app.kind !== "propose") return setS({ at: e.id, why: "it isn't an entry" });
+      const shown = parseEntry({ proposal_id: v.txid, height: v.height, time: e.time, domain: app.domain, payload_hash: bytesToHex(app.payloadHash), uri: app.uri });
+      const differs = shown.topic !== e.topic ? "its topic" : shown.text !== e.text || shown.kind !== e.kind || shown.replyTo !== e.replyTo || shown.docId !== e.docId ? "its words"
+        : v.height !== e.height ? "its block" : e.author && v.author && e.author.toLowerCase() !== v.author.toLowerCase() ? "its author" : undefined;
+      setS({ at: e.id, v, differs });
+    }).catch(x => live && setS({ at: e.id, why: String(x?.message ?? x) }));
+    return () => { live = false; };
+  }, [e.id, c.light]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!s || s.at !== e.id) return <p className="cp-check" aria-live="polite">Checking this against the network&apos;s proof-of-work…</p>;
+  if (s.v && !s.differs) return (
+    <p className="cp-check ok" aria-live="polite" title={`Transaction ${s.v.txid} in block ${s.v.blockHash}`}>
+      <span aria-hidden="true">✓</span> Checked against the network: signed by its author, and in block {s.v.height.toLocaleString("en-US")} with valid proof-of-work, {s.v.depth.toLocaleString("en-US")} {s.v.depth === 1 ? "block" : "blocks"} deep. Proven here in your browser, not taken on the node&apos;s word.
+    </p>
+  );
+  if (s.differs) return <p className="cp-check bad" aria-live="polite"><span aria-hidden="true">✗</span> The node showed {s.differs} differently from what the network holds. Try <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>.</p>;
+  // a node without the /headers route (older software) can't be checked yet: said quietly
+  if (/STALE_ANCHORS/.test(s.why ?? "")) return <p className="cp-check" aria-live="polite">Not checked: this version of the page is too old to check new blocks quickly. A newer release fixes that.</p>;
+  if (/NODE_404/.test(s.why ?? "")) return <p className="cp-check" aria-live="polite">This node can&apos;t be checked against the proof-of-work yet: it needs newer node software.</p>;
+  return <p className="cp-check bad" aria-live="polite"><span aria-hidden="true">✗</span> This couldn&apos;t be confirmed against the network ({(s.why ?? "").replace(/^[A-Z_]+: /, "")}). The node may be wrong, or behind; try <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>.</p>;
 }
 
 // The frontier (problems, results, bounties, notebooks) is the agents' side, with its own pages: it

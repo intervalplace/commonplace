@@ -110,6 +110,44 @@ export function serializeTx(tx: Tx, stripScripts = false): Bytes {
 
 export const txid = (tx: Tx): Hex => bytesToHex(sha256d(serializeTx(tx, true)));
 
+// The reverse of serializeTx, for a transaction a node sends back (light verification). Strict:
+// every byte must be used, and lengths are bounded, so a malformed answer can't pass as a transaction.
+export function deserializeTx(b: Bytes): Tx {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let o = 0;
+  const need = (n: number) => { if (n < 0 || o + n > b.length) throw new Error("BAD_TX: short"); };
+  const rU32 = () => { need(4); const x = v.getUint32(o, true); o += 4; return x; };
+  const rU64 = () => { need(8); const x = v.getBigUint64(o, true); o += 8; return x; };
+  const rLen = (max: number) => { const n = rU64(); if (n > BigInt(max)) throw new Error("BAD_TX: length"); return Number(n); };
+  const rBytes = (n: number) => { need(n); const x = b.slice(o, o + n); o += n; return x; };
+  const rStr = (max: number) => new TextDecoder("utf-8", { fatal: true }).decode(rBytes(rLen(max)));
+  const version = rU32();
+  const inputs: TxIn[] = [];
+  for (let i = 0, n = rLen(10_000); i < n; i++) inputs.push({ txid: bytesToHex(rBytes(32)), vout: rU32(), scriptSig: rBytes(rLen(10_000)) });
+  const outputs: TxOut[] = [];
+  for (let i = 0, n = rLen(10_000); i < n; i++) outputs.push({ value: rU64(), addr20: bytesToHex(rBytes(20)) });
+  const locktime = rU32();
+  const kind = rU32();
+  let app: AppPayload;
+  if (kind === 0) app = { kind: "none" };
+  else if (kind === 1) app = { kind: "propose", domain: rStr(MAX_DOMAIN_BYTES), payloadHash: rBytes(32), uri: rStr(MAX_URI_BYTES), expiresEpoch: rU64() };
+  else if (kind === 2) app = { kind: "attest", proposalId: bytesToHex(rBytes(32)), score: rU32(), confidence: rU32() };
+  else throw new Error("BAD_TX: app kind");
+  if (o !== b.length) throw new Error("BAD_TX: trailing bytes");
+  return { version, inputs, outputs, locktime, app };
+}
+
+// Who signed a transaction's first input, the way the node names a proposal's or attestation's author
+// (state/app_state.rs sender_h160_from_tx), and whether that signature really signs this transaction.
+// Null when the first input doesn't carry a [64][sig][33][pubkey] script or the signature is wrong.
+export function signerOf(tx: Tx): Hex | null {
+  const s = tx.inputs[0]?.scriptSig;
+  if (!s || s.length < 99 || s[0] !== 64 || s[65] !== 33) return null;
+  const sig = s.slice(1, 65), pub33 = s.slice(66, 99);
+  try { if (!secp256k1.verify(sig, sighash(tx), pub33, { lowS: true })) return null; } catch { return null; }
+  return bytesToHex(hash160(pub33));
+}
+
 export function sighash(tx: Tx): Bytes {
   const tag = sha256(utf8("CSD_SIG_V1"));
   return sha256d(sha256(concat(tag, tag, serializeTx(tx, true), CHAIN_ID_HASH)));

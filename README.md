@@ -113,6 +113,24 @@ To list more than one public node, build with `NEXT_PUBLIC_CSD_APIS=https://a,ht
 stops answering, the page moves to the next one that does, so one node going down doesn't take the page with it.
 A visitor's own node, when they have chosen one, is tried first.
 
+## Checked, not trusted
+
+The page doesn't take the node's word for what it shows. For an entry, it asks the node for a proof
+(`/proof/tx`) and checks it in the browser (`src/light.ts`): the transaction's bytes and txid, its
+author's signature, its merkle branch to a block header, and that header's place on the chain. Blocks
+below the newest *anchor* (a block hash every 1000 blocks, in `src/anchors.json`) are fixed by hash
+links to the anchors; every header above it is checked in full, proof-of-work and difficulty rule
+included. A node can still leave things out, but not invent, alter or misattribute anything.
+
+The node needs `/headers/:from/:count` (compute-substrate after v1.2.0). Before each release, refresh
+the anchors from a node, which checks every header from genesis on the way:
+
+```
+npx tsx scripts/anchors.mts https://csd.aon.network
+```
+
+Anyone can run the same command against their own node to check a release's anchors.
+
 ## Testing against a local network
 
 A CSD node built for tests (`cargo build --features test-bypass`) with its genesis check relaxed
