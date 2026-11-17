@@ -42,6 +42,15 @@ function nodeCandidates(): string[] {
   const c = chosenNode();
   return [...new Set([...(c ? [c] : []), ...NODES])];
 }
+// a visitor's choice of node, kept in this browser; null goes back to the public ones
+function chooseNode(n: string | null) {
+  try { n ? localStorage.setItem("commonplace.node", n) : localStorage.removeItem("commonplace.node"); } catch {}
+  // and out of the address, so a reload doesn't bring back the old choice
+  try { const u = new URL(window.location.href); if (u.searchParams.has("node")) { u.searchParams.delete("node"); history.replaceState(null, "", u.toString()); } } catch {}
+}
+// The node the Compute Substrate app runs on this computer, and where to get the app
+const OWN_NODE = "http://127.0.0.1:8789";
+const NODE_APP = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
 // the node in use: the last one that answered, or else the first to try
 function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
 // the first node that answers, starting after the one that just failed
@@ -111,10 +120,64 @@ const hrefTopic = (t: string) => `#/t/${encodeURIComponent(t)}`;
 const hrefEntry = (id: string) => `#/e/${id}`;
 const hrefPerson = (addr: string) => `#/p/${addr.toLowerCase()}`;
 
+// ── which node to read through ──────────────────────────────────────────────
+function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n: string | null) => void; onClose: () => void }) {
+  const [other, setOther] = useState("");
+  const [trying, setTrying] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const chosen = (() => { try { return localStorage.getItem("commonplace.node"); } catch { return null; } })();
+  // a node is only picked once it answers, so a typo or a closed app doesn't leave the page empty
+  const pick = async (n: string | null) => {
+    setErr(null);
+    const url = n?.trim().replace(/\/+$/, "") ?? null;
+    if (url) {
+      if (!/^https?:\/\/[^\s]+$/.test(url)) return setErr("That doesn't look like a node's address. It starts with https:// (or http:// for one on this computer).");
+      setTrying(url);
+      try { const r = await fetch(`${url}/tip`, { signal: AbortSignal.timeout(6000) }); if (!r.ok) throw new Error(); }
+      catch {
+        setTrying(null);
+        return setErr(url === OWN_NODE
+          ? "No node answers on this computer. Is the Compute Substrate app open? If your browser asked whether this site may reach devices on your network, allow it and try again."
+          : `${url} doesn't answer, or doesn't let this site read it.`);
+      }
+      setTrying(null);
+    }
+    onPick(url);
+  };
+  const Row = ({ n, label, hint }: { n: string | null; label: string; hint: string }) => {
+    const on = n ? current === n : !chosen;
+    return (
+      <button type="button" className="cp-node-row" aria-pressed={on} disabled={!!trying} onClick={() => pick(n)}>
+        <strong>{label}</strong><span>{trying && trying === n ? "Checking that it answers…" : hint}</span>
+      </button>
+    );
+  };
+  return (
+    <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="node-title">
+        <h2 id="node-title">Which node to read through</h2>
+        <p className="cp-hint" style={{ margin: 0 }}>Everything on this page comes from a Compute Substrate node, and what you write goes out through it. Any node holds the same network; with your own, you don&apos;t rely on anyone else&apos;s.</p>
+        <div className="cp-node-rows">
+          <Row n={null} label="The public nodes" hint={`${NODES.map(n => n.replace(/^https?:\/\//, "")).join(", ")}${NODES.length > 1 ? ", whichever answers" : ""}`} />
+          <Row n={OWN_NODE} label="Your own, on this computer" hint="Run by the Compute Substrate app, while it's open" />
+        </div>
+        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? The <a href={NODE_APP} target="_blank" rel="noreferrer noopener">Compute Substrate app</a> runs one on a Mac or a Windows PC: download it, open it, and choose it here once it&apos;s up to date.</p>
+        <form className="cp-row" style={{ gap: 10 }} onSubmit={e => { e.preventDefault(); if (other.trim()) pick(other); }}>
+          <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: https://…" spellCheck={false} aria-label="Another node's address" />
+          <button className="cp-btn-line" disabled={!other.trim() || !!trying}>Use it</button>
+        </form>
+        {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
+        <div className="actions"><button className="cp-btn-ghost" onClick={onClose}>Close</button></div>
+      </section>
+    </div>
+  );
+}
+
 // ── the page ────────────────────────────────────────────────────────────────
 export default function Page() {
   const [route, setRoute] = useState<Route>({ view: "me" });
   const [base, setBase] = useState(DEFAULT_NODE);
+  const [choosingNode, setChoosingNode] = useState(false);
   useEffect(() => {
     setBase(nodeUrl());
     const on = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
@@ -447,10 +510,11 @@ export default function Page() {
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
         <a href="#/about">About</a>
         <a href="#/frontier">The frontier</a>
-        <span>Node: {base.replace(/^https?:\/\//, "")}</span>
+        <span>Node: <button type="button" className="cp-linkbtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{base.replace(/^https?:\/\//, "")}</button></span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
         {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
+      {choosingNode && <NodeDialog current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}
       {keeping && (
         <KeepDialog
           {...keeping} keyState={[key, setKey]} balance={balance}
@@ -1855,7 +1919,9 @@ function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) 
   const ps = capBountied(f.problems.map(p => { const sup = !!f.supersededBy(p); return { p, sup, attention: sup ? 0 : att(p), bountied: !sup && (backed[p.problem!.slug] ?? 0) > 0 }; }))
     .sort((a, b) => Number(a.sup) - Number(b.sup) || b.attention - a.attention || a.p.height - b.p.height).map(x => x.p);
   return (
-    <main className="cp-main cp-frontier">
+    <div className="cp-wide">
+    <div className="cp-cols cp-frontier-cols">
+    <main className="cp-frontier">
       <header>
         <FrontierTabs at="problems" />
         <h1 className="cp-topic-title">The frontier</h1>
@@ -1890,9 +1956,14 @@ function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) 
           </a>
         );
       })}
+    </main>
+    {/* beside the problems on a wide screen, below them on a narrow one: what's going on, and how to join in */}
+    <aside className="cp-frontier-side" aria-label="Live, and joining">
       <Happening c={c} f={f} />
       <JoinFrontier />
-    </main>
+    </aside>
+    </div>
+    </div>
   );
 }
 
