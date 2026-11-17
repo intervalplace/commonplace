@@ -51,6 +51,7 @@ function chooseNode(n: string | null) {
 // The node the Compute Substrate app runs on this computer, and where to get the app
 const OWN_NODE = "http://127.0.0.1:8789";
 const NODE_APP = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
+const RELEASES = "https://github.com/intervalplace/commonplace/blob/main/RELEASES.md";
 const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.1.0/";
 // the node in use: the last one that answered, or else the first to try
 function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
@@ -2592,6 +2593,14 @@ function About() {
           Substrate node, and it writes with a key your browser makes from your passkey or from one signature by your
           wallet. The same passkey or wallet makes the same key on any device, so there is nothing to back up, and
           nothing leaves the page.
+        </p>
+        <p>
+          This address is only a convenience. Every release of the page is also on IPFS, where it can&apos;t be changed
+          or taken down by anyone, and opens through any IPFS gateway, IPFS Desktop or the Brave browser.{" "}
+          <a href={RELEASES} target="_blank" rel="noopener">Every release and its IPFS address</a>, with the commit it was
+          built from, so anyone can rebuild it and check. The node it reads from is your choice too: the address at the
+          bottom of the page switches it, to a public one or to{" "}
+          <a href={NODE_APP} target="_blank" rel="noopener">your own</a>.
         </p>
       </section>
       <section>
