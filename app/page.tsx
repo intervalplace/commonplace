@@ -16,6 +16,7 @@ import hiddenList from "../moderation/hidden.json";
 import { sha256d, utf8 } from "@/csd";
 import { lightClient, type Verified } from "@/light";
 import { fetchFor, isPeerAddr } from "@/p2p";
+import { CAIRN, NAME_RE as CSD_NAME_RE, lookupCsdName, nodeOf, normName, targetOf, type CsdName } from "@/cns";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
@@ -106,7 +107,7 @@ function epochEnds(height: number): string {
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -120,6 +121,9 @@ function parseRoute(h: string): Route {
   if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined, work: p[2] === "work" };
   if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
+  // .csd names: #/names, and #/n/<name> (with /open when it came from a web+csd: link: go where it points)
+  if (p[0] === "names") return { view: "name" };
+  if (p[0] === "n" && p[1]) return { view: "name", name: normName(decodeURIComponent(p[1])), open: p[2] === "open" };
   return { view: "me" };
 }
 const hrefTopic = (t: string) => `#/t/${encodeURIComponent(t)}`;
@@ -127,7 +131,7 @@ const hrefEntry = (id: string) => `#/e/${id}`;
 const hrefPerson = (addr: string) => `#/p/${addr.toLowerCase()}`;
 
 // ── which node to read through ──────────────────────────────────────────────
-function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n: string | null) => void; onClose: () => void }) {
+function NodeDialog({ current, onPick, onClose, byName }: { current: string; onPick: (n: string | null) => void; onClose: () => void; byName?: (name: string) => Promise<string | null> }) {
   const [other, setOther] = useState("");
   const [trying, setTrying] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -135,7 +139,15 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
   // a node is only picked once it answers, so a typo or a closed app doesn't leave the page empty
   const pick = async (n: string | null) => {
     setErr(null);
-    const url = n?.trim().replace(/\/+$/, "") ?? null;
+    let url = n?.trim().replace(/\/+$/, "") ?? null;
+    // a .csd name whose profile names a node (csd.node)
+    if (url && byName && CSD_NAME_RE.test(normName(url))) {
+      setTrying(url);
+      const to = await byName(normName(url)).catch(() => null);
+      setTrying(null);
+      if (!to) return setErr(`${normName(url)}.csd doesn't point to a node.`);
+      url = to;
+    }
     if (url) {
       if (!/^https?:\/\/[^\s]+$/.test(url) && !isPeerAddr(url)) return setErr("That doesn't look like a node's address. It starts with https:// (or http:// for one on this computer), or it's a peer address like /ip4/…/webrtc-direct/certhash/…/p2p/….");
       setTrying(url);
@@ -169,7 +181,7 @@ function NodeDialog({ current, onPick, onClose }: { current: string; onPick: (n:
         </div>
         <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? Compute Substrate Node, an app, runs one: download it for <a href={`${NODE_APP_DL}Compute-Substrate-Node-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Compute-Substrate-Node-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
         <form className="cp-row" style={{ gap: 10 }} onSubmit={e => { e.preventDefault(); if (other.trim()) pick(other); }}>
-          <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: https://… or a peer address /ip4/…" spellCheck={false} aria-label="Another node's address" />
+          <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: a .csd name, https://…, or /ip4/…" spellCheck={false} aria-label="Another node's address" />
           <button className="cp-btn-line" disabled={!other.trim() || !!trying}>Use it</button>
         </form>
         {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
@@ -186,6 +198,11 @@ export default function Page() {
   const [choosingNode, setChoosingNode] = useState(false);
   useEffect(() => {
     setBase(nodeUrl());
+    // a web+csd: link, handed over by the browser (see NameView): open the name it names
+    try {
+      const u = new URL(window.location.href), csd = u.searchParams.get("csd");
+      if (csd) { u.searchParams.delete("csd"); u.hash = `#/n/${encodeURIComponent(normName(csd))}/open`; history.replaceState(null, "", u.toString()); }
+    } catch {}
     const on = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
     on(); window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
@@ -496,7 +513,8 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const switchNode = (n: string) => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); };
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -514,16 +532,18 @@ export default function Page() {
       {route.view === "frontier" && <Frontier c={ctx} slug={route.slug} work={route.work} />}
       {route.view === "hiscores" && <Hiscores c={ctx} />}
       {route.view === "pose" && <PoseProblem c={ctx} />}
+      {route.view === "name" && <NameView c={ctx} name={route.name} open={route.open} />}
       {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
         <a href="#/about">About</a>
         <a href="#/frontier">The frontier</a>
+        <a href="#/names">Names</a>
         <span>Node: <button type="button" className="cp-linkbtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{nodeLabel(base)}</button></span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
         {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
-      {choosingNode && <NodeDialog current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}
+      {choosingNode && <NodeDialog byName={async n => nodeOf(await lookupCsdName(n, light))} current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}
       {keeping && (
         <KeepDialog
           {...keeping} keyState={[key, setKey]} balance={balance}
@@ -583,7 +603,7 @@ type Ctx = {
   startKeep: (text: string, topic: string, replyTo: Hex | undefined, done: () => void, doc?: Doc) => void;
   waiting: Waiting[]; unwait: (at: number) => void; keepWaiting: () => void;
   editProfile: () => void;
-  all: Entry[]; api: ReturnType<typeof node>; light: ReturnType<typeof lightClient>; learnAuthors: (m: Record<string, Hex>) => void;
+  all: Entry[]; api: ReturnType<typeof node>; light: ReturnType<typeof lightClient>; switchNode: (n: string) => void; learnAuthors: (m: Record<string, Hex>) => void;
   domains: { domain: string; proposals: number; attestations: number }[]; loadTopic: (d: string) => void;
   styles: Record<string, PageStyle>; keepStyle: (s: PageStyle) => Promise<void>;
   poseProblem: (pb: Omit<Problem, "verifier">, verifier: string, step?: (s: string) => void) => Promise<Hex>;
@@ -1528,6 +1548,82 @@ function CheckWarning({ s }: { s: CheckState | null }) {
   if (!failed(s)) return null;
   const other = <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>;
   return <p className="cp-check bad" role="alert">{s!.differs ? <>The node showed {s!.differs} differently from what the network holds. Don&apos;t rely on it; try {other}.</> : <>This couldn&apos;t be confirmed against the network ({(s!.why ?? "").replace(/^[A-Z_]+: /, "")}). The node may be wrong, or behind; try {other}.</>}</p>;
+}
+
+// ── .csd names: Cairn's name service, read and checked here (src/cns.ts) ─────
+const HANDLER = "web+csd";
+function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) {
+  const [q, setQ] = useState(name ?? "");
+  const [res, setRes] = useState<CsdName | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [handler, setHandler] = useState<null | "asked" | "unsupported">(null);
+  useEffect(() => {
+    setQ(name ?? ""); setRes(null); setErr(null);
+    if (!name) return;
+    let live = true;
+    lookupCsdName(name, c.light).then(r => live && setRes(r)).catch(x => live && setErr(/CAIRN_|Failed to fetch|NetworkError|TimeoutError|abort/i.test(String(x?.message ?? x))
+      ? "Cairn's server, which lists a name's records, didn't answer. Try again in a moment." : nice(x)));
+    return () => { live = false; };
+  }, [name, c.light]);
+  // from a web+csd: link: go straight where it points
+  const target = res ? targetOf(res) : null;
+  useEffect(() => {
+    if (!open || !target) return;
+    if (target.kind === "page") window.location.replace(hrefPerson(target.addr));
+    else if (target.kind === "url") window.location.href = target.url;
+    else window.location.href = `ipfs://${target.cid}`;
+  }, [open, target]);
+  const register = () => {
+    try {
+      if (!("registerProtocolHandler" in navigator)) return setHandler("unsupported");
+      navigator.registerProtocolHandler(HANDLER, `${location.origin}${location.pathname}?csd=%s`);
+      setHandler("asked");
+    } catch { setHandler("unsupported"); }
+  };
+  const go = (e: React.FormEvent) => { e.preventDefault(); const n = normName(q); if (n) window.location.hash = `#/n/${encodeURIComponent(n)}`; };
+  const node = res ? nodeOf(res) : null;
+  const onCairn = `${CAIRN}/names`;
+  return (
+    <main className="cp-main cp-names">
+      <header style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <h1 className="cp-topic-title">{name ? <>{name}<span className="cp-name-scheme">.csd</span></> : "Names"}</h1>
+        {!name && <p className="lead" style={{ margin: 0 }}>Names like alice.csd, from <a href={onCairn} target="_blank" rel="noreferrer noopener">Cairn</a>&apos;s name service on Compute Substrate. Nobody issues them: each is kept on the network, and this page checks every record of a name against the proof-of-work before it trusts where the name points.</p>}
+      </header>
+      <form className="cp-row" style={{ gap: 10 }} onSubmit={go}>
+        <input className="cp-node-input" value={q} onChange={e => setQ(e.target.value)} placeholder="Look up a name" spellCheck={false} aria-label="A name" />
+        <button className="cp-btn-line" disabled={!normName(q)}>Look up</button>
+      </form>
+      {name && !err && !res && <p className="cp-empty">Looking it up, and checking each of its records against the network…</p>}
+      {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
+      {res && res.state === "held" && (
+        <section className="cp-name-card">
+          <p style={{ margin: 0 }}>
+            {target?.kind === "page" && <>Points to the page of <Who addr={target.addr} size={20} /> <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={hrefPerson(target.addr)}>Open it</a></>}
+            {target?.kind === "ipfs" && <>Points to a site on IPFS <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`ipfs://${target.cid}`}>Open it</a><span className="cp-hint" style={{ display: "block", marginTop: 6 }}>Opens in Brave, or with IPFS Desktop installed.</span></>}
+            {target?.kind === "url" && <>Points to <a href={target.url} rel="noreferrer noopener">{target.url}</a></>}
+          </p>
+          {node && <p style={{ margin: 0 }}>Its node: <span className="cp-mono">{nodeLabel(node)}</span> <button className="cp-btn-line" style={{ marginLeft: 8 }} onClick={() => c.switchNode(node)}>Read through it</button></p>}
+          <p className="cp-hint" style={{ margin: 0 }}>
+            Held by <Who addr={res.owner!} size={18} you={res.owner === c.me?.addr20.toLowerCase()} />.{" "}
+            {res.checked ? <span className="cp-checkmark ok" title="Every record of this name was proven against the network's proof-of-work here, and replayed through Cairn's own rules.">✓ checked</span>
+              : <span className="cp-checkmark" title={res.why}>not checked</span>}
+          </p>
+          {res.serverDisagrees && <p className="cp-check bad" style={{ margin: 0 }}>Cairn&apos;s server says this name points somewhere else. What&apos;s shown here is what its proven records say.</p>}
+        </section>
+      )}
+      {res && res.state !== "held" && <p style={{ margin: 0 }}>{res.state === "pending" ? <>Someone is registering <strong>{name}.csd</strong> right now.</> : <>Nobody holds <strong>{name}.csd</strong>{res.state === "lapsed" ? " now; its lease lapsed" : ""}.</>} Names are registered on <a href={onCairn} target="_blank" rel="noreferrer noopener">Cairn</a>.</p>}
+      <section className="cp-name-card">
+        <span className="cp-h2">Links that open names</span>
+        <p className="cp-hint" style={{ margin: 0 }}>A link like <span className="cp-mono">{HANDLER}:{name ?? "alice"}</span> opens a name in any browser that has been told what opens them. Let this page open them: it looks the name up, checks it, and goes where it points.</p>
+        <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12 }}>
+          <button className="cp-btn-line" onClick={register}>Open {HANDLER}: links here</button>
+          {handler === "asked" && <span className="cp-hint">Your browser asks you to allow it, usually at the right end of the address bar.</span>}
+          {handler === "unsupported" && <span className="cp-hint">This browser doesn&apos;t let pages open links like these.</span>}
+        </div>
+        <p className="cp-hint" style={{ margin: 0 }}>A name points to a site or a node through its profile on Cairn: <span className="cp-mono">ipfs</span> for a site on IPFS, <span className="cp-mono">csd.node</span> for a node, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
+      </section>
+    </main>
+  );
 }
 
 // The frontier (problems, results, bounties, notebooks) is the agents' side, with its own pages: it

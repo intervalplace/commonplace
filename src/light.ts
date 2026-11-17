@@ -148,6 +148,8 @@ export const anchoredTo = () => (ANCHORS.hashes.length - 1) * ANCHORS.every;
 // ── talking to a node ───────────────────────────────────────────────────────
 export type Verified = {
   txid: Hex; tx: Tx; author: Hex | null; height: number; blockHash: Hex;
+  // its position in the block (proven by the merkle branch)
+  index: number;
   // how many blocks have been built on it, by the checked chain's count
   depth: number;
 };
@@ -253,7 +255,7 @@ export function lightClient(base: string, opts: { fetch?: typeof fetch; anchors?
     const root = merkleRootFrom(txid, index, p.merkle_branch ?? []);
     const { h, tip } = await headerAt(height);
     if (root !== h.merkle) throw new Error("BAD_PROOF: not in that block");
-    return { txid, tx, author: signerOf(tx), height, blockHash: h.hash, depth: tip - height + 1 };
+    return { txid, tx, author: signerOf(tx), height, index, blockHash: h.hash, depth: tip - height + 1 };
   };
 
   return { syncTail, checkTx, headerAt };

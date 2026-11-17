@@ -15,6 +15,7 @@
     "@fontsource/inter": "^5.3.0",
     "@fontsource/newsreader": "^5.3.0",
     "@intervalplace/aon-sdk": "^0.1.0",
+    "@inversealtruism/cairnx-core": "0.2.4",
     "@libp2p/webrtc": "7.0.2",
     "@mlc-ai/web-llm": "0.2.87",
     "@multiformats/multiaddr": "13.0.3",
