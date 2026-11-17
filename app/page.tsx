@@ -16,6 +16,7 @@ import hiddenList from "../moderation/hidden.json";
 import { sha256d, utf8 } from "@/csd";
 import { lightClient, type Verified } from "@/light";
 import { fetchFor, isPeerAddr } from "@/p2p";
+import { readMeta, registerWorker, updateFromNetwork, RELEASE_NAME, type Meta } from "@/install";
 import { CAIRN, NAME_RE as CSD_NAME_RE, lookupCsdName, nodeOf, normName, targetOf, type CsdName } from "@/cns";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
@@ -222,6 +223,21 @@ export default function Page() {
   const [allTime, setAllTime] = useState<Record<string, { count: number; weight: number }>>({});
   const [recent, setRecent] = useState<Record<string, { count: number; scoreSum: number }>>({});
   const [loaded, setLoaded] = useState(false);
+  // the copy of this page kept in the browser (src/install.ts, public/sw.js), and whether the
+  // network has a newer release ready
+  const [release, setRelease] = useState<{ meta: Meta | null; ready?: string }>({ meta: null });
+  useEffect(() => { registerWorker().then(() => readMeta()).then(m => setRelease(r => ({ ...r, meta: m }))); }, []);
+  const updating = useRef(false);
+  useEffect(() => {
+    if (!height || updating.current || !RELEASE_NAME) return;
+    updating.current = true;
+    const t = setTimeout(() => {
+      updateFromNetwork(n => lookupCsdName(n, light, { node: nodeSrc }))
+        .then(u => { if (u.state === "updated") setRelease(r => ({ ...r, ready: u.cid })); })
+        .catch(() => {});
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [height > 0]); // eslint-disable-line react-hooks/exhaustive-deps
   const [netError, setNetError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   // every topic on chain with its count (the newest-500 list can't hold them all), and entries
@@ -543,6 +559,8 @@ export default function Page() {
         <a href="#/names">Names</a>
         <span>Node: <button type="button" className="cp-linkbtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{nodeLabel(base)}</button></span>
         {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
+        {release.meta?.source === "ipfs" && release.meta.cid && <span title={`This page is the release ${release.meta.cid}, named by ${RELEASE_NAME}.csd on the network, checked block by block against that address and kept in this browser. It opens without any host.`}>Release …{release.meta.cid.slice(-8)}, from the network</span>}
+        {release.ready && <span><button type="button" className="cp-linkbtn" onClick={() => location.reload()}>A new release is ready: reload</button></span>}
         {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
       </footer>
       {choosingNode && <NodeDialog byName={async n => nodeOf(await lookupCsdName(n, light, { node: nodeSrc }))} current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}

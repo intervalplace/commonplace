@@ -146,6 +146,27 @@ anywhere a URL does: in `?node=`, in the node chooser, and in `NEXT_PUBLIC_CSD_A
 the page shows is still checked against the proof-of-work, so a peer needn't be trusted. The
 networking library loads only when a peer address is used.
 
+## Kept in the browser
+
+After the first visit, the page keeps a copy of itself in the browser (`public/sw.js`), so opening
+Commonplace again needs no host, not even its domain name. Until the network names a release, the
+copy follows the host: the page is fetched fresh when the host answers, and scripts and styles are
+kept.
+
+Once `NEXT_PUBLIC_RELEASE_NAME` and `NEXT_PUBLIC_RELEASE_KEY` are set, the page asks the network
+which release is current (`src/install.ts`):
+
+- **Where it looks:** the `.csd` name's profile `ipfs`, checked against the proof-of-work and
+  counted only while the release key holds the name.
+- **How it downloads:** the release comes as a CAR file from any IPFS gateway. It's used only if
+  every block matches its address and the files hang off exactly the named address.
+- **What changes:** from then on, the host isn't asked at all.
+
+Publishing a release is then: release, pin it on IPFS, point the name at its CID. `?sw=off` on any
+page removes the worker and everything it kept.
+
+Tests: `npx tsx test/install.test.mts release/<build>.car <CID> out`.
+
 ## Testing against a local network
 
 A CSD node built for tests (`cargo build --features test-bypass`) with its genesis check relaxed
