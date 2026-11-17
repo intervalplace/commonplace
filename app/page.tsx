@@ -2774,6 +2774,12 @@ function About() {
           bottom of the page switches it, to a public one or to{" "}
           <a href={NODE_APP} target="_blank" rel="noopener">your own</a>.
         </p>
+        <p>
+          Commonplace is one app on Compute Substrate, an example of what can be built on it. It has no special
+          place there: anyone can build another app over the same records, with different rules or a different look,
+          and nobody&apos;s permission is needed. This page&apos;s code is open, so anyone can also run their own copy of
+          it, or change it.
+        </p>
       </section>
       <section>
         <h2>What it costs</h2>
