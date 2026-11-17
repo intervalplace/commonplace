@@ -29,15 +29,34 @@ const load = () => (lib ??= (async () => {
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 
+// At most this many requests to one node at a time; the rest wait their turn. The node serves 16
+// streams per connection, and a page opening an entry asks for a burst of things at once.
+const MAX_IN_FLIGHT = 12;
+const queues = new Map<string, { busy: number; waiting: (() => void)[] }>();
+async function turn(base: string): Promise<() => void> {
+  let q = queues.get(base);
+  if (!q) queues.set(base, (q = { busy: 0, waiting: [] }));
+  if (q.busy >= MAX_IN_FLIGHT) await new Promise<void>(go => q!.waiting.push(go));
+  q.busy++;
+  return () => { q!.busy--; q!.waiting.shift()?.(); };
+}
+
 // `fetch` for a peer address: `base` is the address, the URL's path is the request
 export function peerFetch(base: string): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const done = await turn(base);
+    try { return await ask(base, input, init); } finally { done(); }
+  }) as typeof fetch;
+}
+
+async function ask(base: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  {
     const url = String(input instanceof Request ? input.url : input);
     if (!url.startsWith(base)) throw new Error("PEER_FETCH: not this peer");
     const path = url.slice(base.length) || "/";
     const { node, multiaddr } = await load();
     const signal = init?.signal ?? AbortSignal.timeout(30_000);
-    const stream = await node.dialProtocol(multiaddr(base), PROTOCOL, { signal });
+    const stream = await node.dialProtocol(multiaddr(base), PROTOCOL, { signal, maxOutboundStreams: 256 });
     try {
       // reading starts before the request goes out: an answer that arrives while the request is
       // still closing is otherwise missed, and the stream's end with it
@@ -58,6 +77,9 @@ export function peerFetch(base: string): typeof fetch {
       // itself arrives in full either way
       stream.close({ signal }).catch(() => {});
       await Promise.race([reading, new Promise((_, no) => signal.addEventListener("abort", () => no(signal.reason ?? new Error("PEER_FETCH: timeout")), { once: true }))]);
+      // the whole answer is in: let go of the stream now rather than when the close times out, so
+      // finished requests don't pile up against the browser's per-protocol stream limit
+      stream.abort?.(new Error("done"));
       const all = new Uint8Array(size);
       let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
       const res = JSON.parse(dec.decode(all)) as { status: number; body: string };
@@ -66,7 +88,7 @@ export function peerFetch(base: string): typeof fetch {
       stream.abort?.(e instanceof Error ? e : new Error(String(e)));
       throw e;
     }
-  }) as typeof fetch;
+  }
 }
 
 // `fetch` for any node address: a URL goes over HTTP, a peer address over WebRTC

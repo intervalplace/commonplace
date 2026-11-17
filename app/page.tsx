@@ -1520,7 +1520,13 @@ function useCheck(c: Ctx, e: Entry | undefined): CheckState | null {
     if (!e || e.pending) return;
     let live = true;
     setS(null);
-    c.light.checkTx(e.id).then(v => {
+    const tryCheck = (left: number): Promise<Verified> => c.light.checkTx(e.id).catch(x => {
+      // a node that didn't answer (busy, timed out, a dropped connection) isn't a node that lied:
+      // try once more before saying anything
+      if (left > 0 && !proofProblem(String(x?.message ?? x))) return new Promise<Verified>(r => setTimeout(r, 2500)).then(() => tryCheck(left - 1));
+      throw x;
+    });
+    tryCheck(1).then(v => {
       if (!live) return;
       const app = v.tx.app;
       if (app.kind !== "propose") return setS({ at: e.id, why: "it isn't an entry" });
@@ -1534,7 +1540,11 @@ function useCheck(c: Ctx, e: Entry | undefined): CheckState | null {
   return s && e && s.at === e.id ? s : null;
 }
 // can't be checked here, through no fault of the node's answer: an older node, or an old release
-const uncheckable = (s: CheckState) => /NODE_404|STALE_ANCHORS/.test(s.why ?? "");
+// what only a wrong answer causes: a proof that didn't hold up, or a chain that doesn't
+const proofProblem = (why: string) => /^(BAD_PROOF|BAD_CHAIN|NOT_FOUND)/.test(why);
+// can't be checked here, through no fault of the node's answer: an older node, an old release, or a
+// node that didn't answer in time
+const uncheckable = (s: CheckState) => !s.differs && !!s.why && !proofProblem(s.why);
 const failed = (s: CheckState | null) => !!s && !uncheckable(s) && (!!s.differs || !s.v);
 // Quiet when it holds, like a browser's padlock: a small mark, the details on hover. Loud only when
 // it doesn't.
@@ -1543,7 +1553,9 @@ function CheckMark({ s }: { s: CheckState | null }) {
   if (s.v && !s.differs) return (
     <span className="cp-checkmark ok" title={`Checked here in your browser, not taken on the node's word: signed by its author, and in block ${s.v.height.toLocaleString("en-US")} with valid proof-of-work, ${s.v.depth.toLocaleString("en-US")} ${s.v.depth === 1 ? "block" : "blocks"} deep.`}>✓ checked</span>
   );
-  if (uncheckable(s)) return <span className="cp-checkmark" title={/STALE/.test(s.why!) ? "This version of the page is too old to check new blocks quickly; a newer release fixes that." : "This node can't be checked against the proof-of-work yet: it needs newer node software."}>not checked</span>;
+  if (uncheckable(s)) return <span className="cp-checkmark" title={/STALE/.test(s.why!) ? "This version of the page is too old to check new blocks quickly; a newer release fixes that."
+    : /NODE_404/.test(s.why!) ? "This node can't be checked against the proof-of-work yet: it needs newer node software."
+    : `The node didn't answer in time to check this (${s.why}). Reload to try again.`}>not checked</span>;
   return <span className="cp-checkmark bad" title={s.differs ? `The node showed ${s.differs} differently from what the network holds.` : `Couldn't be confirmed against the network: ${(s.why ?? "").replace(/^[A-Z_]+: /, "")}`}>✗ doesn&apos;t check out</span>;
 }
 function CheckWarning({ s }: { s: CheckState | null }) {
@@ -1559,6 +1571,8 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
   const [res, setRes] = useState<CsdName | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [handler, setHandler] = useState<null | "asked" | "unsupported">(null);
+  const [canHandle, setCanHandle] = useState(true);
+  useEffect(() => { setCanHandle(typeof navigator !== "undefined" && "registerProtocolHandler" in navigator); }, []);
   useEffect(() => {
     setQ(name ?? ""); setRes(null); setErr(null);
     if (!name) return;
@@ -1617,11 +1631,15 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
       <section className="cp-name-card">
         <span className="cp-h2">Links that open names</span>
         <p className="cp-hint" style={{ margin: 0 }}>A link like <span className="cp-mono">{HANDLER}:{name ?? "alice"}</span> opens a name in any browser that has been told what opens them. Let this page open them: it looks the name up, checks it, and goes where it points.</p>
-        <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12 }}>
-          <button className="cp-btn-line" onClick={register}>Open {HANDLER}: links here</button>
-          {handler === "asked" && <span className="cp-hint">Your browser asks you to allow it, usually at the right end of the address bar.</span>}
-          {handler === "unsupported" && <span className="cp-hint">This browser doesn&apos;t let pages open links like these.</span>}
-        </div>
+        {canHandle ? (
+          <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12 }}>
+            <button className="cp-btn-line" onClick={register}>Open {HANDLER}: links here</button>
+            {handler === "asked" && <span className="cp-hint">Your browser asks you to allow it, usually at the right end of the address bar.</span>}
+            {handler === "unsupported" && <span className="cp-hint">This browser didn&apos;t allow it.</span>}
+          </div>
+        ) : (
+          <p className="cp-hint" style={{ margin: 0 }}>This browser can&apos;t be told what opens them: Safari can&apos;t, and on iPhone and iPad no browser can, since they all run on Safari&apos;s engine. On a computer, Chrome, Firefox and Edge can, and so can the Compute Substrate Node app.</p>
+        )}
         <p className="cp-hint" style={{ margin: 0 }}>A name points to a site or a node through its profile on Cairn: <span className="cp-mono">ipfs</span> for a site on IPFS, <span className="cp-mono">csd.node</span> for a node, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
       </section>
     </main>
