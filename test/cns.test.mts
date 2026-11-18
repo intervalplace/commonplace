@@ -3,7 +3,7 @@
 //   npx tsx test/cns.test.mts
 import { nameClaim, nameSet, nameProfile, nameRegFee, TREASURY_ADDR } from "@inversealtruism/cairnx-core";
 import { txid as txidOf, hexToBytes, keyFromPrivate, signTx, serializeTx, bytesToHex, type Hex, type Tx } from "../src/csd";
-import { lookupCsdName, targetOf, nodeOf } from "../src/cns";
+import { primaryCsdName, lookupCsdName, targetOf, nodeOf } from "../src/cns";
 import type { Verified } from "../src/light";
 let failures = 0;
 const ok = (cond: unknown, what: string) => { console.log(`${cond ? "ok  " : "FAIL"} ${what}`); if (!cond) failures++; };
@@ -65,4 +65,12 @@ const lyingNode = (async (u: string) => { const r = await nodeFetch(u as any); c
 let caught = false;
 try { await lookupCsdName("alice", light, { fetch: down, node: { base: "http://other-node", fetch: lyingNode } }); } catch { caught = true; }
 ok(caught, "a node that alters a record is caught");
+// someone's own .csd name: one they hold that points to their own address
+add(B, nameClaim({ name: "bob" }), H0 + 30, [{ addr: TREASURY_ADDR as Hex, value: nameRegFee("bob", H0 + 30) }]);
+add(B, nameSet({ name: "bob", addr: B }), H0 + 31);
+const nodeB = { base: "http://node-b", fetch: nodeFetch };
+const pb = await primaryCsdName(B, light, nodeB);
+ok(pb?.name === "bob" && pb.checked, "B's own name is found from the history and checked");
+ok((await primaryCsdName(A, light, nodeB)) === null, "A holds alice, but it points to B, so A has no name of their own to show");
+ok((await primaryCsdName(B, { ...light, checkTx: async () => { throw new Error("BAD_PROOF"); } }, { base: "http://node-c", fetch: nodeFetch })) === null, "a name that can't be checked isn't shown");
 console.log(failures ? `\n${failures} failed` : "\nall passed"); process.exit(failures ? 1 : 0);

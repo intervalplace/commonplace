@@ -209,3 +209,29 @@ export const nodeOf = (n: CsdName): string | null => {
   const v = n.state === "held" ? n.profile["csd.node"] : undefined;
   return v && (/^https?:\/\/\S+$/.test(v) || /^\/(ip4|ip6|dns4|dns6|dns)\/\S+$/.test(v)) ? v : null;
 };
+
+// Someone's .csd name: the one Cairn's rules make their primary (a name they hold that points to
+// their own address; the oldest if several). Found from a node's whole CairnX history, then looked up
+// and checked like any name, and shown only if that check says it's theirs. Null when they have none,
+// or when it can't be checked.
+const primaries = new Map<string, Promise<CsdName | null>>();
+export function primaryCsdName(addr: Hex, light: Light, node: NodeSource): Promise<CsdName | null> {
+  const key = `${node.base}|${addr.toLowerCase()}`;
+  let p = primaries.get(key);
+  if (!p) {
+    p = (async () => {
+      const core = await import("@inversealtruism/cairnx-core");
+      const tip = (await light.syncTail()).height;
+      const evs = await nodeHistory(node, tip, core.ACTIVATION_HEIGHT);
+      const st = core.resolve(evs.map(e => asEvent(e, core.paidToFromOutputs)).filter((x): x is NonNullable<typeof x> => !!x), tip);
+      const name = core.pickPrimaryName(Object.values(st.names) as any, addr.toLowerCase());
+      if (!name) return null;
+      const n = await lookupCsdName(name, light, { node });
+      return n.checked && n.state === "held" && n.owner?.toLowerCase() === addr.toLowerCase() && n.addr?.toLowerCase() === addr.toLowerCase() ? n : null;
+    })().catch(() => null);
+    primaries.set(key, p);
+    // a failure isn't kept: the next look tries again
+    p.then(r => { if (!r) setTimeout(() => primaries.delete(key), 60_000); });
+  }
+  return p;
+}

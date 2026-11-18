@@ -17,7 +17,7 @@ import { sha256d, utf8 } from "@/csd";
 import { lightClient, type Verified } from "@/light";
 import { fetchFor, isPeerAddr } from "@/p2p";
 import { readMeta, registerWorker, updateFromNetwork, RELEASE_NAME, type Meta } from "@/install";
-import { CAIRN, NAME_RE as CSD_NAME_RE, lookupCsdName, nodeOf, normName, targetOf, type CsdName } from "@/cns";
+import { CAIRN, NAME_RE as CSD_NAME_RE, lookupCsdName, nodeOf, primaryCsdName, normName, targetOf, type CsdName } from "@/cns";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
 import { usdPerCsd } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
@@ -1180,18 +1180,20 @@ function Me(c: Ctx) {
   const mine = c.me ? c.entries.filter(e => e.author === c.me!.addr20) : [];
   const canKeep = text.trim().length > 0 && left >= 0 && topicOk(topic);
   const prof = useContext(Profiles)[c.me?.addr20 ?? ""];
+  const csdName = useCsdName(c, c.me?.addr20);
   return (
     <main className="cp-main">
       {c.me && (
         <div className="cp-row" style={{ justifyContent: "flex-start", gap: 16 }}>
           <Avatar addr={c.me.addr20} pic={prof?.pic} size={56} label="Your picture" />
           <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <span style={{ fontFamily: "var(--serif)", fontSize: 22 }}>{prof?.name || "No name yet"}</span>
+            <span style={{ fontFamily: "var(--serif)", fontSize: 22 }}>{prof?.name || "No display name yet"}</span>
+            {csdName && <CsdNameTag name={csdName} />}
             <span className="cp-who" style={{ color: "var(--muted)" }}>{c.me.addr20}</span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <a className="cp-btn-ghost" style={{ textDecoration: "none" }} href={hrefPerson(c.me.addr20)}>Your page as others see it</a>
-            <button className="cp-btn-ghost" onClick={c.editProfile}>{prof ? "Change" : "Choose a picture and name"}</button>
+            <button className="cp-btn-ghost" onClick={c.editProfile}>{prof ? "Change" : "Choose a picture and display name"}</button>
           </div>
         </div>
       )}
@@ -1640,7 +1642,7 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
   return (
     <main className="cp-main cp-names">
       <header style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <h1 className="cp-topic-title">{name ? <>{name}<span className="cp-name-scheme">.csd</span></> : "Names"}</h1>
+        <h1 className="cp-topic-title">{name ? <>{name}<span className="cp-name-scheme">.csd</span></> : ".csd names"}</h1>
         {!name && <p className="lead" style={{ margin: 0 }}>Names like alice.csd, from <a href={onCairn} target="_blank" rel="noreferrer noopener">Cairn</a>&apos;s name service on Compute Substrate. Nobody issues them: each is kept on the network, and this page checks every record of a name against the proof-of-work before it trusts where the name points.</p>}
       </header>
       <form className="cp-row" style={{ gap: 10 }} onSubmit={go}>
@@ -1686,6 +1688,22 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
       </section>
     </main>
   );
+}
+
+// someone's .csd name, once checked (see primaryCsdName); null while looking, or if they have none
+function useCsdName(c: Ctx, addr: Hex | undefined): string | null {
+  const [n, setN] = useState<string | null>(null);
+  useEffect(() => {
+    setN(null);
+    if (!addr) return;
+    let live = true;
+    primaryCsdName(addr, c.light, c.nodeSrc).then(r => live && setN(r?.name ?? null));
+    return () => { live = false; };
+  }, [addr, c.light, c.nodeSrc]);
+  return n;
+}
+function CsdNameTag({ name }: { name: string }) {
+  return <a className="cp-csdname" href={`#/n/${encodeURIComponent(name)}`} title={`${name}.csd: a name held by this address, pointing to it, checked against the network`}>{name}<span className="cp-name-scheme">.csd</span> <span className="cp-checkmark ok">✓</span></a>;
 }
 
 // For a name's holder: where it points. Cairn's profile record replaces the whole profile, so every
@@ -2925,7 +2943,7 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
   return (
     <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="pf-title">
-        <h2 id="pf-title">Your picture and name</h2>
+        <h2 id="pf-title">Your picture and display name</h2>
         <fieldset style={{ border: "none", margin: 0, padding: 0 }}>
           <legend className="cp-hint" style={{ marginBottom: 12 }}>The first is made from your key and is yours alone. The others anyone can pick.</legend>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(56px, 1fr))", gap: 10 }}>
@@ -2937,11 +2955,12 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
             ))}
           </div>
         </fieldset>
-        <label className="cp-topic" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>Name
+        <label className="cp-topic" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>Display name
+          <span className="cp-hint" style={{ fontWeight: 400 }}>Anyone can pick any display name. A .csd name is one only you hold: <a href="#/names">Names</a>.</span>
           <input value={name} onChange={e => setName(e.target.value)} maxLength={NAME_MAX} placeholder="Leave empty to go without one" style={{ width: "100%", borderRadius: 8, fontSize: 16, padding: "10px 12px" }} />
         </label>
         <ul>
-          <li>Your picture and name are kept like an entry: public, and kept on the network for good.</li>
+          <li>Your picture and display name are kept like an entry: public, and kept on the network for good.</li>
           <li>You can change them later. The newest one is the one people see, and the old ones stay on the record.</li>
           <li>Names aren&apos;t unique, so your address always shows beside yours.</li>
         </ul>
@@ -3008,13 +3027,15 @@ function Person(c: Ctx & { addr: Hex }) {
     c.api.proposal(style.pin).then(p => { if (p?.domain && !p.domain.startsWith("cp.")) c.loadTopic(p.domain); }).catch(() => {});
   }, [style?.pin, !!pinned]); // eslint-disable-line react-hooks/exhaustive-deps
   const showPin = pinned && pinned.hidden === undefined && pinned.kind !== "link";
+  const csdName = useCsdName(c, c.addr);
 
   return (
     <main className="cp-main">
       <header style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
         <Avatar addr={c.addr} pic={prof?.pic} size={84} label={prof?.name ? `${prof.name}'s picture` : "Picture"} />
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: "1 1 260px" }}>
-          <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || short(c.addr)}</h1>
+          <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || (csdName ? <>{csdName}<span className="cp-name-scheme">.csd</span></> : short(c.addr))}</h1>
+          {csdName && prof?.name && <CsdNameTag name={csdName} />}
           <span className="cp-who" style={{ color: "var(--muted)", overflowWrap: "anywhere" }}>{c.addr}</span>
           {lately && (
             <a className="cp-lately" href={hrefEntry(lately.id)}>
