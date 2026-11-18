@@ -12,7 +12,9 @@ export type SolverProblem = {
   record?: { id?: string; score: number; note: string; solution?: string | null; program?: string | null } | null;
   bounties?: { csd: number; for_beating: number; won_by?: string | null }[];
   recent?: { score: number; note: string }[];
-  notebook?: { page: string; headline: string; tried?: string; stalled?: string; next?: string; reached?: { score: number; verified?: boolean | null; has_solution?: boolean } | null }[];
+  notebook?: { page: string; headline: string; tried?: string; stalled?: string; next?: string; reached?: { score: number; verified?: boolean | null; has_solution?: boolean } | null; isNew?: boolean }[];
+  // older pages past those quoted in full: headlines only, so nothing in the notebook is invisible
+  older?: { page: string; headline: string; reached?: { score: number } | null }[];
 };
 export type Attempt = { idea: string; result: string };
 export type ProgramReply = { code: string; idea: string; start?: string };
@@ -39,9 +41,15 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean
     (open.length ? `Open bounties: ${open.map(b => `${b.csd} CSD for the first verified result beating ${b.for_beating}`).join("; ")}. They are paid to your address if you get there first.\n` : "") +
     (p.recent?.length && k >= 0.15 ? `Recent results by agents: ${p.recent.slice(0, k < 0.3 ? 3 : 6).map(r => `${r.score}: ${r.note}`).join("; ")}\n` : "") +
     // the smallest models get only the essentials: no notebook, no history
-    (p.notebook?.length && k >= 0.15 ? `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.\n${p.notebook.slice(0, k < 0.3 ? 2 : k < 1 ? 3 : 8).map(g =>
-      `- page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, room(700))}\n  stalled: ${cut(g.stalled, room(400))}\n  next: ${cut(g.next, room(400))}`).join("\n")}\n` : "") +
-    (tried.length ? `Your attempts this run: ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
+    (p.notebook?.length && k >= 0.15 ? (() => {
+      const shown = p.notebook!.slice(0, k < 0.3 ? 2 : k < 1 ? 3 : 8), fresh = shown.filter(g => g.isNew).length;
+      return `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.` +
+        (fresh ? ` ${fresh} ${fresh === 1 ? "page is" : "pages are"} new since your last round (marked NEW): other agents are working on this right now, so read ${fresh === 1 ? "it" : "them"} first and change course if ${fresh === 1 ? "it rules" : "they rule"} out what you were trying.` : "") +
+        `\n${shown.map(g =>
+        `- ${g.isNew ? "NEW " : ""}page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, room(700))}\n  stalled: ${cut(g.stalled, room(400))}\n  next: ${cut(g.next, room(400))}`).join("\n")}\n` +
+        (p.older?.length && k >= 1 ? `Older pages, headlines only: ${p.older.slice(0, 40).map(g => `${g.headline}${g.reached ? ` (reached ${g.reached.score})` : ""}`).join("; ")}\n` : "");
+    })() : "") +
+    (tried.length ? `Your own attempts so far, oldest first (don't repeat them): ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
     // the smallest models can write a code block, but not prose and then a code block: code only
     (k < 0.15 ? `\nWrite a JavaScript function solve(best) that returns a solution string in the problem's format, aiming to beat the record. ` +
       `It runs in a sandbox for at most 60 seconds, with no network: plain JavaScript only, no require or import, and stop after about 40 seconds (check Date.now()). Reply with only a \`\`\`js code block, no explanation, ` +
@@ -122,6 +130,19 @@ export function fallbackPage(p: SolverProblem, tried: Attempt[], model: string):
 }
 
 // Models on an OpenAI-compatible server (LM Studio, Ollama, llama.cpp, vLLM, or a hosted one)
+// How many tokens a local model has loaded, from LM Studio's own API (GET /api/v0/models/<id>);
+// null when the server doesn't say (another server, an older LM Studio)
+export async function localContext(base: string, model: string, signal?: AbortSignal): Promise<number | null> {
+  try {
+    const root = base.replace(/\/+$/, "").replace(/\/v1$/, "");
+    const r = await fetch(`${root}/api/v0/models/${encodeURIComponent(model)}`, { signal: signal ?? AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const n = Number(j?.loaded_context_length ?? j?.max_context_length);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+
 export async function listModels(base: string, apiKey?: string, signal?: AbortSignal): Promise<string[]> {
   const r = await fetch(`${base.replace(/\/+$/, "")}/models`, { headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {}, signal });
   if (!r.ok) throw new Error(`MODELS_${r.status}`);

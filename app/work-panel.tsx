@@ -12,7 +12,7 @@ import { MIN_FEE_PROPOSE, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, sh
 import { profileArgs, styleArgs, styleRoom } from "@/entries";
 import { better, fmt, frontierArgs, methodUri, pageUri, parsePageBody, resultUri, resultsTopic, uriProblem, type Problem } from "@/frontier";
 import { upload } from "@/arweave";
-import { askOpenAI, fallbackPage, listModels, pagePrompt, parsePageDraft, parseProgram, programPrompt, type Attempt, type SolverProblem } from "@/solver";
+import { askOpenAI, fallbackPage, listModels, localContext, pagePrompt, parsePageDraft, parseProgram, programPrompt, type Attempt, type SolverProblem } from "@/solver";
 
 type Run = (source: string, input: string, ms: number) => Promise<{ ok: boolean; out?: unknown; error?: string; secs: number }>;
 type Verify = (verifier: string, solution: string) => Promise<{ valid: boolean; score: number; reason?: string; unchecked?: boolean }>;
@@ -116,6 +116,7 @@ export function WorkPanel(props: WorkProps) {
   const stop = useRef(false);
   const abort = useRef<AbortController | null>(null);
   const files = useRef(new Map<string, string | null>()); // fetched solutions, programs and page bodies
+  const seenPages = useRef<Set<string> | null>(null);       // the notebook pages the model has been shown
   // the agent's own latest record: the page learns of it only once it's in a block and verified,
   // and until then it's the bar to beat (so the same improvement isn't posted twice)
   const posted = useRef<{ slug: string; id: Hex; score: number; note: string; solution: string; program: string } | null>(null);
@@ -257,10 +258,13 @@ export function WorkPanel(props: WorkProps) {
     if (!p.verifier) return null;
     const rec = bar();
     // the notebook's newest pages, fetched together
+    // pages new since the last round are marked, so the model reads what others found meanwhile
     const notebook = await Promise.all(p.pages.slice(0, 8).map(async g => {
       const body = parsePageBody((await fetchOnce(g.body, g.hash)) ?? "");
-      return { page: g.id, headline: g.headline, tried: body?.tried, stalled: body?.stalled, next: body?.next, reached: g.score === null ? null : { score: g.score, has_solution: !!g.solution } };
+      return { page: g.id, headline: g.headline, tried: body?.tried, stalled: body?.stalled, next: body?.next, reached: g.score === null ? null : { score: g.score, has_solution: !!g.solution },
+        isNew: seenPages.current !== null && !seenPages.current.has(g.id) };
     }));
+    seenPages.current = new Set(p.pages.map(g => g.id));
     return {
       slug: p.problem.slug, title: p.problem.title, statement: p.problem.statement,
       direction: p.problem.direction === "max" ? "larger is better" : "smaller is better",
@@ -269,6 +273,7 @@ export function WorkPanel(props: WorkProps) {
         : { id: rec.id, score: rec.score, note: rec.note, solution: await fetchOnce(p.record!.solution, p.record!.hash), program: p.program ? await fetchOnce(p.program.ar, p.program.hash) : null },
       recent: p.recent.slice(0, 6),
       notebook,
+      older: p.pages.slice(8).map(g => ({ page: g.id, headline: g.headline, reached: g.score === null ? null : { score: g.score } })),
     };
   };
 
@@ -331,6 +336,12 @@ export function WorkPanel(props: WorkProps) {
     stop.current = false; setRunning(true);
     say(`Started, with ${modelName(agent)}.`);
     let a = agent, toldNoCsd = false, dead = 0;
+    const history: Attempt[] = [];
+    // a local model with a large context window (LM Studio says how large) gets the whole prompt,
+    // not the trimmed one meant for small windows
+    const bigLocal = a.source !== "browser" && a.source !== "api" && ((await localContext(a.base, a.model)) ?? 0) >= 65536;
+    if (bigLocal) say("The model has a large context window: it gets the full problem, notebook and history.");
+    seenPages.current = null;
     setStatus("Checking the agent's name and page…");
     await setUp(key, a);
     try {
@@ -339,7 +350,9 @@ export function WorkPanel(props: WorkProps) {
         const sp = await snapshot();
         if (!sp) { setStatus("Waiting for the problem's verifier to load…"); await sleep(3000); continue; }
         const dir = P.current.problem.direction;
-        const tried: Attempt[] = [];
+        // its own attempts, carried across rounds (the newest 24), so it doesn't circle back to them
+        const tried: Attempt[] = history.slice(-24);
+        const before = tried.length;
         let top: { solution: string; code: string; score: number; idea: string } | null = null;
         for (let i = 0; i < ATTEMPTS && !stop.current; i++) {
           setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing…`);
@@ -347,7 +360,7 @@ export function WorkPanel(props: WorkProps) {
           let text: string;
           const askedAt = Date.now();
           // a model in the browser has the smallest window: its prompt is trimmed hardest
-          try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.12 : a.source === "api" ? false : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
+          try { text = await ask(a, programPrompt(sp, tried, a.source === "browser" ? 0.12 : a.source === "api" || bigLocal ? false : true), ctrl.signal, t => setStatus(`Round ${round}, program ${i + 1} of ${ATTEMPTS}: the model is writing (${t.length.toLocaleString("en-US")} characters)…`)); }
           catch (e) {
             if (stop.current) break;
             if (/\b40[13]\b/.test(errText(e))) { say("The service refused the key. Check it was pasted whole, or make a new one.", "bad"); stop.current = true; break; }
@@ -385,6 +398,7 @@ export function WorkPanel(props: WorkProps) {
           }
         }
         setStats(s => ({ ...s, rounds: s.rounds + 1 }));
+        history.push(...tried.slice(before));
         const rec = bar();
         if (top && (!rec || better(dir, top.score, rec.score))) {
           try { await postResult(key, top); setUnposted(null); }
