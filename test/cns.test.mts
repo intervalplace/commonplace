@@ -26,7 +26,7 @@ const add = (by: Hex, b: Built, height: number, pay: { addr: Hex; value: bigint 
 add(A, nameClaim({ name: "alice" }), H0, [{ addr: TREASURY_ADDR as Hex, value: nameRegFee("alice", H0) }]);
 add(B, nameClaim({ name: "alice" }), H0 + 5, [{ addr: TREASURY_ADDR as Hex, value: nameRegFee("alice", H0 + 5) }]);
 add(A, nameSet({ name: "alice", addr: B }), H0 + 10);
-add(A, nameProfile({ name: "alice", p: { ipfs: "bafybeigqtu3nfqikwhmevdp7unfajbhdx7eikz4nc7k4puvqluaebo3jc4", "csd.node": "https://csd.aon.network" } }), H0 + 20);
+add(A, nameProfile({ name: "alice", p: { contenthash: "ipfs://bafybeigqtu3nfqikwhmevdp7unfajbhdx7eikz4nc7k4puvqluaebo3jc4", "csd.node": "https://csd.aon.network" } }), H0 + 20);
 const light = { checkTx: async (id: Hex) => { const v = proven.get(id); if (!v) throw new Error("BAD_PROOF"); return v; }, syncTail: async () => ({ height: H0 + 100 }) };
 const fakeCairn = (body: object, status = 200) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
 const hist = (resolve: object, sufficient = true) => ({ ok: true, name: "alice", tipHeight: H0 + 100, resolve, events: history, scopedReplaySufficient: sufficient });

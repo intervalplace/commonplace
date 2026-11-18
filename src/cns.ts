@@ -14,8 +14,9 @@
 // The server can still leave events out. Cairn's server marks a history as one a scoped replay can't
 // fully decide (`scopedReplaySufficient: false`), and then this says so.
 //
-// What a name points to: its address (`nset`, else its owner), and, by convention between apps, keys
-// in its profile (`nprofile`): `ipfs` for a site on IPFS, `csd.node` for a node, `url` for a link.
+// What a name points to: its address (`nset`, else its owner), and keys in its profile (`nprofile`),
+// as agreed with Cairn: `contenthash` (ipfs://<CIDv1>) for a site, `url` for a link, and a node to
+// read the network through (key still to be settled; `csd.node` for now).
 import { bytesToHex, deserializeTx, hexToBytes, signerOf, txid, type Hex, type Tx } from "./csd";
 import type { Verified } from "./light";
 
@@ -197,8 +198,9 @@ function serversWord(name: string, h: History): CsdName {
 export type Target = { kind: "ipfs"; cid: string } | { kind: "url"; url: string } | { kind: "page"; addr: Hex };
 export function targetOf(n: CsdName): Target | null {
   if (n.state !== "held") return null;
-  const ipfs = n.profile["ipfs"]?.replace(/^ipfs:\/\//, "");
-  if (ipfs && /^[a-z0-9]{20,100}$/i.test(ipfs)) return { kind: "ipfs", cid: ipfs };
+  // a site: `contenthash`, as ipfs://<CIDv1> (Cairn's convention; ipns:// may come later)
+  const ipfs = /^ipfs:\/\/(b[a-z2-7]{50,100})$/.exec(n.profile["contenthash"] ?? "")?.[1];
+  if (ipfs) return { kind: "ipfs", cid: ipfs };
   const url = n.profile["url"];
   if (url && /^https:\/\/\S+$/.test(url)) return { kind: "url", url };
   return n.addr ? { kind: "page", addr: n.addr } : null;

@@ -4,7 +4,7 @@
 // serves can come from two places:
 //   - the host the page was first loaded from (until a network release is known), or
 //   - the network: the .csd name RELEASE_NAME (Cairn's name service) points to the current release
-//     by its IPFS address (its profile's `ipfs`). Only a name held by RELEASE_KEY counts, so a name
+//     by its IPFS address (its profile's `contenthash`, ipfs://<CIDv1>). Only a name held by RELEASE_KEY counts, so a name
 //     that lapses or changes hands can't push a release to anyone.
 // A release from the network is downloaded from any IPFS gateway as a CAR file and checked before
 // use: every block must hash to its own address, and the files must hang off exactly the address
@@ -127,7 +127,7 @@ export async function updateFromNetwork(lookup: (name: string) => Promise<CsdNam
   const n = await lookup(RELEASE_NAME);
   if (!n.checked || n.state !== "held") return { state: "skipped", why: "the release name couldn't be checked" };
   if (n.owner?.toLowerCase() !== RELEASE_KEY) return { state: "skipped", why: "the release name isn't held by the release key" };
-  const cid = (n.profile["ipfs"] ?? "").replace(/^ipfs:\/\//, "");
+  const cid = /^ipfs:\/\/(b[a-z2-7]{50,100})$/.exec(n.profile["contenthash"] ?? "")?.[1] ?? "";
   if (!/^bafy[a-z2-7]{50,}$/.test(cid)) return { state: "skipped", why: "the release name doesn't point to a release" };
   const m = await readMeta();
   if (m?.cid === cid) return { state: "current", cid };

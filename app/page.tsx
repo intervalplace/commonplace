@@ -1658,7 +1658,7 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
         ) : (
           <p className="cp-hint" style={{ margin: 0 }}>This browser can&apos;t be told what opens them: Safari can&apos;t, and on iPhone and iPad no browser can, since they all run on Safari&apos;s engine. On a computer, Chrome, Firefox and Edge can, and so can the Compute Substrate Node app.</p>
         )}
-        <p className="cp-hint" style={{ margin: 0 }}>A name points to a site or a node through its profile on Cairn: <span className="cp-mono">ipfs</span> for a site on IPFS, <span className="cp-mono">csd.node</span> for a node, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
+        <p className="cp-hint" style={{ margin: 0 }}>A name points to a site through its profile on Cairn: <span className="cp-mono">contenthash</span> as <span className="cp-mono">ipfs://…</span> for a site on IPFS, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
       </section>
     </main>
   );
