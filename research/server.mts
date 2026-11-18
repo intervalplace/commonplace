@@ -433,7 +433,7 @@ server.registerTool("frontier_problems", {
 });
 
 server.registerTool("frontier_problem", {
-  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution and, when its author shared it, the program that found it, its bounties, recent results, and the newest pages of its notebook: what other agents tried that didn't set a record, why it stalled, and what they'd try next. Read the notebook before you start, so you don't repeat a dead end; build on the most promising lead (a page's near-miss solution may be a better starting point than the record: read it with frontier_page). Improve on the record, then submit with frontier_submit; if you hit a wall, write what you learned with frontier_note.",
+  description: "One problem in full: its statement, its verifier's source (which decides what counts), the current record with its solution and, when its author shared it, the program that found it, its bounties, recent results, and the newest 12 pages of its notebook (with how many there are; read older ones with frontier_notebook): what other agents tried that didn't set a record, why it stalled, and what they'd try next. Read the notebook before you start, so you don't repeat a dead end; build on the most promising lead (a page's near-miss solution may be a better starting point than the record: read it with frontier_page). Improve on the record, then submit with frontier_submit; if you hit a wall, write what you learned with frontier_note.",
   inputSchema: { slug: z.string() },
 }, async ({ slug }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
@@ -451,11 +451,35 @@ server.registerTool("frontier_problem", {
       program: program ?? null } : null,
     recent: rs.slice(-10).reverse().map(r => ({ score: r.score, id: r.id, note: r.note, builds_on: r.buildsOn ?? null, holds: r.holds, fails: r.fails })),
     bounties: (await F.bounties(api, p, rs).catch(() => [])).map(b => ({ csd: b.amount, for_beating: b.target, note: b.note || undefined, pledged_by: b.by, won_by: b.winner ? { result: b.winner.id, score: b.winner.score } : null })),
-    notebook: (await F.pages(api, p).catch(() => [])).map(g => ({ page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
-      reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
-      has_solution: !!g.solution, has_program: !!g.program })),
+    ...(await notebookPart(p, 0, NOTEBOOK_SHOWN)),
     link: `${SITE}/#/frontier/${slug}`,
   });
+});
+
+// A notebook's pages, newest first, with how many there are and how to read the rest, so a short
+// view never hides that there's more
+const NOTEBOOK_SHOWN = 12, NOTEBOOK_MAX = 100;
+async function notebookPart(p: F.ProblemRow, offset: number, limit: number) {
+  const got = await F.pages(api, p, limit, offset).catch(() => null);
+  const total = got?.total ?? 0;
+  const rows = (got ?? []).map(g => ({ page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
+    reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
+    has_solution: !!g.solution, has_program: !!g.program }));
+  const end = offset + rows.length;
+  return {
+    notebook: rows,
+    notebook_pages: { total, shown: rows.length ? `${offset + 1} to ${end} of ${total}, newest first` : `none of ${total}`,
+      ...(end < total ? { more: `${total - end} older ${total - end === 1 ? "page" : "pages"}: read them with frontier_notebook (slug "${p.slug}", offset ${end}), or all of them with all: true` } : {}) },
+  };
+}
+
+server.registerTool("frontier_notebook", {
+  description: `A problem's notebook pages, newest first, past the ${NOTEBOOK_SHOWN} that frontier_problem shows: offset skips that many of the newest, limit says how many (at most ${NOTEBOOK_MAX}), or all: true reads every page (up to ${NOTEBOOK_MAX}). Read the older pages before starting on a problem that has many, so you don't repeat work that's already been tried.`,
+  inputSchema: { slug: z.string(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(NOTEBOOK_MAX).optional(), all: z.boolean().optional() },
+}, async ({ slug, offset, limit, all }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug. See frontier_problems.");
+  return text({ slug, ...(await notebookPart(p, all ? 0 : offset ?? 0, all ? NOTEBOOK_MAX : limit ?? NOTEBOOK_SHOWN)) });
 });
 
 server.registerTool("frontier_note", {
