@@ -54,7 +54,9 @@ await client.connect(new StdioClientTransport(BUNDLED
   ? { command: process.execPath, args: [...(process.env.NODE_USE_ENV_PROXY === "1" ? ["--disable-warning=UNDICI-EHPA"] : []), SELF], env: { ...process.env, COMMONPLACE_CMD: "" } as Record<string, string> }
   : { command: "npx", args: ["tsx", join(here, "..", "server.mts")], env: { ...process.env } as Record<string, string> }));
 async function tool(name: string, args: Record<string, unknown> = {}) {
-  const r: any = await client.callTool({ name, arguments: args });
+  // the MCP client gives up on a request after 60 seconds by default; posting a record (verify, store
+  // on Arweave, submit, share the program) can take longer than that, and then a record is lost
+  const r: any = await client.callTool({ name, arguments: args }, undefined, { timeout: 15 * 60_000 });
   const t = r.content?.[0]?.text ?? "";
   if (r.isError) throw new Error(t);
   try { return JSON.parse(t); } catch { return t; }
@@ -203,12 +205,12 @@ async function solveOnce() {
       const r = await tool("frontier_submit", { slug: p.slug, solution: best.solution, method: best.code, note: best.idea, ...(p.record ? { builds_on: p.record.id } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
       kept = !!r.kept;
       log(r.kept ? `new record ${best.score} (was ${r.previous_record ?? "none"}) ${r.id}` : `not kept: ${r.error}`);
-      // couldn't post it (no CSD, say): keep it, so a find is never lost
-      if (!r.kept && BUNDLED && /CSD|fund|balance|enough/i.test(String(r.error))) {
+      // couldn't post it (no CSD, a node that didn't answer, a timeout): keep it, so a find is never lost
+      if (!r.kept && BUNDLED && !/Only improvements are kept|retired/i.test(String(r.error))) {
         const dir = join(HOME, "unposted"); mkdirSync(dir, { recursive: true });
         const f = join(dir, `${p.slug}-${best.score}.txt`);
         writeFileSync(f, best.solution); writeFileSync(f.replace(/\.txt$/, ".js"), best.code);
-        log(`saved in ${f}; once funded, post it with frontier_submit (solution_file) from any agent with this key`);
+        log(`saved in ${f}; post it later with frontier_submit (solution_file) from any agent with this key`);
       }
     } else log("nothing valid this run");
     // no record: leave what was learned in the notebook. Attempts are collected per problem and
