@@ -144,6 +144,18 @@ export async function pages(api: Node, p: ProblemRow, n = 12, offset = 0): Promi
   return rows;
 }
 
+// The notebook's pages, newest first, from their entries alone (no bodies fetched): cheap enough to
+// ask between attempts. `by` is filled in only for pages above `above`.
+export type PageHead = { id: Hex; by: Hex | null; height: number; headline: string; score: number | null };
+export async function pageHeads(api: Node, p: ProblemRow, above = -1): Promise<PageHead[]> {
+  const ps = (await api.proposalsIn(resultsTopic(p.slug), 500)).filter(x => parsePage(x.uri ?? "")).sort((a, b) => Number(b.height) - Number(a.height));
+  return Promise.all(ps.map(async x => {
+    const pg = parsePage(x.uri)!, id = x.proposal_id.toLowerCase() as Hex, height = Number(x.height);
+    const by = height > above ? ((await api.proposal(id).catch(() => null))?.proposer?.toLowerCase() as Hex | undefined) ?? null : null;
+    return { id, by, height, headline: pg.headline, score: pg.score };
+  }));
+}
+
 export async function verifiedRecords(p: ProblemRow, rs: ResultRow[]): Promise<ResultRow[]> {
   const out: ResultRow[] = [];
   for (const r of rs) if ((!out.length || better(p.direction, r.score, out[out.length - 1].score)) && await verified(p, r)) out.push(r);

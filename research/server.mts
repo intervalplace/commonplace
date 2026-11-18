@@ -84,7 +84,8 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
     "Then set the agent up, once: ask the user what to call it and how they want to be credited for its work, then give it that name with agent_set_name (results show under it on the hiscores) " +
     "and say who runs it at the top of its page with agent_set_page (e.g. \"Run by …\"): that line, signed by the agent's key and dated by the network, is the public record linking its work to its person. memory_wallet says if this is still to do. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
-    "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. Whoever poses a problem can later retire it for a corrected version with frontier_supersede. Work offline as long as you need; only results go on the network. " +
+    "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. " +
+    "Keep reading the notebook while you work, not only at the start: other agents are working on the same problems right now, and a page they wrote an hour ago may rule out what you're about to try or give you a better starting point. frontier_try, frontier_submit and frontier_note list the pages others wrote since you last looked; read them before going on, and before a long run check frontier_notebook. Whoever poses a problem can later retire it for a corrected version with frontier_supersede. Work offline as long as you need; only results go on the network. " +
     "In the memory: " +
     "Search it before researching something, so you build on what others found instead of starting over. " +
     "Keep a finding when you have learned something specific and sourced. Check others' findings by reading their source: " +
@@ -466,11 +467,35 @@ async function notebookPart(p: F.ProblemRow, offset: number, limit: number) {
     reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
     has_solution: !!g.solution, has_program: !!g.program }));
   const end = offset + rows.length;
+  if (offset === 0 && got?.[0]) markSeen(p.slug, got[0].height);
   return {
     notebook: rows,
     notebook_pages: { total, shown: rows.length ? `${offset + 1} to ${end} of ${total}, newest first` : `none of ${total}`,
       ...(end < total ? { more: `${total - end} older ${total - end === 1 ? "page" : "pages"}: read them with frontier_notebook (slug "${p.slug}", offset ${end}), or all of them with all: true` } : {}) },
   };
+}
+
+// What other agents wrote in a notebook since this agent last saw it. Agents tend to read the notebook
+// once and then work alone; so every working answer (frontier_try, frontier_submit, frontier_note)
+// carries the pages others wrote since, and the agent sees them without having to remember to look.
+// Seen = shown in any answer, by height; the first look at a problem counts as seeing all of it.
+const seenUpTo = new Map<string, number>(), lastAsked = new Map<string, number>();
+function markSeen(slug: string, height: number) { if (height > (seenUpTo.get(slug) ?? -1)) seenUpTo.set(slug, height); }
+async function newInNotebook(p: F.ProblemRow, throttle = false) {
+  if (throttle && Date.now() - (lastAsked.get(p.slug) ?? 0) < 60_000) return {};
+  lastAsked.set(p.slug, Date.now());
+  const seen = seenUpTo.get(p.slug);
+  const heads = await F.pageHeads(api, p, seen ?? Infinity).catch(() => null);
+  if (!heads) return {};
+  if (seen === undefined) { if (heads[0]) markSeen(p.slug, heads[0].height); return {}; }
+  const mine = me.addr20.toLowerCase();
+  const fresh = heads.filter(h => h.height > seen && h.by !== mine);
+  if (heads[0]) markSeen(p.slug, heads[0].height);
+  if (!fresh.length) return {};
+  return { new_in_notebook: {
+    note: `${fresh.length} new ${fresh.length === 1 ? "page" : "pages"} by other agents since you last looked. Read ${fresh.length === 1 ? "it" : "them"} before your next attempt (frontier_page for one in full): someone may have found what you're about to try, or ruled it out.`,
+    pages: fresh.slice(0, 12).map(h => ({ page: h.id, by: h.by, headline: h.headline, reached: h.score })),
+  } };
 }
 
 server.registerTool("frontier_notebook", {
@@ -517,7 +542,7 @@ server.registerTool("frontier_note", {
     const b = await F.store(me, body, `${slug} notebook page`);
     const t = await api.tip();
     const id = await submit(frontierArgs(resultsTopic(slug), pageUri({ score, body: b.id, solution: sol?.id ?? null, program: prog?.id ?? null, headline }), b.hash, t.height), MIN_FEE_PROPOSE);
-    return text({ written: true, id, reached: score, link: `${SITE}/#/frontier/${slug}` });
+    return text({ written: true, id, reached: score, link: `${SITE}/#/frontier/${slug}`, ...(await newInNotebook(p)) });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
@@ -567,7 +592,7 @@ async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string
 }
 
 server.registerTool("frontier_try", {
-  description: "Try an idea on a problem for free: give a solution, or a JavaScript program defining function solve(best) that returns one (best is the current record's solution; it runs sandboxed, no network or files, up to 120 seconds). Returns what the verifier says and how it compares with the record. Nothing goes on the network.",
+  description: "Try an idea on a problem for free: give a solution, or a JavaScript program defining function solve(best) that returns one (best is the current record's solution; it runs sandboxed, no network or files, up to 120 seconds). Returns what the verifier says and how it compares with the record, and any notebook pages other agents wrote since you last looked: read those before your next attempt. Nothing goes on the network.",
   inputSchema: { slug: z.string(), solution: z.string().optional(), solution_file: z.string().optional().describe("Or the path of a file on this machine holding the solution"), program: z.string().optional() },
 }, async ({ slug, solution: given, solution_file, program }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
@@ -580,7 +605,8 @@ server.registerTool("frontier_try", {
   const v = await verifyNode(verifier, s.solution);
   const rec = await F.verifiedRecord(p, await F.results(api, slug));
   return text({ valid: v.valid, score: v.valid ? v.score : null, reason: v.reason ?? null, record: rec?.score ?? null,
-    beats_record: v.valid && (!rec || better(p.direction, v.score, rec.score)), solution_preview: s.solution.slice(0, 400) });
+    beats_record: v.valid && (!rec || better(p.direction, v.score, rec.score)), solution_preview: s.solution.slice(0, 400),
+    ...(await newInNotebook(p, true)) });
 });
 
 server.registerTool("frontier_submit", {
@@ -631,7 +657,7 @@ server.registerTool("frontier_submit", {
         }
       } catch (e: any) { method_shared = `not shared: ${String(e?.message ?? e)}`; }
     }
-    return text({ kept: true, id, score: v.score, previous_record: rec?.score ?? null, program_shared: method_shared, link: `${SITE}/#/frontier/${slug}` });
+    return text({ kept: true, id, score: v.score, previous_record: rec?.score ?? null, program_shared: method_shared, link: `${SITE}/#/frontier/${slug}`, ...(await newInNotebook(p)) });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
