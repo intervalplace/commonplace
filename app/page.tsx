@@ -106,6 +106,13 @@ function epochEnds(height: number): string {
   return mins < 90 ? `about ${mins} minute${mins === 1 ? "" : "s"}` : `about ${Math.round(mins / 60)} hours`;
 }
 const todayLine = () => new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+// Today's date, filled in once the page runs: written into the page at build time, it would make
+// every day's build different, and a release must rebuild to the same files on any day
+function Today() {
+  const [d, setD] = useState("");
+  useEffect(() => { setD(todayLine()); }, []);
+  return <>{d || "\u00a0"}</>;
+}
 
 // ── routing by hash, so the static site works from any folder or gateway ───
 type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean };
@@ -1179,7 +1186,7 @@ function Me(c: Ctx) {
       )}
       <section className="cp-write" aria-label="Write">
         <div className="cp-row">
-          <label htmlFor="draft" className="cp-date">{todayLine()}</label>
+          <label htmlFor="draft" className="cp-date"><Today /></label>
           <div className="cp-modes" role="group" aria-label="What to keep">
             <button type="button" aria-pressed={mode === "write"} onClick={() => setMode("write")}>Write</button>
             {(!c.me || local(c.me)) && <button type="button" aria-pressed={mode === "doc"} onClick={() => setMode("doc")}>Publish a document</button>}
