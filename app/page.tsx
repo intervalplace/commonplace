@@ -667,7 +667,6 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [Me | nu
         {/* the frontier is a place of its own, apart from the zoom from you to everyone */}
         <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "pose" ? "page" : undefined}>Frontier</a>
         <a className="cp-frontier-link wide" href="#/hiscores" aria-current={route.view === "hiscores" ? "page" : undefined}>Hiscores</a>
-        <a className="cp-frontier-link wide" href="#/names" aria-current={route.view === "name" ? "page" : undefined}>Names</a>
         <WalletButton keyState={keyState} balance={balance} />
       </div>
     </header>
