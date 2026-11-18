@@ -26,7 +26,7 @@ import { FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBou
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.23";
+const VERSION = "0.1.24";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
