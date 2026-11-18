@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { WorkPanel } from "./work-panel";
 import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, buildSplitTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
-import { BACKGROUNDS, DEFAULT_TOPIC, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
+import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
 import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, parsePageBody, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
@@ -498,6 +498,15 @@ export default function Page() {
     const tx = buildSendTx(await api.utxos(key.addr20), key, to, BigInt(Math.round(csd * 1e8)));
     return api.submit(tx);
   };
+  // a .csd name's profile, set by its holder (Cairn's nprofile record): it replaces the whole profile,
+  // so the caller passes every key to keep. Anchored in Cairn's own domain, like Cairn does it.
+  const setNameProfile = async (name: string, p: Record<string, string>) => {
+    if (!key) throw new Error("Sign in first.");
+    const core = await import("@inversealtruism/cairnx-core");
+    const b = core.nameProfile({ name, p });
+    const t = await api.tip();
+    return send({ kind: "propose" as const, domain: core.DOMAIN, payloadHash: hexToBytes(b.payloadHash), uri: b.uri, expiresEpoch: BigInt(Math.floor(t.height / EPOCH_LEN)) + KEEP_EPOCHS }, MIN_FEE_PROPOSE);
+  };
   const keepStyle = async (st: PageStyle) => {
     if (!key) throw new Error("Sign in first.");
     const t = await api.tip();
@@ -539,7 +548,7 @@ export default function Page() {
   };
 
   const switchNode = (n: string) => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); };
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -637,6 +646,7 @@ type Ctx = {
   postBounty: (slug: string, b: Bounty) => Promise<Hex>;
   payBounty: (to: Hex, csd: number) => Promise<Hex>;
   remembered: Set<string> | null; rememberPerson: (who: Hex, yes: boolean) => Promise<void>;
+  setNameProfile: (name: string, p: Record<string, string>) => Promise<Hex>;
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
@@ -1652,6 +1662,7 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
           {res.serverDisagrees && <p className="cp-check bad" style={{ margin: 0 }}>Cairn&apos;s server says this name points somewhere else. What&apos;s shown here is what its proven records say.</p>}
         </section>
       )}
+      {res && res.state === "held" && res.checked && res.owner?.toLowerCase() === c.me?.addr20.toLowerCase() && <NameSiteForm c={c} name={res.name} profile={res.profile} />}
       {res && res.state !== "held" && <p style={{ margin: 0 }}>{res.state === "pending" ? <>Someone is registering <strong>{name}.csd</strong> right now.</> : <>Nobody holds <strong>{name}.csd</strong>{res.state === "lapsed" ? " now; its lease lapsed" : ""}.</>} Names are registered on <a href={onCairn} target="_blank" rel="noreferrer noopener">Cairn</a>.</p>}
       <section className="cp-name-card">
         <span className="cp-h2">Links that open names</span>
@@ -1668,6 +1679,49 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
         <p className="cp-hint" style={{ margin: 0 }}>A name points to a site through its profile on Cairn: <span className="cp-mono">contenthash</span> as <span className="cp-mono">ipfs://…</span> for a site on IPFS, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
       </section>
     </main>
+  );
+}
+
+// For a name's holder: where it points. Cairn's profile record replaces the whole profile, so every
+// other key the name has is sent along unchanged.
+function NameSiteForm({ c, name, profile }: { c: Ctx; name: string; profile: Record<string, string> }) {
+  const [site, setSite] = useState(profile["contenthash"] ?? "");
+  const [url, setUrl] = useState(profile["url"] ?? "");
+  const [state, setState] = useState<null | "sending" | { sent: Hex } | { err: string }>(null);
+  const cid = /^(?:ipfs:\/\/)?(b[a-z2-7]{50,100})\/?$/.exec(site.trim())?.[1];
+  const siteOk = !site.trim() || !!cid;
+  const urlOk = !url.trim() || /^https:\/\/\S+$/.test(url.trim());
+  const next: Record<string, string> = { ...profile };
+  delete next["contenthash"]; delete next["url"];
+  if (cid) next["contenthash"] = `ipfs://${cid}`;
+  if (url.trim()) next["url"] = url.trim();
+  const same = JSON.stringify(Object.entries(next).sort()) === JSON.stringify(Object.entries(profile).sort());
+  const others = Object.keys(next).filter(k => k !== "contenthash" && k !== "url");
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setState("sending");
+    try { setState({ sent: await c.setNameProfile(name, next) }); } catch (x) { setState({ err: nice(x) }); }
+  };
+  return (
+    <form className="cp-name-card" onSubmit={save}>
+      <span className="cp-h2">Where {name}.csd points</span>
+      <p className="cp-hint" style={{ margin: 0 }}>You hold this name, so you decide. A site on IPFS opens first, then a link; with neither, it opens your page here.</p>
+      <label className="cp-hint" style={{ display: "grid", gap: 4 }}>A site on IPFS (its address, bafy…)
+        <input className="cp-node-input" value={site} onChange={e => setSite(e.target.value)} placeholder="ipfs://bafy…" spellCheck={false} />
+      </label>
+      {!siteOk && <span className="err">That isn&apos;t an IPFS address (CIDv1, starting with b).</span>}
+      <label className="cp-hint" style={{ display: "grid", gap: 4 }}>A link
+        <input className="cp-node-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…" spellCheck={false} />
+      </label>
+      {!urlOk && <span className="err">A link starts with https://</span>}
+      {others.length > 0 && <p className="cp-hint" style={{ margin: 0 }}>Its other profile fields stay as they are: {others.join(", ")}.</p>}
+      <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12 }}>
+        <button className="cp-btn" disabled={!siteOk || !urlOk || same || state === "sending"}>{state === "sending" ? "Sending…" : "Save"}</button>
+        <span className="cp-hint">A record on the network, signed by you. Costs {csd(MIN_FEE_PROPOSE)} CSD.</span>
+      </div>
+      {state && typeof state === "object" && "sent" in state && <p className="cp-hint" style={{ margin: 0 }}>Sent. It takes effect once it&apos;s in a block, in a few minutes; look the name up again then.</p>}
+      {state && typeof state === "object" && "err" in state && <p className="err" style={{ margin: 0 }}>{state.err}</p>}
+    </form>
   );
 }
 
