@@ -25,7 +25,11 @@ export const cut = (x: unknown, n: number) => { const t = String(x ?? ""); retur
 // The request for one program. `small`: a model with a small context window, for which the quoted
 // files are trimmed harder: true for a local server's model (a third), or a factor (a model running
 // in the browser gets a fifth)
-export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean | number = false): string {
+// `seconds`: how long a program may run (60 in a browser; more where the solver runs on your own
+// machine and was told it may)
+export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean | number = false, seconds = 60): string {
+  const secs = Math.max(10, Math.round(seconds)), stopAt = Math.round(secs * 2 / 3);
+  const span = (n: number) => (n >= 120 ? `${Math.round(n / 60)} minutes` : `${n} seconds`);
   const k = small === true ? 1 / 3 : small === false ? 1 : small;
   const room = (n: number) => Math.round(n * k);
   const best = p.record?.solution ?? "";
@@ -52,15 +56,15 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean
     (tried.length ? `Your own attempts so far, oldest first (don't repeat them): ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
     // the smallest models can write a code block, but not prose and then a code block: code only
     (k < 0.15 ? `\nWrite a JavaScript function solve(best) that returns a solution string in the problem's format, aiming to beat the record. ` +
-      `It runs in a sandbox for at most 60 seconds, with no network: plain JavaScript only, no require or import, and stop after about 40 seconds (check Date.now()). Reply with only a \`\`\`js code block, no explanation, ` +
+      `It runs in a sandbox for at most ${span(secs)}, with no network: plain JavaScript only, no require or import, and stop after about ${span(stopAt)} (check Date.now()). Reply with only a \`\`\`js code block, no explanation, ` +
       `and make its first line a // comment saying your idea in a few words. Start from the record (\`best\`), change it, and return the changed copy, like this:\n` +
       `\`\`\`js\n// nudge each value a little\nfunction solve(best) {\n  let s = best;\n  // change s here, keeping the format\n  return s;\n}\n\`\`\`` : "") +
     (k < 0.15 ? "" : `\nWrite a JavaScript program defining function solve(best) that returns a solution string in the problem's format, ` +
-    `aiming to beat the record. It runs in a sandbox with no network or files for at most 60 seconds, so it may search or optimise ` +
+    `aiming to beat the record. It runs in a sandbox with no network or files for at most ${span(secs)}, so it may search or optimise ` +
     `(use a seeded random generator, not Math.random, so results are repeatable). Build on what has worked. ` +
     // what every model got wrong until told
     `Rules of the sandbox: plain JavaScript only, no require, import or libraries, so write any optimiser you need yourself. ` +
-    `It is stopped at 60 seconds and then counts as failed, so watch the clock: check Date.now() and stop searching after about 40 seconds, returning the best found. ` +
+    `It is stopped at ${span(secs)} and then counts as failed, so watch the clock: check Date.now() and stop searching after about ${span(stopAt)}, returning the best found. ` +
     `Before returning, make sure the solution meets every constraint the verifier checks exactly (rescale or round at the end if needed: floating-point drift fails it). ` +
     `Answer with one line "IDEA: <the idea in under 150 characters>", then, if your program should start from a notebook page's attached solution instead of the record, a line "START: <page id>", then the program in a \`\`\`js block.` +
     // small models follow an example far better than a description

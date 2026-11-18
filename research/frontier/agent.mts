@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runSandboxed, verifyNode } from "../../src/run-node";
 import { better } from "../../src/frontier";
-import { programPrompt, parseProgram, pagePrompt, parsePageDraft, fallbackPage, listModels, askOpenAI as askServer } from "../../src/solver";
+import { programPrompt, parseProgram, pagePrompt, parsePageDraft, fallbackPage, listModels, localContext, askOpenAI as askServer } from "../../src/solver";
 
 const ROLE = process.env.ROLE ?? "solver";
 // `npx commonplace-agent solve` runs this from the bundle, where the server is the bundle itself
@@ -36,6 +36,10 @@ const FOREVER = process.env.FOREVER === "1";
 // at most one notebook page per problem this often (PAGE_HOURS=0: a page after every round, as before)
 const PAGE_EVERY = Number(process.env.PAGE_HOURS ?? 2) * 3600_000;
 const ATTEMPTS = Number(process.env.ATTEMPTS ?? 4);
+// how long each program may run on this machine (RUN_MINUTES=10, say: a search can go far further
+// than in a browser's minute), and how much memory it may use
+const RUN_MS = Math.max(10_000, Number(process.env.RUN_MINUTES ?? 1) * 60_000);
+const RUN_MEMORY_MB = Number(process.env.RUN_MEMORY_MB ?? (RUN_MS > 60_000 ? 4096 : 512));
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5-5";
 const DRY = !!process.env.DRY;
 const STATE = process.env.STATE ?? (BUNDLED ? join(HOME, `${ROLE}.json`) : `./frontier-${ROLE}.json`);
@@ -98,6 +102,7 @@ async function askAnthropic(prompt: string): Promise<string> {
 const askOpenAI = (prompt: string) => askServer({ base: LLM_BASE!, model: LLM_MODEL, prompt, apiKey: process.env.LLM_API_KEY, maxTokens: Number(process.env.LLM_MAX_TOKENS ?? (/localhost|127\.0\.0\.1/.test(LLM_BASE ?? "") ? 32000 : 8000)) });
 
 // a program from the model: ```js function solve(best) { … } ``` plus a line saying the idea
+let bigLocal: boolean | null = null;
 async function program(p: any, tried: { idea: string; result: string }[]): Promise<{ code: string; idea: string; start?: string } | null> {
   if (DRY) {
     const progs = readFileSync(join(here, "dry", `${p.slug}.js`), "utf8").split(/^\/\/ ---.*$/m).map(s => s.trim()).filter(Boolean);
@@ -107,7 +112,9 @@ async function program(p: any, tried: { idea: string; result: string }[]): Promi
     return { code: progs[n], idea: /\/\/ idea: (.*)/.exec(progs[n])?.[1] ?? "a test program" };
   }
   // local models have small context windows: the quoted files are trimmed harder for them
-  return parseProgram(await ask(programPrompt(p, tried, !!LLM_BASE)));
+  // a local model with a large context window (LM Studio says how large) gets the full prompt
+  if (LLM_BASE && bigLocal === null) bigLocal = ((await localContext(LLM_BASE, LLM_MODEL)) ?? 0) >= 65536;
+  return parseProgram(await ask(programPrompt(p, tried, !!LLM_BASE && !bigLocal, RUN_MS / 1000)));
 }
 // The server gives large files as a download link: fetch them whole
 async function whole(x: any): Promise<string | null> {
@@ -172,14 +179,18 @@ async function solveOnce() {
     if (typeof p.verifier !== "string") { log("couldn't download the verifier of", p.slug); return; }
     log("working on", p.slug, "record", p.record?.score ?? "none");
     let best: { solution: string; score: number; idea: string; code: string } | null = null;
-    const tried: { idea: string; result: string }[] = [];
+    // its own earlier attempts at this problem (kept between runs), so it doesn't circle back to them;
+    // and what other agents wrote in the notebook meanwhile comes with frontier_problem itself
+    const earlier = (state.buffer?.[p.slug] ?? []).slice(-24);
+    const tried: { idea: string; result: string }[] = [...earlier];
     for (let i = 0; i < ATTEMPTS; i++) {
       const prog = await program(p, tried).catch(e => { log("model failed", String(e)); return null; });
       if (!prog) break;
       // from the record, or from a notebook page's near-miss if the model chose one
       let from = p.record?.solution ?? "";
       if (prog.start) { const g = await tool("frontier_page", { page: prog.start }).catch(() => null); const gs = await whole(g?.solution); if (gs) { from = gs; log("starting from notebook page", prog.start); } }
-      const out = await runSandboxed(prog.code, "solve", from, 60_000);
+      if (RUN_MS > 60_000) log(`running it (up to ${Math.round(RUN_MS / 60_000)} minutes)`);
+      const out = await runSandboxed(prog.code, "solve", from, RUN_MS, RUN_MEMORY_MB);
       if (!out.ok || typeof out.out !== "string") { tried.push({ idea: prog.idea, result: `failed: ${out.error ?? "didn't return a string"}` }); log("program failed", out.error); continue; }
       const v = await verifyNode(p.verifier, out.out);
       tried.push({ idea: prog.idea, result: v.valid ? `valid, score ${v.score}` : `invalid: ${v.reason}` });
@@ -204,7 +215,7 @@ async function solveOnce() {
     // written up at most every PAGE_EVERY, so an agent running all day writes a few good pages, not
     // a page every few minutes
     if (!kept && process.env.NOTEBOOK !== "0" && tried.length) {
-      const buf = [...(state.buffer?.[p.slug] ?? []), ...tried].slice(-30);
+      const buf = [...(state.buffer?.[p.slug] ?? []), ...tried.slice(earlier.length)].slice(-30);
       const due = Date.now() - (state.pageAt?.[p.slug] ?? 0) >= PAGE_EVERY && buf.length >= 4;
       state.buffer = { ...state.buffer, [p.slug]: buf };
       if (due) {
