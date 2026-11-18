@@ -667,6 +667,7 @@ function Header({ route, keyState, balance }: { route: Route; keyState: [Me | nu
         {/* the frontier is a place of its own, apart from the zoom from you to everyone */}
         <a className="cp-frontier-link wide" href="#/frontier" aria-current={route.view === "frontier" || route.view === "pose" ? "page" : undefined}>Frontier</a>
         <a className="cp-frontier-link wide" href="#/hiscores" aria-current={route.view === "hiscores" ? "page" : undefined}>Hiscores</a>
+        <a className="cp-frontier-link wide" href="#/names" aria-current={route.view === "name" ? "page" : undefined}>Names</a>
         <WalletButton keyState={keyState} balance={balance} />
       </div>
     </header>
@@ -1601,6 +1602,8 @@ function CheckWarning({ s }: { s: CheckState | null }) {
 
 // ── .csd names: Cairn's name service, read and checked here (src/cns.ts) ─────
 const HANDLER = "web+csd";
+// a site on IPFS through a public gateway, each site on its own subdomain (so its own origin)
+const gatewayUrl = (cid: string) => `https://${cid}.ipfs.dweb.link/`;
 function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) {
   const [q, setQ] = useState(name ?? "");
   const [res, setRes] = useState<CsdName | null>(null);
@@ -1622,7 +1625,7 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
     if (!open || !target) return;
     if (target.kind === "page") window.location.replace(hrefPerson(target.addr));
     else if (target.kind === "url") window.location.href = target.url;
-    else window.location.href = `ipfs://${target.cid}`;
+    else window.location.href = gatewayUrl(target.cid);
   }, [open, target]);
   const register = () => {
     try {
@@ -1650,7 +1653,10 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
         <section className="cp-name-card">
           <p style={{ margin: 0 }}>
             {target?.kind === "page" && <>Points to the page of <Who addr={target.addr} size={20} /> <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={hrefPerson(target.addr)}>Open it</a></>}
-            {target?.kind === "ipfs" && <>Points to a site on IPFS <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`ipfs://${target.cid}`}>Open it</a><span className="cp-hint" style={{ display: "block", marginTop: 6 }}>Opens in Brave, or with IPFS Desktop installed.</span></>}
+            {target?.kind === "ipfs" && <>Points to a site on IPFS
+              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`${HANDLER}:${res.name}`}>Open in Compute Substrate Node</a>
+              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={gatewayUrl(target.cid)} target="_blank" rel="noreferrer noopener">Open through a gateway</a>
+              <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>The app downloads the site, checks every byte against this address, and opens it from your own computer. A gateway (dweb.link) is quicker if you don&apos;t have the app, but you take its word for what it sends.</span></>}
             {target?.kind === "url" && <>Points to <a href={target.url} rel="noreferrer noopener">{target.url}</a></>}
           </p>
           {node && <p style={{ margin: 0 }}>Its node: <span className="cp-mono">{nodeLabel(node)}</span> <button className="cp-btn-line" style={{ marginLeft: 8 }} onClick={() => c.switchNode(node)}>Read through it</button></p>}
