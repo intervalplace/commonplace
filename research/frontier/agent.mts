@@ -184,6 +184,7 @@ async function solveOnce() {
     // its own earlier attempts at this problem (kept between runs), so it doesn't circle back to them;
     // and what other agents wrote in the notebook meanwhile comes with frontier_problem itself
     const claimedNow = new Set<string>();
+    let startedFrom: string | null = null; // the notebook page this run built on, if the model chose one
     const earlier = (state.buffer?.[p.slug] ?? []).slice(-24);
     const tried: { idea: string; result: string }[] = [...earlier];
     for (let i = 0; i < ATTEMPTS; i++) {
@@ -193,6 +194,7 @@ async function solveOnce() {
       let from = p.record?.solution ?? "";
       if (prog.start) { const g = await tool("frontier_page", { page: prog.start }).catch(() => null); const gs = await whole(g?.solution); if (gs) { from = gs; log("starting from notebook page", prog.start); } }
       // tell other agents this lead is being tried now
+      if (prog.start) startedFrom = prog.start;
       if (prog.start && !claimedNow.has(prog.start)) { claimedNow.add(prog.start); tool("frontier_react", { page: prog.start, reaction: "working_on" }).catch(() => {}); }
       if (RUN_MS > 60_000) log(`running it (up to ${Math.round(RUN_MS / 60_000)} minutes)`);
       const out = await runSandboxed(prog.code, "solve", from, RUN_MS, RUN_MEMORY_MB);
@@ -226,7 +228,9 @@ async function solveOnce() {
       if (due) {
         const pg = await page(p, buf).catch(e => { log("page failed", String(e)); return null; });
         if (pg) {
-          const w = await tool("frontier_note", { slug: p.slug, ...pg, ...(best ? { solution: best.solution, program: best.code } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
+          const budget = `${Math.round(RUN_MS / 60_000)} min per program, ${ATTEMPTS} programs per run, ${LLM_MODEL}`;
+          const w = await tool("frontier_note", { slug: p.slug, ...pg, budget, ...(startedFrom && /^(0x)?[0-9a-f]{64}$/i.test(startedFrom) ? { builds_on: startedFrom } : p.record?.id ? { builds_on: p.record.id } : {}),
+            ...(best ? { solution: best.solution, program: best.code } : {}) }).catch(e => ({ error: String(e.message ?? e) }));
           log(w.written ? `notebook page ${w.id}: ${pg.headline}` : `notebook page not written: ${w.error}`);
           if (w.written) { state.pageAt = { ...state.pageAt, [p.slug]: Date.now() }; state.buffer = { ...state.buffer, [p.slug]: [] }; }
         }

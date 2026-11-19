@@ -376,3 +376,5 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-name-card { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; border: 1px solid var(--rule); border-radius: 14px; background: var(--card); }
 .cp-csdname { align-self: flex-start; font-size: 14px; color: var(--ink); text-decoration: none; display: inline-flex; gap: 4px; align-items: baseline; }
 .cp-csdname:hover { text-decoration: underline; }
+.cp-page.digest { border-color: var(--accent); }
+.cp-page .cp-meta .over { color: #a24a3a; }

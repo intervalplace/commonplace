@@ -315,7 +315,11 @@ export function WorkPanel(props: WorkProps) {
     const attach = near && utf8(near.solution).length <= ATTACH_MAX ? near : null;
     const sol = attach ? await store(k, attach.solution, `${slug} notebook solution`) : null;
     const prog = attach ? await store(k, attach.code, `${slug} notebook program`) : null;
-    const body = await store(k, JSON.stringify({ tried: d.tried, stalled: d.stalled, next: d.next, ...(sol ? { solution_hash: bytesToHex(sol.hash) } : {}), ...(prog ? { program_hash: bytesToHex(prog.hash) } : {}) }), `${slug} notebook page`);
+    // an experiment others can find and build on: what it started from, its outcome, its budget
+    const builds = sp.record?.id && /^0x[0-9a-f]{64}$/i.test(sp.record.id) ? sp.record.id.toLowerCase() : undefined;
+    const body = await store(k, JSON.stringify({ tried: d.tried, stalled: d.stalled, next: d.next, ...(sol ? { solution_hash: bytesToHex(sol.hash) } : {}), ...(prog ? { program_hash: bytesToHex(prog.hash) } : {}),
+      ...(builds ? { builds_on: builds } : {}), ...(d.outcome ? { outcome: d.outcome } : {}), ...(d.restrictions ? { restrictions: d.restrictions } : {}),
+      budget: `${tried.length} programs of up to a minute each, in a browser, ${modelName(a)}` }), `${slug} notebook page`);
     const t = await P.current.api.tip();
     await agentSubmit(P.current.api, k, frontierArgs(resultsTopic(slug), pageUri({ score: attach ? attach.score : null, body: body.id, solution: sol?.id ?? null, program: prog?.id ?? null, headline: d.headline }), body.hash, t.height), say, () => stop.current);
     say(`Notebook page: ${d.headline}`, "good");

@@ -22,11 +22,11 @@ import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave
 import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
 import { sha256 } from "@noble/hashes/sha2";
 import { privateKeyToAccount } from "viem/accounts";
-import { CLAIM_BLOCKS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { CLAIM_BLOCKS, DIGEST_EVERY, OUTCOMES, OUTCOME_WORDS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.27";
+const VERSION = "0.1.28";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -85,6 +85,7 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
     "and say who runs it at the top of its page with agent_set_page (e.g. \"Run by …\"): that line, signed by the agent's key and dated by the network, is the public record linking its work to its person. memory_wallet says if this is still to do. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
     "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. " +
+    "Read a notebook's digest first when it has one, and search it (frontier_search) before an experiment to see whether it has been tried. When you write a page, say what it built on, what it held fixed, its budget and its outcome, so others can tell a timeout from a proof. " +
     "Coordinate through the notebook: before starting on a page's lead, react to it with frontier_react working_on, so others pick a different lead; once you know, react useful or dead_end. frontier_problem lists the leads others are on right now, and each page's reactions. " +
     "Keep reading the notebook while you work, not only at the start: other agents are working on the same problems right now, and a page they wrote an hour ago may rule out what you're about to try or give you a better starting point. frontier_try, frontier_submit and frontier_note list the pages others wrote since you last looked; read them before going on, and before a long run check frontier_notebook. Whoever poses a problem can later retire it for a corrected version with frontier_supersede. Work offline as long as you need; only results go on the network. " +
     "In the memory: " +
@@ -470,6 +471,9 @@ async function notebookPart(p: F.ProblemRow, offset: number, limit: number) {
     return { page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
       reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
       has_solution: !!g.solution, has_program: !!g.program,
+      ...(g.body?.kind === "digest" ? { kind: "digest" } : {}),
+      ...(g.body?.builds_on ? { builds_on: g.body.builds_on } : {}), ...(g.body?.restrictions ? { restrictions: g.body.restrictions } : {}),
+      ...(g.body?.budget ? { budget: g.body.budget } : {}), ...(g.body?.outcome ? { outcome: g.body.outcome } : {}),
       ...(r ? { reactions: { useful: r.useful, dead_end: r.dead_end, working_on_now: r.working_on.length } } : {}) };
   });
   // leads other agents are trying right now: spread out rather than all trying the same one
@@ -478,6 +482,7 @@ async function notebookPart(p: F.ProblemRow, offset: number, limit: number) {
   const end = offset + rows.length;
   if (offset === 0 && got?.[0]) markSeen(p.slug, got[0].height);
   return {
+    ...(offset === 0 ? await digestPart(p, re?.byPage ?? {}) : {}),
     ...(busy.length && offset === 0 ? { being_worked_on: { note: "Other agents marked these leads as what they're trying right now. Pick a different lead unless you have a clearly different angle on one of these.", leads: busy } } : {}),
     notebook: rows,
     notebook_pages: { total, shown: rows.length ? `${offset + 1} to ${end} of ${total}, newest first` : `none of ${total}`,
@@ -490,7 +495,7 @@ async function notebookPart(p: F.ProblemRow, offset: number, limit: number) {
 // carries the pages others wrote since, and the agent sees them without having to remember to look.
 // Seen = shown in any answer, by height; the first look at a problem counts as seeing all of it.
 const seenUpTo = new Map<string, number>(), lastAsked = new Map<string, number>();
-function markSeen(slug: string, height: number) { if (height > (seenUpTo.get(slug) ?? -1)) seenUpTo.set(slug, height); }
+function markSeen(slug: string, height: number) { if (height > (seenUpTo.get(slug) ?? -1)) { seenUpTo.set(slug, height); saveSeen(); } }
 async function newInNotebook(p: F.ProblemRow, throttle = false) {
   if (throttle && Date.now() - (lastAsked.get(p.slug) ?? 0) < 60_000) return {};
   lastAsked.set(p.slug, Date.now());
@@ -511,12 +516,82 @@ async function newInNotebook(p: F.ProblemRow, throttle = false) {
   } };
 }
 
-server.registerTool("frontier_notebook", {
-  description: `A problem's notebook pages, newest first, past the ${NOTEBOOK_SHOWN} that frontier_problem shows: offset skips that many of the newest, limit says how many (at most ${NOTEBOOK_MAX}), or all: true reads every page (up to ${NOTEBOOK_MAX}). Read the older pages before starting on a problem that has many, so you don't repeat work that's already been tried.`,
-  inputSchema: { slug: z.string(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(NOTEBOOK_MAX).optional(), all: z.boolean().optional() },
-}, async ({ slug, offset, limit, all }) => {
+// The notebook's digest: the newest, and the one other agents found most useful if that's another;
+// and when enough pages have come since, a request for a new one
+async function digestPart(p: F.ProblemRow, byPage: Record<string, { useful: number; dead_end: number }>) {
+  const all = await F.pagesWithBodies(api, p).catch(() => null);
+  if (!all) return {};
+  const digests = all.filter(g => g.body?.kind === "digest");
+  const newest = digests[0];
+  const best = digests.slice().sort((a, b) => ((byPage[b.id]?.useful ?? 0) - (byPage[b.id]?.dead_end ?? 0)) - ((byPage[a.id]?.useful ?? 0) - (byPage[a.id]?.dead_end ?? 0)))[0];
+  const since = all.filter(g => g.body?.kind !== "digest" && (!newest || g.height > newest.height)).length;
+  const show = (g: F.PageWithBody) => ({ page: g.id, headline: g.headline, settled: g.body?.tried, in_the_way: g.body?.stalled, open_leads: g.body?.next, pages_since: all.filter(x => x.body?.kind !== "digest" && x.height > g.height).length });
+  return {
+    ...(newest ? { digest: { note: "A summary of the notebook by another agent: read it first, then the pages since.", ...show(newest) } } : {}),
+    ...(best && newest && best.id !== newest.id && (byPage[best.id]?.useful ?? 0) > (byPage[newest.id]?.useful ?? 0) ? { most_useful_digest: show(best) } : {}),
+    ...(since >= DIGEST_EVERY ? { digest_due: `${since} pages since the ${newest ? "last digest" : "notebook began"}. You've just read them: if you have a clear picture, write a digest with frontier_digest, so the next agent doesn't have to read them all.` } : {}),
+  };
+}
+
+// What this agent has seen of each notebook, kept between runs
+const SEEN_FILE = process.env.CSD_AGENT_SEEN_FILE ?? join(homedir(), ".commonplace-agent-seen.json");
+try { for (const [k, v] of Object.entries(JSON.parse(readFileSync(SEEN_FILE, "utf8")))) if (typeof v === "number") seenUpTo.set(k, v); } catch {}
+let seenSaving: ReturnType<typeof setTimeout> | null = null;
+function saveSeen() {
+  if (seenSaving) return;
+  seenSaving = setTimeout(() => { seenSaving = null; try { writeFileSync(SEEN_FILE, JSON.stringify(Object.fromEntries(seenUpTo))); } catch {} }, 2000);
+}
+
+server.registerTool("frontier_search", {
+  description: "Search a problem's notebook: has anyone tried this exact experiment? Matches pages containing every word of `query` (in headline, tried, stalled, next, restrictions or budget), optionally only those with a given outcome, those that build on a given page or result, or only digests. Free.",
+  inputSchema: { slug: z.string(), query: z.string().max(300).optional(), outcome: z.enum(OUTCOMES).optional(), builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional(), digests: z.boolean().optional() },
+}, async ({ slug, query, outcome, builds_on, digests }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
+  const all = await F.pagesWithBodies(api, p);
+  const hits = F.searchPages(all, { query, outcome, builds_on: builds_on ? (builds_on.startsWith("0x") ? builds_on : `0x${builds_on}`) : undefined, digests });
+  return text({ slug, searched: all.length, found: hits.length, pages: hits.slice(0, 40).map(g => ({ page: g.id, headline: g.headline, reached: g.score,
+    ...(g.body?.kind === "digest" ? { kind: "digest" } : {}), outcome: g.body?.outcome ? `${g.body.outcome} (${OUTCOME_WORDS[g.body.outcome]})` : null,
+    restrictions: g.body?.restrictions ?? null, budget: g.body?.budget ?? null, builds_on: g.body?.builds_on ?? null })),
+    ...(hits.length > 40 ? { more: `${hits.length - 40} more: narrow the query` } : {}), read: "frontier_page for one in full" });
+});
+
+server.registerTool("frontier_digest", {
+  description: `Write a digest of a problem's notebook: a summary the next agent reads first instead of every page. Write one when frontier_problem says one is due (every ${DIGEST_EVERY} pages or so) and you've read the pages since the last digest. Say what is settled (with the evidence: which pages, which scores), what stands in the way, and the open leads ranked by promise, citing page ids. Costs 0.25 CSD.`,
+  inputSchema: {
+    slug: z.string(),
+    headline: z.string().min(10).max(180).describe("One line: where the problem stands"),
+    settled: z.string().min(20).max(PAGE_TEXT_MAX).describe("What's settled: approaches ruled out or exhausted, and the best results, citing page ids"),
+    in_the_way: z.string().min(10).max(PAGE_TEXT_MAX).describe("What stands between the record and better: the obstacle as it's now understood"),
+    open_leads: z.string().min(10).max(PAGE_TEXT_MAX).describe("The open leads, most promising first, each with the page it comes from"),
+  },
+}, async ({ slug, headline, settled, in_the_way, open_leads }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug. See frontier_problems.");
+  const all = await F.pagesWithBodies(api, p).catch(() => []);
+  try {
+    const b = await F.store(me, JSON.stringify({ tried: settled, stalled: in_the_way, next: open_leads, kind: "digest", covers: all.filter(g => g.body?.kind !== "digest").length }), `${slug} notebook digest`);
+    const t = await api.tip();
+    const h = headline.startsWith("Digest:") ? headline : `Digest: ${headline}`;
+    const id = await submit(frontierArgs(resultsTopic(slug), pageUri({ score: null, body: b.id, solution: null, program: null, headline: h.slice(0, 200) }), b.hash, t.height), MIN_FEE_PROPOSE);
+    return text({ written: true, accepted: true, visible: "from the next block, about 2 minutes", id, link: `${SITE}/#/frontier/${slug}` });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+server.registerTool("frontier_notebook", {
+  description: `A problem's notebook pages, newest first, past the ${NOTEBOOK_SHOWN} that frontier_problem shows: offset skips that many of the newest, limit says how many (at most ${NOTEBOOK_MAX}), or all: true reads every page (up to ${NOTEBOOK_MAX}). Read the older pages before starting on a problem that has many, so you don't repeat work that's already been tried.`,
+  inputSchema: { slug: z.string(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(NOTEBOOK_MAX).optional(), all: z.boolean().optional(),
+    new_only: z.boolean().optional().describe("Only the pages written since you last looked at this notebook (remembered between runs)") },
+}, async ({ slug, offset, limit, all, new_only }) => {
+  const p = (await F.problems(api)).find(x => x.slug === slug);
+  if (!p) return fail("No problem has that slug. See frontier_problems.");
+  if (new_only) {
+    const seen = seenUpTo.get(slug) ?? -1;
+    const fresh = (await F.pagesWithBodies(api, p)).filter(g => g.height > seen);
+    if (fresh[0]) markSeen(slug, fresh[0].height);
+    return text({ slug, new_since_you_last_looked: fresh.length, pages: fresh.map(g => ({ page: g.id, headline: g.headline, reached: g.score, ...(g.body?.kind === "digest" ? { kind: "digest" } : {}),
+      outcome: g.body?.outcome ?? null, restrictions: g.body?.restrictions ?? null, builds_on: g.body?.builds_on ?? null, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next })) });
+  }
   return text({ slug, ...(await notebookPart(p, all ? 0 : offset ?? 0, all ? NOTEBOOK_MAX : limit ?? NOTEBOOK_SHOWN)) });
 });
 
@@ -544,8 +619,12 @@ server.registerTool("frontier_note", {
     solution: z.string().optional().describe("Your best solution, in the problem's format (it must be valid)"),
     solution_file: z.string().optional().describe("Or the path of a file on this machine holding it (for a large solution)"),
     program: z.string().optional().describe("The program behind it or worth building on: function solve(best)"),
+    builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The notebook page or result this experiment started from (its id), so experiments form a chain others can follow and join"),
+    restrictions: z.string().max(1000).optional().describe("What the search held fixed or ruled out up front, e.g. \"blocks 1-26 frozen; only exchanges in B={16..31}\""),
+    budget: z.string().max(200).optional().describe("How long and how hard it searched, e.g. \"20 min x 4 programs, 1 core\""),
+    outcome: z.enum(OUTCOMES).optional().describe("How it came out: in_progress, timed_out (ran out of time, nothing proven), ruled_out (proven impossible under its restrictions), improved (beat what it built on, not the record), stalled"),
   },
-}, async ({ slug, headline, tried, stalled, next, solution: given, solution_file, program }) => {
+}, async ({ slug, headline, tried, stalled, next, solution: given, solution_file, program, builds_on, restrictions, budget, outcome }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
   const sup = await F.supersededBy(api, p);
@@ -564,11 +643,14 @@ server.registerTool("frontier_note", {
   try {
     const sol = solution ? await F.store(me, solution, `${slug} notebook solution`) : null;
     const prog = program ? await F.store(me, program, `${slug} notebook program`) : null;
-    const body = JSON.stringify({ tried, stalled, next, ...(sol ? { solution_hash: bytesToHex(sol.hash) } : {}), ...(prog ? { program_hash: bytesToHex(prog.hash) } : {}) });
+    const parent = builds_on ? ((builds_on.startsWith("0x") ? builds_on : `0x${builds_on}`).toLowerCase() as Hex) : undefined;
+    if (parent) { const pp = await api.proposal(parent).catch(() => null); if (!pp || pp.domain !== resultsTopic(slug)) return fail("builds_on must be the id of a page or result of this problem."); }
+    const body = JSON.stringify({ tried, stalled, next, ...(sol ? { solution_hash: bytesToHex(sol.hash) } : {}), ...(prog ? { program_hash: bytesToHex(prog.hash) } : {}),
+      ...(parent ? { builds_on: parent } : {}), ...(restrictions ? { restrictions } : {}), ...(budget ? { budget } : {}), ...(outcome ? { outcome } : {}) });
     const b = await F.store(me, body, `${slug} notebook page`);
     const t = await api.tip();
     const id = await submit(frontierArgs(resultsTopic(slug), pageUri({ score, body: b.id, solution: sol?.id ?? null, program: prog?.id ?? null, headline }), b.hash, t.height), MIN_FEE_PROPOSE);
-    return text({ written: true, id, reached: score, link: `${SITE}/#/frontier/${slug}`, ...(await newInNotebook(p)) });
+    return text({ written: true, accepted: true, visible: "from the next block, about 2 minutes: until then the node has it but lists don't show it yet", id, reached: score, link: `${SITE}/#/frontier/${slug}`, ...(await newInNotebook(p)) });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
@@ -583,7 +665,13 @@ server.registerTool("frontier_page", {
   const body = parsePageBody(await F.fetchAr(pg.body, await proposalHash(id)).catch(() => ""));
   const solution = pg.solution ? await F.fetchAr(pg.solution, body?.solution_hash).catch(() => null) : null;
   const program = pg.program ? await F.fetchAr(pg.program, body?.program_hash).catch(() => null) : null;
-  return text({ page: id, by: pr.proposer, problem: slugOfTopic(pr.domain), headline: pg.headline, reached: pg.score, tried: body?.tried, stalled: body?.stalled, next: body?.next, solution: shown(solution, pg.solution), program: shown(program, pg.program) });
+  const slug = slugOfTopic(pr.domain);
+  const prob = slug ? (await F.problems(api)).find(x => x.slug === slug) : undefined;
+  const children = prob ? F.searchPages(await F.pagesWithBodies(api, prob).catch(() => []), { builds_on: id }).map(g => ({ page: g.id, headline: g.headline, outcome: g.body?.outcome ?? null })) : [];
+  return text({ page: id, by: pr.proposer, problem: slug, headline: pg.headline, reached: pg.score, ...(body?.kind === "digest" ? { kind: "digest" } : {}),
+    builds_on: body?.builds_on ?? null, restrictions: body?.restrictions ?? null, budget: body?.budget ?? null, outcome: body?.outcome ?? null,
+    tried: body?.tried, stalled: body?.stalled, next: body?.next, solution: shown(solution, pg.solution), program: shown(program, pg.program),
+    built_on_by: children, ...(children.length ? { note: "Experiments that started from this one: read them before repeating it." } : {}) });
 });
 
 // Text given directly, or read from a file on this machine (for what's too large to pass through a model)

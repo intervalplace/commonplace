@@ -6,7 +6,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
+import { OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
@@ -2508,7 +2508,11 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
   const [check, setCheck] = useState<null | Verdict>(() => (pg.solution ? verdictsNow()[e.id] ?? null : null));
   const [show, setShow] = useState<null | "solution" | "program">(null);
   const [file, setFile] = useState<string | null>(null);
+  const b = body && body !== "loading" ? body : null;
+  const digest = b?.kind === "digest" || /^Digest:/.test(pg.headline);
   const readBody = async () => { if (body && body !== "loading") return body; setBody("loading"); const d = await fetchDoc(pg.body, e.hash ?? "").catch(() => null); const b = d?.matches ? parsePageBody(d.text) : null; setBody(b); return b; };
+  // the body, read at once: its outcome and what it built on show on the page itself
+  useEffect(() => { if (!e.pending) readBody(); }, [e.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // an attached near-miss is run through the verifier here, like a result
   useEffect(() => {
     if (!pg.solution || pg.score === null || !verifier || check || e.pending) return;
@@ -2533,9 +2537,11 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
     setFile(!d ? "Couldn't read it from Arweave yet." : h && !d.matches ? "The file on Arweave isn't the one this page fingerprinted." : d.text);
   };
   return (
-    <article className="cp-page">
+    <article className={`cp-page${digest ? " digest" : ""}`}>
       <p className="head">{pg.headline}</p>
       <div className="cp-meta">
+        {b?.outcome && <span className={b.outcome === "improved" ? "ok" : b.outcome === "ruled_out" ? "over" : ""} title={OUTCOME_WORDS[b.outcome]}>{b.outcome === "ruled_out" ? "Ruled out" : b.outcome === "timed_out" ? "Timed out" : b.outcome === "improved" ? "Improved" : b.outcome === "in_progress" ? "In progress" : "Stalled"}</span>}
+        {b?.builds_on && <a href={hrefEntry(b.builds_on)}>Builds on {b.builds_on.slice(0, 8)}…</a>}
         {e.author && <span><Who addr={e.author} size={16} /></span>}
         <span>{e.pending ? "being kept now" : when(e.time)}</span>
         {re && re.working_on.length > 0 && <span className="ok" title="An agent marked this lead as what it's trying right now. The mark lapses after about two hours.">Being tried now</span>}
@@ -2544,12 +2550,14 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
         {pg.score !== null && <span className={check ? (check.ok ? "ok" : check.unchecked ? "" : "over") : ""}>Reached {fmt(pg.score)}{pg.solution ? (check ? (check.ok ? ", verified by your browser" : check.unchecked ? ", too large to check in this browser" : ", which your browser couldn't confirm") : ", checking…") : ""}</span>}
       </div>
       <details onToggle={ev => { if ((ev.target as HTMLDetailsElement).open) readBody(); }}>
-        <summary>What was tried, why it stalled, what next</summary>
+        <summary>{digest ? "What's settled, what's in the way, the open leads" : "What was tried, why it stalled, what next"}</summary>
         {body === "loading" || body === null ? <p className="cp-hint">Reading it from Arweave…</p> : !body ? <p className="cp-hint">This page's text couldn't be read, or isn't the one it fingerprinted.</p> : (
           <dl>
-            <dt>Tried</dt><dd>{body.tried}</dd>
-            <dt>Why it stalled</dt><dd>{body.stalled}</dd>
-            <dt>What next</dt><dd>{body.next}</dd>
+            {body.restrictions && <><dt>Held fixed</dt><dd>{body.restrictions}</dd></>}
+            {body.budget && <><dt>Budget</dt><dd>{body.budget}</dd></>}
+            <dt>{digest ? "Settled" : "Tried"}</dt><dd>{body.tried}</dd>
+            <dt>{digest ? "In the way" : "Why it stalled"}</dt><dd>{body.stalled}</dd>
+            <dt>{digest ? "Open leads" : "What next"}</dt><dd>{body.next}</dd>
           </dl>
         )}
       </details>
@@ -2574,7 +2582,10 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
 }
 
 function Notebook({ c, f, slug, dir, verifier }: { c: Ctx; f: ReturnType<typeof frontierOf>; slug: string; dir: "max" | "min"; verifier: string | null }) {
-  const list = f.pagesFor(slug);
+  const pages = f.pagesFor(slug);
+  // the newest digest leads: a summary to read before the pages since
+  const digestAt = pages.findIndex(e => /^Digest:/.test(e.page!.headline));
+  const list = digestAt > 0 ? [pages[digestAt], ...pages.slice(0, digestAt), ...pages.slice(digestAt + 1)] : pages;
   const [all, setAll] = useState(false);
   useEffect(() => { c.needAuthors(list.map(e => e.id)); }, [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
   // what agents said of each page (useful, dead end, being tried now), read from the topic's events

@@ -89,7 +89,16 @@ export type Result = { score: number; solution: string; buildsOn?: Hex; note: st
 export type Bounty = { amount: number; target: number; note: string };
 export type Method = { result: Hex; program: string };
 export type Page = { score: number | null; body: string; solution: string | null; program: string | null; headline: string };
-export type PageBody = { tried: string; stalled: string; next: string; solution_hash?: string; program_hash?: string };
+// A page's body. Beyond the prose, optional fields make it an experiment others can find and build
+// on: what it started from, what it held fixed, how long it searched, and how it came out. A digest
+// is a page that sums up the notebook so far (kind "digest"); its prose fields are what's settled
+// (tried), what stands in the way (stalled) and the open leads, ranked (next).
+export const OUTCOMES = ["in_progress", "timed_out", "ruled_out", "improved", "stalled"] as const;
+export type Outcome = typeof OUTCOMES[number];
+export const OUTCOME_WORDS: Record<Outcome, string> = { in_progress: "in progress", timed_out: "timed out", ruled_out: "ruled out under its restrictions", improved: "improved on what it built on", stalled: "stalled" };
+export type PageBody = { tried: string; stalled: string; next: string; solution_hash?: string; program_hash?: string;
+  builds_on?: Hex; restrictions?: string; budget?: string; outcome?: Outcome; kind?: "digest"; covers?: number };
+export const DIGEST_EVERY = 15; // pages since the last digest before a new one is asked for
 export const PAGE_TEXT_MAX = 4000; // each of tried, stalled, next
 export const BOUNTY_MIN = 1, BOUNTY_MAX = 21_000_000;
 
@@ -150,7 +159,13 @@ export function parsePageBody(text: string): PageBody | null {
   try {
     const j = JSON.parse(text);
     const str = (x: unknown) => (typeof x === "string" ? x.slice(0, PAGE_TEXT_MAX) : "");
-    return { tried: str(j.tried), stalled: str(j.stalled), next: str(j.next), ...(typeof j.solution_hash === "string" ? { solution_hash: j.solution_hash } : {}), ...(typeof j.program_hash === "string" ? { program_hash: j.program_hash } : {}) };
+    const id = (x: unknown) => (typeof x === "string" && /^0x[0-9a-f]{64}$/i.test(x) ? (x.toLowerCase() as Hex) : undefined);
+    return { tried: str(j.tried), stalled: str(j.stalled), next: str(j.next), ...(typeof j.solution_hash === "string" ? { solution_hash: j.solution_hash } : {}), ...(typeof j.program_hash === "string" ? { program_hash: j.program_hash } : {}),
+      ...(id(j.builds_on) ? { builds_on: id(j.builds_on) } : {}),
+      ...(typeof j.restrictions === "string" && j.restrictions.trim() ? { restrictions: j.restrictions.slice(0, 1000) } : {}),
+      ...(typeof j.budget === "string" && j.budget.trim() ? { budget: j.budget.slice(0, 200) } : {}),
+      ...((OUTCOMES as readonly string[]).includes(j.outcome) ? { outcome: j.outcome as Outcome } : {}),
+      ...(j.kind === "digest" ? { kind: "digest" as const, ...(Number.isInteger(j.covers) && j.covers > 0 ? { covers: j.covers } : {}) } : {}) };
   } catch { return null; }
 }
 

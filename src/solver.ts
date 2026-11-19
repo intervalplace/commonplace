@@ -21,7 +21,7 @@ export type SolverProblem = {
 };
 export type Attempt = { idea: string; result: string };
 export type ProgramReply = { code: string; idea: string; start?: string };
-export type PageDraft = { headline: string; tried: string; stalled: string; next: string };
+export type PageDraft = { headline: string; tried: string; stalled: string; next: string; outcome?: "timed_out" | "ruled_out" | "improved" | "stalled"; restrictions?: string };
 
 // what other agents said of a page: useful, a dead end, being tried now
 const reactionNote = (r?: { useful: number; dead_end: number; working_on_now: number }) => {
@@ -118,7 +118,9 @@ export function pagePrompt(p: SolverProblem, tried: Attempt[]): string {
     `so the next agent picks up where you hit a wall instead of starting over.\n\nProblem: ${p.title}\n${p.statement}\n` +
     `Record: ${p.record ? `${p.record.score} (${p.record.note})` : "none"}\n\nYour attempts:\n${tried.map(t => `- ${t.idea} -> ${t.result}`).join("\n")}\n\n` +
     `Answer with JSON only: {"headline": "<one line, the lesson, under 180 characters>", "tried": "<what you tried, with the scores each reached>", ` +
-    `"stalled": "<why you think it stalled>", "next": "<what you would try next, concretely, and why>"}. Be specific: parameters, symmetries, numbers.`
+    `"stalled": "<why you think it stalled>", "next": "<what you would try next, concretely, and why>", ` +
+    `"outcome": "<timed_out if the searches ran out of time without proving anything, ruled_out if you showed the approach can't work under its restrictions, improved if you beat your starting point but not the record, else stalled>", ` +
+    `"restrictions": "<what your searches held fixed or excluded, if anything, else an empty string>"}. Be specific: parameters, symmetries, numbers.`
   );
 }
 
@@ -127,7 +129,10 @@ export function parsePageDraft(text: string): PageDraft | null {
     const j = JSON.parse(/\{[\s\S]*\}/.exec(text)?.[0] ?? "");
     const ok = (x: unknown, n: number) => (typeof x === "string" && x.trim().length >= n ? x.trim() : null);
     const h = ok(j.headline, 10), t = ok(j.tried, 20), st = ok(j.stalled, 10), nx = ok(j.next, 10);
-    return h && t && st && nx ? { headline: h.length <= 200 ? h : h.slice(0, 198).replace(/\s+\S*$/, "") + "…", tried: t.slice(0, 4000), stalled: st.slice(0, 4000), next: nx.slice(0, 4000) } : null;
+    const outcome = ["timed_out", "ruled_out", "improved", "stalled"].includes(j.outcome) ? j.outcome : undefined;
+    const restrictions = typeof j.restrictions === "string" && j.restrictions.trim() ? j.restrictions.trim().slice(0, 1000) : undefined;
+    return h && t && st && nx ? { headline: h.length <= 200 ? h : h.slice(0, 198).replace(/\s+\S*$/, "") + "…", tried: t.slice(0, 4000), stalled: st.slice(0, 4000), next: nx.slice(0, 4000),
+      ...(outcome ? { outcome } : {}), ...(restrictions ? { restrictions } : {}) } : null;
   } catch { return null; }
 }
 
@@ -140,6 +145,7 @@ export function fallbackPage(p: SolverProblem, tried: Attempt[], model: string):
     tried: tried.filter(t => t.idea !== "(no program)").map(t => `${t.idea}: ${t.result}`).join("\n").slice(0, 4000),
     stalled: valid.length ? "The valid programs didn't improve on the record." : "The programs didn't produce valid solutions: see the verifier's reasons above.",
     next: "Start from the record's solution and make small, verified changes; read the verifier's reasons for what was rejected.",
+    outcome: tried.some(t => /took longer than/.test(t.result)) ? "timed_out" : "stalled",
   };
 }
 

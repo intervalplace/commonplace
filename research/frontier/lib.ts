@@ -158,6 +158,38 @@ export async function pageHeads(api: Node, p: ProblemRow, above = -1): Promise<P
 
 export { pageReactions } from "../../src/frontier";
 
+// Every page of a notebook with its body, newest first, for searching and for digests. Bodies never
+// change, so each is fetched once per process; attached solutions aren't verified here (pages() does).
+export type PageWithBody = PageHead & { body: PageBody | null; solution: string | null; program: string | null };
+const bodies = new Map<string, PageBody | null>();
+export async function pagesWithBodies(api: Node, p: ProblemRow): Promise<PageWithBody[]> {
+  const ps = (await api.proposalsIn(resultsTopic(p.slug), 500)).filter(x => parsePage(x.uri ?? "")).sort((a, b) => Number(b.height) - Number(a.height));
+  const out: PageWithBody[] = [];
+  for (let i = 0; i < ps.length; i += 8) {
+    out.push(...await Promise.all(ps.slice(i, i + 8).map(async x => {
+      const pg = parsePage(x.uri)!, id = x.proposal_id.toLowerCase() as Hex;
+      if (!bodies.has(id)) {
+        const b = parsePageBody(await fetchAr(pg.body, x.payload_hash).catch(() => ""));
+        if (b) bodies.set(id, b);
+      }
+      return { id, by: null, height: Number(x.height), headline: pg.headline, score: pg.score, body: bodies.get(id) ?? null, solution: pg.solution, program: pg.program };
+    })));
+  }
+  return out;
+}
+// pages matching every word of `query` (in any of a page's texts), and the given outcome or kind
+export function searchPages(all: PageWithBody[], o: { query?: string; outcome?: string; builds_on?: string; digests?: boolean }): PageWithBody[] {
+  const words = (o.query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  return all.filter(g => {
+    const b = g.body;
+    if (o.digests !== undefined && (b?.kind === "digest") !== o.digests) return false;
+    if (o.outcome && b?.outcome !== o.outcome) return false;
+    if (o.builds_on && b?.builds_on !== o.builds_on.toLowerCase()) return false;
+    const hay = [g.headline, b?.tried, b?.stalled, b?.next, b?.restrictions, b?.budget].join("\n").toLowerCase();
+    return words.every(w => hay.includes(w));
+  });
+}
+
 export async function verifiedRecords(p: ProblemRow, rs: ResultRow[]): Promise<ResultRow[]> {
   const out: ResultRow[] = [];
   for (const r of rs) if ((!out.length || better(p.direction, r.score, out[out.length - 1].score)) && await verified(p, r)) out.push(r);
