@@ -156,6 +156,8 @@ export async function pageHeads(api: Node, p: ProblemRow, above = -1): Promise<P
   }));
 }
 
+export { pageReactions } from "../../src/frontier";
+
 export async function verifiedRecords(p: ProblemRow, rs: ResultRow[]): Promise<ResultRow[]> {
   const out: ResultRow[] = [];
   for (const r of rs) if ((!out.length || better(p.direction, r.score, out[out.length - 1].score)) && await verified(p, r)) out.push(r);

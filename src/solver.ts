@@ -12,7 +12,10 @@ export type SolverProblem = {
   record?: { id?: string; score: number; note: string; solution?: string | null; program?: string | null } | null;
   bounties?: { csd: number; for_beating: number; won_by?: string | null }[];
   recent?: { score: number; note: string }[];
-  notebook?: { page: string; headline: string; tried?: string; stalled?: string; next?: string; reached?: { score: number; verified?: boolean | null; has_solution?: boolean } | null; isNew?: boolean }[];
+  notebook?: { page: string; headline: string; tried?: string; stalled?: string; next?: string; reached?: { score: number; verified?: boolean | null; has_solution?: boolean } | null; isNew?: boolean;
+    reactions?: { useful: number; dead_end: number; working_on_now: number } }[];
+  // leads other agents marked as what they're trying right now (frontier_problem's being_worked_on)
+  being_worked_on?: { leads: { page: string; headline: string | null }[] } | null;
   // older pages past those quoted in full: headlines only, so nothing in the notebook is invisible
   older?: { page: string; headline: string; reached?: { score: number } | null }[];
 };
@@ -20,6 +23,12 @@ export type Attempt = { idea: string; result: string };
 export type ProgramReply = { code: string; idea: string; start?: string };
 export type PageDraft = { headline: string; tried: string; stalled: string; next: string };
 
+// what other agents said of a page: useful, a dead end, being tried now
+const reactionNote = (r?: { useful: number; dead_end: number; working_on_now: number }) => {
+  if (!r) return "";
+  const bits = [r.useful ? `${r.useful} found it useful` : "", r.dead_end ? `${r.dead_end} marked it a dead end` : "", r.working_on_now ? `${r.working_on_now} trying it now` : ""].filter(Boolean);
+  return bits.length ? ` [${bits.join(", ")}]` : "";
+};
 export const cut = (x: unknown, n: number) => { const t = String(x ?? ""); return t.length > n ? t.slice(0, n) + "…" : t; };
 
 // The request for one program. `small`: a model with a small context window, for which the quoted
@@ -50,9 +59,10 @@ export function programPrompt(p: SolverProblem, tried: Attempt[], small: boolean
       return `\nThe problem's notebook: what other agents tried that didn't set a record, newest first. Don't repeat their dead ends; build on the most promising lead.` +
         (fresh ? ` ${fresh} ${fresh === 1 ? "page is" : "pages are"} new since your last round (marked NEW): other agents are working on this right now, so read ${fresh === 1 ? "it" : "them"} first and change course if ${fresh === 1 ? "it rules" : "they rule"} out what you were trying.` : "") +
         `\n${shown.map(g =>
-        `- ${g.isNew ? "NEW " : ""}page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}: ${g.headline}\n  tried: ${cut(g.tried, room(700))}\n  stalled: ${cut(g.stalled, room(400))}\n  next: ${cut(g.next, room(400))}`).join("\n")}\n` +
+        `- ${g.isNew ? "NEW " : ""}page ${g.page}${g.reached ? ` (reached ${g.reached.score}${g.reached.verified ? ", verified" : ""}${g.reached.has_solution ? ", solution attached" : ""})` : ""}${reactionNote(g.reactions)}: ${g.headline}\n  tried: ${cut(g.tried, room(700))}\n  stalled: ${cut(g.stalled, room(400))}\n  next: ${cut(g.next, room(400))}`).join("\n")}\n` +
         (p.older?.length && k >= 1 ? `Older pages, headlines only: ${p.older.slice(0, 40).map(g => `${g.headline}${g.reached ? ` (reached ${g.reached.score})` : ""}`).join("; ")}\n` : "");
     })() : "") +
+    (p.being_worked_on?.leads?.length && k >= 0.15 ? `Other agents are working on these leads right now; pick a different one unless you have a clearly different angle: ${p.being_worked_on.leads.map(l => l.headline ?? l.page).join("; ")}\n` : "") +
     (tried.length ? `Your own attempts so far, oldest first (don't repeat them): ${tried.map(t => `${t.idea} -> ${t.result}`).join("; ")}\n` : "") +
     // the smallest models can write a code block, but not prose and then a code block: code only
     (k < 0.15 ? `\nWrite a JavaScript function solve(best) that returns a solution string in the problem's format, aiming to beat the record. ` +

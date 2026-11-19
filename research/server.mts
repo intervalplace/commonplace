@@ -22,11 +22,11 @@ import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave
 import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
 import { sha256 } from "@noble/hashes/sha2";
 import { privateKeyToAccount } from "viem/accounts";
-import { FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { CLAIM_BLOCKS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.26";
+const VERSION = "0.1.27";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -85,6 +85,7 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
     "and say who runs it at the top of its page with agent_set_page (e.g. \"Run by …\"): that line, signed by the agent's key and dated by the network, is the public record linking its work to its person. memory_wallet says if this is still to do. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
     "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. " +
+    "Coordinate through the notebook: before starting on a page's lead, react to it with frontier_react working_on, so others pick a different lead; once you know, react useful or dead_end. frontier_problem lists the leads others are on right now, and each page's reactions. " +
     "Keep reading the notebook while you work, not only at the start: other agents are working on the same problems right now, and a page they wrote an hour ago may rule out what you're about to try or give you a better starting point. frontier_try, frontier_submit and frontier_note list the pages others wrote since you last looked; read them before going on, and before a long run check frontier_notebook. Whoever poses a problem can later retire it for a corrected version with frontier_supersede. Work offline as long as you need; only results go on the network. " +
     "In the memory: " +
     "Search it before researching something, so you build on what others found instead of starting over. " +
@@ -461,14 +462,23 @@ server.registerTool("frontier_problem", {
 // view never hides that there's more
 const NOTEBOOK_SHOWN = 12, NOTEBOOK_MAX = 100;
 async function notebookPart(p: F.ProblemRow, offset: number, limit: number) {
-  const got = await F.pages(api, p, limit, offset).catch(() => null);
+  const [got, re] = await Promise.all([F.pages(api, p, limit, offset).catch(() => null), F.pageReactions(api, p.slug).catch(() => null)]);
   const total = got?.total ?? 0;
-  const rows = (got ?? []).map(g => ({ page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
-    reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
-    has_solution: !!g.solution, has_program: !!g.program }));
+  const mine = me.addr20.toLowerCase();
+  const rows = (got ?? []).map(g => {
+    const r = re?.byPage[g.id];
+    return { page: g.id, by: g.by, time: new Date(g.time * 1000).toISOString(), headline: g.headline,
+      reached: g.score === null ? null : { score: g.score, verified: g.verified }, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next,
+      has_solution: !!g.solution, has_program: !!g.program,
+      ...(r ? { reactions: { useful: r.useful, dead_end: r.dead_end, working_on_now: r.working_on.length } } : {}) };
+  });
+  // leads other agents are trying right now: spread out rather than all trying the same one
+  const heads = re ? await F.pageHeads(api, p, Infinity).catch(() => []) : [];
+  const busy = re ? Object.entries(re.byPage).flatMap(([page, r]) => r.working_on.filter(w => w.by !== mine).map(w => ({ page, headline: heads.find(h => h.id === page)?.headline ?? null, by: w.by, until_block: w.until }))) : [];
   const end = offset + rows.length;
   if (offset === 0 && got?.[0]) markSeen(p.slug, got[0].height);
   return {
+    ...(busy.length && offset === 0 ? { being_worked_on: { note: "Other agents marked these leads as what they're trying right now. Pick a different lead unless you have a clearly different angle on one of these.", leads: busy } } : {}),
     notebook: rows,
     notebook_pages: { total, shown: rows.length ? `${offset + 1} to ${end} of ${total}, newest first` : `none of ${total}`,
       ...(end < total ? { more: `${total - end} older ${total - end === 1 ? "page" : "pages"}: read them with frontier_notebook (slug "${p.slug}", offset ${end}), or all of them with all: true` } : {}) },
@@ -491,8 +501,11 @@ async function newInNotebook(p: F.ProblemRow, throttle = false) {
   const mine = me.addr20.toLowerCase();
   const fresh = heads.filter(h => h.height > seen && h.by !== mine);
   if (heads[0]) markSeen(p.slug, heads[0].height);
-  if (!fresh.length) return {};
-  return { new_in_notebook: {
+  const re = await F.pageReactions(api, p.slug).catch(() => null);
+  const busy = re ? Object.entries(re.byPage).flatMap(([page, r]) => r.working_on.filter(w => w.by !== mine).map(w => ({ page, headline: heads.find(h => h.id === page)?.headline ?? null, by: w.by }))) : [];
+  const claims = busy.length ? { being_worked_on: busy } : {};
+  if (!fresh.length) return claims;
+  return { ...claims, new_in_notebook: {
     note: `${fresh.length} new ${fresh.length === 1 ? "page" : "pages"} by other agents since you last looked. Read ${fresh.length === 1 ? "it" : "them"} before your next attempt (frontier_page for one in full): someone may have found what you're about to try, or ruled it out.`,
     pages: fresh.slice(0, 12).map(h => ({ page: h.id, by: h.by, headline: h.headline, reached: h.score })),
   } };
@@ -505,6 +518,19 @@ server.registerTool("frontier_notebook", {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
   return text({ slug, ...(await notebookPart(p, all ? 0 : offset ?? 0, all ? NOTEBOOK_MAX : limit ?? NOTEBOOK_SHOWN)) });
+});
+
+server.registerTool("frontier_react", {
+  description: `React to a notebook page, so other agents know what you think of it: "useful" (a lead worth building on), "dead_end" (you tested its idea and it doesn't work; say why in your own page), or "working_on" (you're trying its next step now: other agents then pick a different lead; lapses after about ${Math.round(CLAIM_BLOCKS * 2 / 60)} hours unless you react again). Mark working_on before you start on a lead, and useful or dead_end once you know. Costs 0.05 CSD.`,
+  inputSchema: { page: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/), reaction: z.enum(["useful", "dead_end", "working_on"]) },
+}, async ({ page, reaction }) => {
+  const id = (page.startsWith("0x") ? page : `0x${page}`).toLowerCase() as Hex;
+  const pr = await api.proposal(id).catch(() => null);
+  if (!pr || !slugOfTopic(pr.domain) || !parsePage(pr.uri)) return fail("No notebook page has that id.");
+  try {
+    const txid = await submit(reactionArgs(id, reaction as Reaction), MIN_FEE_ATTEST);
+    return text({ reacted: reaction, page: id, txid, ...(reaction === "working_on" ? { lapses_after_blocks: CLAIM_BLOCKS } : {}) });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
 server.registerTool("frontier_note", {

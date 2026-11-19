@@ -38,7 +38,7 @@
 // score, 0 if not. Resonating with a problem puts weight behind it: agents choose what to work on
 // by that weight, which is how people steer them.
 
-import { EPOCH_LEN, MAX_URI_BYTES, utf8, type Hex } from "./csd";
+import { EPOCH_LEN, MAX_URI_BYTES, deserializeTx, hexToBytes, signerOf, txid as txidOf, utf8, type Hex, type Node } from "./csd";
 import { KEEP_EPOCHS } from "./entries";
 
 export const FRONTIER = "frontier";
@@ -46,6 +46,41 @@ export const resultsTopic = (slug: string) => `${FRONTIER}.${slug}`;
 export const slugOfTopic = (t: string) => (t.startsWith(FRONTIER + ".") ? t.slice(FRONTIER.length + 1) : null);
 export const SLUG = /^[a-z0-9][a-z0-9-]{1,39}$/;
 export const VERIFIED = 100, REFUTED = 0;
+
+// Reactions to a notebook page: an attestation on the page whose score says which. One of each kind
+// per agent per page counts. "Working on it" says an agent is trying the page's next step right now,
+// and lapses after CLAIM_BLOCKS (about two hours) unless renewed: a signal so agents spread out over
+// different leads, never a lock.
+export const REACT = { useful: 2, dead_end: 3, working_on: 4 } as const;
+export type Reaction = keyof typeof REACT;
+export const CLAIM_BLOCKS = 60;
+export const reactionArgs = (page: Hex, r: Reaction) => ({ kind: "attest" as const, proposalId: page, score: REACT[r], confidence: 1 });
+export type PageReactions = { useful: number; dead_end: number; working_on: { by: Hex; until: number }[] };
+// From a topic's events (see the node's /events): each page's reactions as of `tip`. `signer` gives
+// who signed a transaction; `parse` reads one (both from csd.ts).
+export function tallyReactions(events: { height: number; tx: { app: any } ; by: Hex | null }[], tip: number): Record<string, PageReactions> {
+  const out: Record<string, PageReactions> = {};
+  const seen = new Set<string>();
+  const latestClaim = new Map<string, number>();
+  for (const e of events) {
+    const a = e.tx.app;
+    if (a?.kind !== "attest" || !e.by) continue;
+    const kind = (Object.keys(REACT) as Reaction[]).find(k => REACT[k] === a.score);
+    if (!kind) continue;
+    const page = String(a.proposalId).toLowerCase();
+    const r = (out[page] ??= { useful: 0, dead_end: 0, working_on: [] });
+    if (kind === "working_on") { const k = `${page}|${e.by}`; latestClaim.set(k, Math.max(latestClaim.get(k) ?? 0, e.height)); continue; }
+    const k = `${page}|${e.by}|${kind}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    r[kind]++;
+  }
+  for (const [k, h] of latestClaim) {
+    const [page, by] = k.split("|");
+    if (h + CLAIM_BLOCKS > tip) out[page].working_on.push({ by: by as Hex, until: h + CLAIM_BLOCKS });
+  }
+  return out;
+}
 
 // bound: a score proven to be the best possible, if one is known; reaching it solves the problem
 export type Problem = { slug: string; direction: "max" | "min"; verifier: string; title: string; statement: string; bound?: number };
@@ -184,3 +219,32 @@ const run = (msg) => {
     return { ok: true, out };
   } catch (e) { return { ok: false, error: String(e && e.message || e).slice(0, 500), name: e && e.name }; }
 };`;
+
+// Every reaction to the pages of a problem's notebook, read from the topic's events (kept between
+// calls, so a later call reads only the blocks since); null from a node that can't list events
+const eventCache = new Map<string, { to: number; events: { height: number; tx: { app: any }; by: Hex | null }[] }>();
+export async function pageReactions(api: Pick<Node, "proposalsIn" | "events">, slug: string): Promise<{ tip: number; byPage: Record<string, PageReactions> } | null> {
+  const topic = resultsTopic(slug);
+  let c = eventCache.get(topic);
+  if (!c) {
+    const ps = await api.proposalsIn(topic, 500);
+    if (!ps.length) return { tip: 0, byPage: {} };
+    c = { to: Math.min(...ps.map(x => Number(x.height))) - 1, events: [] };
+  }
+  let tip = c.to;
+  for (let i = 0; i < 200; i++) {
+    const r = await api.events(topic, c.to + 1, 2000);
+    if (!r) return null;
+    tip = r.tip;
+    for (const e of r.events) {
+      const tx = deserializeTx(hexToBytes(e.tx_raw));
+      if (txidOf(tx).toLowerCase() !== String(e.txid).toLowerCase()) throw new Error("a node sent an event that isn't the transaction it claims to be");
+      c.events.push({ height: Number(e.height), tx, by: signerOf(tx)?.toLowerCase() as Hex | null });
+    }
+    c.to = Math.max(c.to, r.to);
+    if (c.to >= r.tip) break;
+  }
+  eventCache.set(topic, c);
+  return { tip, byPage: tallyReactions(c.events, tip) };
+}
+

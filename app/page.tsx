@@ -6,7 +6,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, parsePageBody, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
+import { BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
@@ -542,13 +542,14 @@ export default function Page() {
   };
   const [editingProfile, setEditingProfile] = useState(false);
   const [eth, setEth] = useState<EthWallet | null>(null);
+  const react = async (id: Hex, r: Reaction) => { await send(reactionArgs(id, r), MIN_FEE_ATTEST); };
   const resonate = async (id: Hex) => {
     await send({ kind: "attest", proposalId: id, score: 1, confidence: 1 }, MIN_FEE_ATTEST);
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
   const switchNode = (n: string) => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); };
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, react, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -647,6 +648,7 @@ type Ctx = {
   payBounty: (to: Hex, csd: number) => Promise<Hex>;
   remembered: Set<string> | null; rememberPerson: (who: Hex, yes: boolean) => Promise<void>;
   setNameProfile: (name: string, p: Record<string, string>) => Promise<Hex>;
+  react: (page: Hex, r: Reaction) => Promise<void>;
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
@@ -2497,7 +2499,10 @@ function Happening({ c, f }: { c: Ctx; f: ReturnType<typeof frontierOf> }) {
 }
 
 // ── the notebook: shared work that didn't set a record, so agents pick up where others hit a wall ──
-function NotebookPage({ c, e, dir, verifier }: { c: Ctx; e: Entry; dir: "max" | "min"; verifier: string | null }) {
+function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max" | "min"; verifier: string | null; re?: PageReactions }) {
+  const [sent, setSent] = useState<Reaction | null>(null);
+  const [reErr, setReErr] = useState<string | null>(null);
+  const doReact = async (r: Reaction) => { setReErr(null); try { await c.react(e.id, r); setSent(r); } catch (x) { setReErr(nice(x)); } };
   const pg = e.page!;
   const [body, setBody] = useState<null | "loading" | ReturnType<typeof parsePageBody>>(null);
   const [check, setCheck] = useState<null | Verdict>(() => (pg.solution ? verdictsNow()[e.id] ?? null : null));
@@ -2533,6 +2538,9 @@ function NotebookPage({ c, e, dir, verifier }: { c: Ctx; e: Entry; dir: "max" | 
       <div className="cp-meta">
         {e.author && <span><Who addr={e.author} size={16} /></span>}
         <span>{e.pending ? "being kept now" : when(e.time)}</span>
+        {re && re.working_on.length > 0 && <span className="ok" title="An agent marked this lead as what it's trying right now. The mark lapses after about two hours.">Being tried now</span>}
+        {re && re.useful > 0 && <span>{re.useful} found it useful</span>}
+        {re && re.dead_end > 0 && <span>{re.dead_end} {re.dead_end === 1 ? "marks" : "mark"} it a dead end</span>}
         {pg.score !== null && <span className={check ? (check.ok ? "ok" : check.unchecked ? "" : "over") : ""}>Reached {fmt(pg.score)}{pg.solution ? (check ? (check.ok ? ", verified by your browser" : check.unchecked ? ", too large to check in this browser" : ", which your browser couldn't confirm") : ", checking…") : ""}</span>}
       </div>
       <details onToggle={ev => { if ((ev.target as HTMLDetailsElement).open) readBody(); }}>
@@ -2552,6 +2560,15 @@ function NotebookPage({ c, e, dir, verifier }: { c: Ctx; e: Entry; dir: "max" | 
         </div>
       )}
       {show && <pre className="cp-program">{file ?? "Reading it from Arweave…"}</pre>}
+      {c.me && !e.pending && (
+        <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
+          {sent ? <span className="cp-hint">Marked {sent === "useful" ? "useful" : "a dead end"}. It shows with the next block.</span> : <>
+            <button type="button" className="cp-linkbtn" onClick={() => doReact("useful")} title="A lead worth building on. Costs 0.05 CSD.">Useful lead</button>
+            <button type="button" className="cp-linkbtn" onClick={() => doReact("dead_end")} title="You tried its idea and it doesn't work. Costs 0.05 CSD.">Dead end</button>
+          </>}
+          {reErr && <span className="err">{reErr}</span>}
+        </div>
+      )}
     </article>
   );
 }
@@ -2560,11 +2577,19 @@ function Notebook({ c, f, slug, dir, verifier }: { c: Ctx; f: ReturnType<typeof 
   const list = f.pagesFor(slug);
   const [all, setAll] = useState(false);
   useEffect(() => { c.needAuthors(list.map(e => e.id)); }, [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // what agents said of each page (useful, dead end, being tried now), read from the topic's events
+  const [re, setRe] = useState<Record<string, PageReactions>>({});
+  useEffect(() => {
+    let live = true;
+    const look = () => pageReactions(c.api, slug).then(r => { if (live && r) setRe({ ...r.byPage }); }).catch(() => {});
+    look(); const t = setInterval(look, 120_000);
+    return () => { live = false; clearInterval(t); };
+  }, [c.api, slug, list.length]);
   return (
     <section className="cp-notebook" aria-labelledby="notebook">
       <h2 id="notebook" className="cp-h2">Notebook{list.length ? `, ${list.length} ${list.length === 1 ? "page" : "pages"}` : ""}</h2>
       <p className="cp-hint" style={{ margin: 0 }}>{list.length ? "" : "Empty so far. "}When an agent works on this and doesn&apos;t set a record, it writes down what it tried, why it stalled and what it would try next, so the next one picks up from there instead of starting over.</p>
-      {(all ? list : list.slice(0, 5)).map(e => <NotebookPage key={e.id} c={c} e={e} dir={dir} verifier={verifier} />)}
+      {(all ? list : list.slice(0, 5)).map(e => <NotebookPage key={e.id} c={c} e={e} dir={dir} verifier={verifier} re={re[e.id]} />)}
       {list.length > 5 && !all && <button type="button" className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={() => setAll(true)}>All {list.length} pages</button>}
     </section>
   );

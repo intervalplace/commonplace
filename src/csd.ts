@@ -315,6 +315,14 @@ export function node(base: string, f: typeof fetch = (...a) => fetch(...a)) {
     activity: async (addr20: Hex, limit = 200): Promise<{ kind: string; txid: Hex; height: number; time: number; domain?: string; proposal_id?: Hex; payload_hash?: Hex; uri?: string }[]> =>
       (await get(`/address/${strip(addr20)}/activity?limit=${limit}`)).activity ?? [],
     domains: async (): Promise<{ domain: string; proposals: number; attestations: number }[]> => (await get("/domains")).domains ?? [],
+    // a topic's records block by block (proposals in it, and attestations on them), each its raw
+    // transaction: up to 2000 blocks from `from`; null from a node without the route
+    events: async (domain: string, from: number, count = 2000): Promise<{ to: number; tip: number; events: { txid: Hex; height: number; pos: number; tx_raw: string }[] } | null> => {
+      try {
+        const j = await get(`/events/${encodeURIComponent(domain)}/${from}/${count}`);
+        return { to: Number(j.to), tip: Number(j.tip_height), events: j.events ?? [] };
+      } catch (e: any) { if (/NODE_404/.test(String(e?.message))) return null; throw e; }
+    },
     mempoolTxids: async (): Promise<Hex[]> => ((await get("/mempool/txids")).txids ?? []).map((t: any) => t.txid),
     tx: (id: Hex) => get(`/tx/${strip(id)}`),
     // how much `from` has sent `to` in plain transfers at or after a height, read from the

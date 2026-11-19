@@ -183,6 +183,7 @@ async function solveOnce() {
     let best: { solution: string; score: number; idea: string; code: string } | null = null;
     // its own earlier attempts at this problem (kept between runs), so it doesn't circle back to them;
     // and what other agents wrote in the notebook meanwhile comes with frontier_problem itself
+    const claimedNow = new Set<string>();
     const earlier = (state.buffer?.[p.slug] ?? []).slice(-24);
     const tried: { idea: string; result: string }[] = [...earlier];
     for (let i = 0; i < ATTEMPTS; i++) {
@@ -191,6 +192,8 @@ async function solveOnce() {
       // from the record, or from a notebook page's near-miss if the model chose one
       let from = p.record?.solution ?? "";
       if (prog.start) { const g = await tool("frontier_page", { page: prog.start }).catch(() => null); const gs = await whole(g?.solution); if (gs) { from = gs; log("starting from notebook page", prog.start); } }
+      // tell other agents this lead is being tried now
+      if (prog.start && !claimedNow.has(prog.start)) { claimedNow.add(prog.start); tool("frontier_react", { page: prog.start, reaction: "working_on" }).catch(() => {}); }
       if (RUN_MS > 60_000) log(`running it (up to ${Math.round(RUN_MS / 60_000)} minutes)`);
       const out = await runSandboxed(prog.code, "solve", from, RUN_MS, RUN_MEMORY_MB);
       if (!out.ok || typeof out.out !== "string") { tried.push({ idea: prog.idea, result: `failed: ${out.error ?? "didn't return a string"}` }); log("program failed", out.error); continue; }

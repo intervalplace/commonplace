@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MIN_FEE_PROPOSE, buildAppTx, bytesToHex, hexToBytes, keyFromPrivate, sha256d, utf8, type CsdKey, type Hex, type Node } from "@/csd";
 import { profileArgs, styleArgs, styleRoom } from "@/entries";
-import { better, fmt, frontierArgs, methodUri, pageUri, parsePageBody, resultUri, resultsTopic, uriProblem, type Problem } from "@/frontier";
+import { CLAIM_BLOCKS, better, fmt, frontierArgs, methodUri, pageReactions, pageUri, parsePageBody, reactionArgs, resultUri, resultsTopic, uriProblem, type Problem } from "@/frontier";
 import { upload } from "@/arweave";
 import { askOpenAI, fallbackPage, listModels, localContext, pagePrompt, parsePageDraft, parseProgram, programPrompt, type Attempt, type SolverProblem } from "@/solver";
 
@@ -116,7 +116,8 @@ export function WorkPanel(props: WorkProps) {
   const stop = useRef(false);
   const abort = useRef<AbortController | null>(null);
   const files = useRef(new Map<string, string | null>()); // fetched solutions, programs and page bodies
-  const seenPages = useRef<Set<string> | null>(null);       // the notebook pages the model has been shown
+  const seenPages = useRef<Set<string> | null>(null);
+  const claimed = useRef(new Map<string, number>());             // leads this agent marked as being tried       // the notebook pages the model has been shown
   // the agent's own latest record: the page learns of it only once it's in a block and verified,
   // and until then it's the bar to beat (so the same improvement isn't posted twice)
   const posted = useRef<{ slug: string; id: Hex; score: number; note: string; solution: string; program: string } | null>(null);
@@ -259,10 +260,12 @@ export function WorkPanel(props: WorkProps) {
     const rec = bar();
     // the notebook's newest pages, fetched together
     // pages new since the last round are marked, so the model reads what others found meanwhile
+    const re = await pageReactions(p.api, p.problem.slug).catch(() => null);
     const notebook = await Promise.all(p.pages.slice(0, 8).map(async g => {
       const body = parsePageBody((await fetchOnce(g.body, g.hash)) ?? "");
       return { page: g.id, headline: g.headline, tried: body?.tried, stalled: body?.stalled, next: body?.next, reached: g.score === null ? null : { score: g.score, has_solution: !!g.solution },
-        isNew: seenPages.current !== null && !seenPages.current.has(g.id) };
+        isNew: seenPages.current !== null && !seenPages.current.has(g.id),
+        ...(re?.byPage[g.id] ? { reactions: { useful: re.byPage[g.id].useful, dead_end: re.byPage[g.id].dead_end, working_on_now: re.byPage[g.id].working_on.length } } : {}) };
     }));
     seenPages.current = new Set(p.pages.map(g => g.id));
     return {
@@ -273,6 +276,7 @@ export function WorkPanel(props: WorkProps) {
         : { id: rec.id, score: rec.score, note: rec.note, solution: await fetchOnce(p.record!.solution, p.record!.hash), program: p.program ? await fetchOnce(p.program.ar, p.program.hash) : null },
       recent: p.recent.slice(0, 6),
       notebook,
+      being_worked_on: re ? { leads: Object.entries(re.byPage).filter(([, r]) => r.working_on.some(w => w.by !== key?.addr20.toLowerCase())).map(([page]) => ({ page, headline: p.pages.find(g => g.id === page)?.headline ?? null })) } : null,
       older: p.pages.slice(8).map(g => ({ page: g.id, headline: g.headline, reached: g.score === null ? null : { score: g.score } })),
     };
   };
@@ -381,7 +385,14 @@ export function WorkPanel(props: WorkProps) {
             continue;
           }
           let from = sp.record?.solution ?? "";
-          if (pr.start) { const g = P.current.pages.find(x => x.id === pr.start); const s = g?.solution ? await fetchOnce(g.solution) : null; if (s) from = s; }
+          if (pr.start) {
+            const g = P.current.pages.find(x => x.id === pr.start); const s = g?.solution ? await fetchOnce(g.solution) : null; if (s) from = s;
+            // tell other agents this lead is being tried now (once per lead per claim period)
+            if (g && Date.now() - (claimed.current.get(g.id) ?? 0) > CLAIM_BLOCKS * 120_000 * 0.8) {
+              claimed.current.set(g.id, Date.now());
+              agentSubmit(P.current.api, key, reactionArgs(g.id, "working_on"), () => {}, () => false).catch(() => {});
+            }
+          }
           setStatus(`Round ${round}, program ${i + 1}: running it (up to a minute)…`);
           const out = await P.current.run(pr.code, from, 60_000);
           setStats(s => ({ ...s, programs: s.programs + 1 }));
