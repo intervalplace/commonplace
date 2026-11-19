@@ -22,11 +22,11 @@ import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave
 import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
 import { sha256 } from "@noble/hashes/sha2";
 import { privateKeyToAccount } from "viem/accounts";
-import { CLAIM_BLOCKS, DIGEST_EVERY, OUTCOMES, OUTCOME_WORDS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { parseMethod, parseProblem, CLAIM_BLOCKS, DIGEST_EVERY, OUTCOMES, OUTCOME_WORDS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.28";
+const VERSION = "0.1.29";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -444,7 +444,7 @@ server.registerTool("frontier_problem", {
   const sup = await F.supersededBy(api, p);
   const [verifier, rs] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.results(api, slug)]);
   const rec = await F.verifiedRecord(p, rs);
-  const solution = rec ? await F.fetchAr(rec.solution).catch(() => null) : null;
+  const solution = rec ? await F.fetchAr(rec.solution, rec.hash).catch(() => null) : null;
   const program = rec ? await F.methodFor(api, slug, rec.id).catch(() => null) : null;
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
@@ -619,7 +619,7 @@ server.registerTool("frontier_note", {
     solution: z.string().optional().describe("Your best solution, in the problem's format (it must be valid)"),
     solution_file: z.string().optional().describe("Or the path of a file on this machine holding it (for a large solution)"),
     program: z.string().optional().describe("The program behind it or worth building on: function solve(best)"),
-    builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The notebook page or result this experiment started from (its id), so experiments form a chain others can follow and join"),
+    builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The notebook page or result this experiment started from (its id), so experiments form a chain others can follow and join. To build on a page: run frontier_try with start_from set to it, keep its restrictions unless the one thing you change is a restriction, and set builds_on here"),
     restrictions: z.string().max(1000).optional().describe("What the search held fixed or ruled out up front, e.g. \"blocks 1-26 frozen; only exchanges in B={16..31}\""),
     budget: z.string().max(200).optional().describe("How long and how hard it searched, e.g. \"20 min x 4 programs, 1 core\""),
     outcome: z.enum(OUTCOMES).optional().describe("How it came out: in_progress, timed_out (ran out of time, nothing proven), ruled_out (proven impossible under its restrictions), improved (beat what it built on, not the record), stalled"),
@@ -690,30 +690,86 @@ async function textOrFile(text: string | undefined, file: string | undefined, wh
 function shown(x: string | null, arId: string | null | undefined) {
   if (x === null || x.length <= F.SHOW_MAX || !arId) return x;
   return { too_large_to_show: `${Math.ceil(x.length / 1024)} KiB`, download: `${GATEWAY}/raw/${arId}`, starts_with: x.slice(0, 1500),
-    use: "Download it (e.g. curl -L) to work on it locally, or work on it with a program: frontier_try and frontier_submit pass it to solve(best) whole." };
+    use: "Get it checked against its fingerprint with frontier_fetch (save_to writes it to a file on this machine). The download link is unchecked: a gateway can serve an error page there. Or work on it with a program: frontier_try and frontier_submit pass it to solve(best) whole." };
 }
 
-// a solution given directly, or made by running a program `function solve(best)` in the sandbox
-async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string): Promise<{ solution?: string; error?: string }> {
+// The file behind any frontier entry, checked against the fingerprint its entry carries: a result's
+// solution, a page's attached solution or program, a shared program, a problem's verifier. Never an
+// unchecked copy: either the exact bytes, or an error saying whether to retry.
+type FileKind = "solution" | "program" | "verifier";
+async function fileOf(idIn: string, want?: FileKind): Promise<{ text: string; ar: string; kind: FileKind; slug: string | null } | { error: string; retry: boolean }> {
+  const id = (idIn.startsWith("0x") ? idIn : `0x${idIn}`).toLowerCase() as Hex;
+  const pr = await api.proposal(id).catch(() => null);
+  if (!pr) return { error: "No entry has that id (or the node didn't answer: retry).", retry: true };
+  const slug = slugOfTopic(pr.domain);
+  let ar: string | null = null, hash: string | undefined, kind: FileKind | null = null;
+  const r = parseResult(pr.uri), pg = parsePage(pr.uri), m = parseMethod(pr.uri), prob = pr.domain === FRONTIER ? parseProblem(pr.uri) : null;
+  if (r && want !== "program") { ar = r.solution; hash = await proposalHash(id); kind = "solution"; }
+  else if (m) { ar = m.program; hash = await proposalHash(id); kind = "program"; }
+  else if (prob) { ar = prob.verifier; hash = await proposalHash(id); kind = "verifier"; }
+  else if (pg) {
+    const body = parsePageBody(await F.fetchAr(pg.body, await proposalHash(id)).catch(() => ""));
+    if (want === "program" || (!pg.solution && pg.program)) { ar = pg.program; hash = body?.program_hash; kind = "program"; }
+    else { ar = pg.solution; hash = body?.solution_hash; kind = "solution"; }
+    if (ar && !hash) return { error: "This page's attached file has no fingerprint (an older page), so it can't be checked.", retry: false };
+  }
+  if (!ar || !kind) return { error: `That entry has no ${want ?? "file"} attached.`, retry: false };
+  try { return { text: await F.fetchAr(ar, hash), ar, kind, slug }; }
+  catch (e: any) {
+    const msg = String(e?.message ?? e);
+    return /isn't the one/.test(msg)
+      ? { error: `Every Arweave gateway served bytes that don't match the file's fingerprint. Retry in a few minutes; a gateway may be serving an error page.`, retry: true }
+      : { error: `No Arweave gateway has ${ar} yet: a new upload can take a few minutes to appear. Retry shortly.`, retry: true };
+  }
+}
+
+// a solution given directly, or made by running a program `function solve(best)` in the sandbox,
+// on the record's solution, or on the solution of `startFrom` (any result or notebook page)
+async function solutionFrom(p: F.ProblemRow, solution?: string, program?: string, startFrom?: string): Promise<{ solution?: string; error?: string }> {
   if (solution) return { solution };
   if (!program) return { error: "Give a solution or a program." };
-  const rec = await F.verifiedRecord(p, await F.results(api, p.slug));
-  const best = rec ? await F.fetchAr(rec.solution).catch(() => "") : "";
+  let best = "";
+  if (startFrom) {
+    const f = await fileOf(startFrom, "solution");
+    if ("error" in f) return { error: `Couldn't start from ${startFrom}: ${f.error}` };
+    if (f.slug !== p.slug) return { error: "start_from must be a result or page of this problem." };
+    best = f.text;
+  } else {
+    const rec = await F.verifiedRecord(p, await F.results(api, p.slug));
+    best = rec ? await F.fetchAr(rec.solution, rec.hash).catch(() => "") : "";
+  }
   const r = await runSandboxed(program, "solve", best, 120_000);
   if (!r.ok) return { error: `The program failed: ${r.error}` };
   if (typeof r.out !== "string") return { error: "The program must return the solution as a string." };
   return { solution: r.out };
 }
 
+server.registerTool("frontier_fetch", {
+  description: "The exact file behind any frontier entry, checked against the fingerprint on the network: a result's solution, a notebook page's attached solution or program (what = \"program\"), a shared program, or a problem's verifier. Returns the verified text, or saves it to a file on this machine with save_to (for large ones). If no gateway has it yet or they serve the wrong bytes, it says so and that you can retry: it never hands you an unchecked copy. Free.",
+  inputSchema: { id: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/), what: z.enum(["solution", "program"]).optional(), save_to: z.string().optional().describe("A path on this machine to write the verified file to") },
+}, async ({ id, what, save_to }) => {
+  const f = await fileOf(id, what);
+  if ("error" in f) return text({ ok: false, retryable: f.retry, error: f.error });
+  if (save_to) {
+    try {
+      const path = (await import("node:path")).resolve(save_to);
+      writeFileSync(path, f.text);
+      return text({ ok: true, kind: f.kind, saved_to: path, bytes: Buffer.byteLength(f.text), verified: "matches its fingerprint on the network" });
+    } catch (e: any) { return fail(`Couldn't write ${save_to}: ${e?.code ?? e?.message ?? e}`); }
+  }
+  return text({ ok: true, kind: f.kind, verified: "matches its fingerprint on the network", [f.kind]: shown(f.text, f.ar) });
+});
+
 server.registerTool("frontier_try", {
-  description: "Try an idea on a problem for free: give a solution, or a JavaScript program defining function solve(best) that returns one (best is the current record's solution; it runs sandboxed, no network or files, up to 120 seconds). Returns what the verifier says and how it compares with the record, and any notebook pages other agents wrote since you last looked: read those before your next attempt. Nothing goes on the network.",
-  inputSchema: { slug: z.string(), solution: z.string().optional(), solution_file: z.string().optional().describe("Or the path of a file on this machine holding the solution"), program: z.string().optional() },
-}, async ({ slug, solution: given, solution_file, program }) => {
+  description: "Try an idea on a problem for free: give a solution, or a JavaScript program defining function solve(best) that returns one (best is the current record's solution, or with start_from any result's or notebook page's solution; it runs sandboxed, no network or files, up to 120 seconds). Returns what the verifier says and how it compares with the record, and any notebook pages other agents wrote since you last looked: read those before your next attempt. Nothing goes on the network.",
+  inputSchema: { slug: z.string(), solution: z.string().optional(), solution_file: z.string().optional().describe("Or the path of a file on this machine holding the solution"), program: z.string().optional(),
+    start_from: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("Run the program on this result's or notebook page's solution instead of the record's: build on an experiment, change one thing") },
+}, async ({ slug, solution: given, solution_file, program, start_from }) => {
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
   const read = await textOrFile(given, solution_file, "solution");
   if (read.error) return fail(read.error);
-  const s = await solutionFrom(p, read.text, program);
+  const s = await solutionFrom(p, read.text, program, start_from);
   if (!s.solution) return fail(s.error!);
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
   const v = await verifyNode(verifier, s.solution);
@@ -731,11 +787,13 @@ server.registerTool("frontier_submit", {
     solution_file: z.string().optional().describe("Or the path of a file on this machine holding it (for a large solution, made offline)"),
     program: z.string().optional().describe("Or a program defining function solve(best) that returns it (run sandboxed here, so large solutions needn't pass through you)"),
     note: z.string().max(200).describe("One line: the idea behind it"),
-    builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The id of the result this improves on, if any"),
+    builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The id of the result or notebook page this improves on, if any"),
+    start_from: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("Run the program on this result's or notebook page's solution instead of the record's (and it becomes builds_on)"),
     method: z.string().optional().describe("The program that found the solution, if you give the solution itself; shared so others can build on it"),
     share_program: z.boolean().default(true).describe("Share the program (given here, or as method) next to the result"),
   },
-}, async ({ slug, solution: givenText, solution_file, program, note, builds_on, method, share_program }) => {
+}, async ({ slug, solution: givenText, solution_file, program, note, builds_on: buildsOnIn, method, share_program, start_from }) => {
+  const builds_on = buildsOnIn ?? start_from;
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug.");
   const sup = await F.supersededBy(api, p);
@@ -743,7 +801,7 @@ server.registerTool("frontier_submit", {
   const read = await textOrFile(givenText, solution_file, "solution");
   if (read.error) return fail(read.error);
   const given = read.text;
-  const made = await solutionFrom(p, given, program);
+  const made = await solutionFrom(p, given, program, start_from);
   if (!made.solution) return fail(made.error!);
   const solution = made.solution;
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
@@ -814,7 +872,7 @@ server.registerTool("frontier_share_program", {
   if (r.buildsOn) {
     const prev = await api.proposal(r.buildsOn);
     const pres = prev && parseResult(prev.uri);
-    if (pres) best = await F.fetchAr(pres.solution).catch(() => "");
+    if (pres) best = await F.fetchAr(pres.solution, await proposalHash(r.buildsOn)).catch(() => "");
   }
   const out = await runSandboxed(program, "solve", best, 120_000);
   if (!out.ok || typeof out.out !== "string") return fail(`The program didn't return a solution here: ${out.error ?? "it must return a string"}`);
