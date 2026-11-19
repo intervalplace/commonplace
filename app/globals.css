@@ -378,3 +378,7 @@ body[class*="st-"] .cp-backdrop:not(.cp-side) { background: rgba(0,0,0,0.45); }
 .cp-csdname:hover { text-decoration: underline; }
 .cp-page.digest { border-color: var(--accent); }
 .cp-page .cp-meta .over { color: #a24a3a; }
+.cp-guide-way { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.cp-guide-way h2 .cp-hint { font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+.cp-guide-way ol, .cp-guide-way ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.cp-guide-way p { margin: 0; }
