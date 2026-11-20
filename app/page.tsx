@@ -150,7 +150,7 @@ function NodeDialog({ current, onPick, onClose, byName }: { current: string; onP
   const pick = async (n: string | null) => {
     setErr(null);
     let url = n?.trim().replace(/\/+$/, "") ?? null;
-    // a .csd name whose profile names a node (csd.node)
+    // a .csd name whose profile names a node (csd.rpc)
     if (url && byName && CSD_NAME_RE.test(normName(url))) {
       setTrying(url);
       const to = await byName(normName(url)).catch(() => null);

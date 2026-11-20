@@ -16,7 +16,7 @@
 //
 // What a name points to: its address (`nset`, else its owner), and keys in its profile (`nprofile`),
 // as agreed with Cairn: `contenthash` (ipfs://<CIDv1>) for a site, `url` for a link, and a node to
-// read the network through (key still to be settled; `csd.node` for now).
+// read the network through (`csd.rpc`; see nodeOf).
 import { bytesToHex, deserializeTx, hexToBytes, signerOf, txid, type Hex, type Tx } from "./csd";
 import type { Verified } from "./light";
 
@@ -212,9 +212,24 @@ export function targetOf(n: CsdName): Target | null {
   if (url && /^https:\/\/\S+$/.test(url)) return { kind: "url", url };
   return n.addr ? { kind: "page", addr: n.addr } : null;
 }
+// A node to read the network through: `csd.rpc` (CairnX convention, section 36), either an https
+// base URL with no credentials, query or fragment, or a gateway's multiaddr ending in its peer id.
+// `csd.node`, the key used before that was settled, is still read. Never an address on the reader's
+// own computer or network (loopback, link-local, private): a profile can't point a page at those.
+const PRIVATE_V4 = /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+const privateHost = (h: string) => {
+  h = h.toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") || PRIVATE_V4.test(h)
+    || h === "::" || h === "::1" || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^::ffff:/.test(h);
+};
 export const nodeOf = (n: CsdName): string | null => {
-  const v = n.state === "held" ? n.profile["csd.node"] : undefined;
-  return v && (/^https?:\/\/\S+$/.test(v) || /^\/(ip4|ip6|dns4|dns6|dns)\/\S+$/.test(v)) ? v : null;
+  if (n.state !== "held") return null;
+  const v = (n.profile["csd.rpc"] ?? n.profile["csd.node"] ?? "").trim();
+  if (/^https:\/\/[^\s?#@]+$/.test(v)) {
+    try { const u = new URL(v); return u.username || u.password || privateHost(u.hostname) ? null : v.replace(/\/+$/, ""); } catch { return null; }
+  }
+  const m = /^\/(ip4|ip6|dns4|dns6|dns)\/([^/\s]+)\/\S*\/p2p\/[1-9A-HJ-NP-Za-km-z]{40,60}$/.exec(v);
+  return m && !privateHost(m[2]) ? v : null;
 };
 
 // Someone's .csd name: the one Cairn's rules make their primary (a name they hold that points to
