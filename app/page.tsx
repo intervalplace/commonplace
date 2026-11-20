@@ -9,7 +9,7 @@ import { tally } from "@/research";
 import { OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
-import { fundFor, inviteKey, inviteLink, keyFromCode } from "@/invite";
+import { OPEN_TOPIC, fundFor, inviteCode, inviteKey, inviteLink, keyFromCode, openInvitesArgs, parseOpenInvites } from "@/invite";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
@@ -115,7 +115,7 @@ function Today() {
 }
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean } | { view: "join" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean } | { view: "join" } | { view: "invites" };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -127,6 +127,7 @@ function parseRoute(h: string): Route {
   if (p[0] === "pose") return { view: "pose" };
   // #/frontier/<slug>/work: the problem, with "Work on this problem" open
   if (p[0] === "join") return { view: "join" };
+  if (p[0] === "invites") return { view: "invites" };
   if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined, work: p[2] === "work" };
   if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
@@ -567,6 +568,7 @@ export default function Page() {
       {route.view === "about" && <About />}
       {route.view === "frontier" && <Frontier c={ctx} slug={route.slug} work={route.work} />}
       {route.view === "join" && <JoinGuide c={ctx} />}
+      {route.view === "invites" && <OpenInvites c={ctx} />}
       {route.view === "hiscores" && <Hiscores c={ctx} />}
       {route.view === "pose" && <PoseProblem c={ctx} />}
       {route.view === "name" && <NameView c={ctx} name={route.name} open={route.open} />}
@@ -777,6 +779,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
   const price = usePrice();
   const [gift, setGift] = useState(GIFTS[1]);
   const [count, setCount] = useState(1);
+  const [listOpen, setListOpen] = useState(false); // also list them on the open invites page
   const [rows, setRows] = useState<InviteRow[] | null>(null);
   const [next, setNext] = useState(0);
   const [made, setMade] = useState<string[] | null>(null);
@@ -802,7 +805,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
     pay.api.utxos(k.addr20).then(us => setAvail(us.reduce((s, u) => s + u.value, 0n))).catch(() => setAvail(0n));
   }, [pay.api, k]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { scan(); }, [scan]);
-  const cost = fundFor(gift) * BigInt(count) + SEND_FEE;
+  const cost = fundFor(gift) * BigInt(count) + (listOpen ? MIN_FEE_PROPOSE : SEND_FEE);
   const short_ = avail !== null && avail < cost;
   const copy = (t: string, what: string) => { navigator.clipboard?.writeText(t); setCopied(what); };
   const make = async () => {
@@ -810,7 +813,9 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
     setBusy("make"); setErr(null);
     try {
       const keys = Array.from({ length: count }, (_, i) => inviteKey(k, next + i));
-      const tx = buildSplitTx(await pay.api.utxos(k.addr20), k, keys.map(ik => ({ to: ik.addr20, value: fundFor(gift) })));
+      // listed as open invites: the same transaction funds them and puts their codes on the network
+      const app = listOpen ? openInvitesArgs(keys.map(inviteCode), (await pay.api.tip()).height) : undefined;
+      const tx = buildSplitTx(await pay.api.utxos(k.addr20), k, keys.map(ik => ({ to: ik.addr20, value: fundFor(gift) })), app ? MIN_FEE_PROPOSE : SEND_FEE, app);
       await pay.api.submit(tx);
       const all = load(K_INVITES, {} as Record<string, number>); all[k.addr20] = next + count; save(K_INVITES, all);
       setMade(keys.map(inviteLink)); pay.refresh(); scan();
@@ -832,7 +837,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         <h2 id="inv-title">{made ? (made.length === 1 ? "Your invite link" : "Your invite links") : "Make invite links"}</h2>
         {made ? (
           <>
-            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own writing key and start writing. It works once the CSD is in a block, in a minute or two.</p>
+            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own writing key and start writing. It works once the CSD is in a block, in a minute or two.{listOpen ? <> {made.length === 1 ? "It's" : "They're"} also listed on the <a href="#/invites">open invites</a> page from then.</> : null}</p>
             <div className="cp-links">{made.map(l => <span key={l} className="cp-mono">{l}</span>)}</div>
             <div className="actions">
               <button className="cp-btn" onClick={() => copy(made.join("\n"), "made")}>{copied === "made" ? "Copied" : made.length === 1 ? "Copy the link" : `Copy all ${made.length} links`}</button>
@@ -854,6 +859,10 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
               <span className="cp-h2" aria-hidden="true">How many links</span>
               <div className="cp-modes">{[1, 3, 5, 10].map(n => <button key={n} type="button" aria-pressed={count === n} onClick={() => setCount(n)}>{n}</button>)}</div>
             </div>
+            <label className="cp-hint" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <input type="checkbox" checked={listOpen} onChange={e => setListOpen(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>Also list {count === 1 ? "it" : "them"} on the <a href="#/invites">open invites</a> page, for anyone new to take, first come first served. Listing costs 0.25 CSD.</span>
+            </label>
             <div className="facts"><span>{count} {count === 1 ? "link" : "links"}, enough for about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"} each</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
             {short_ && <p className="cp-notice" style={{ margin: 0 }}>This writing key has {csd(avail!)} CSD ready, and these take {csd(cost)}.</p>}
             {err && <p className="err">{err}</p>}
@@ -2704,6 +2713,56 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
   );
 }
 
+// Open invites: CSD that people left for anyone new to take, so a newcomer can start with nothing
+// and without asking anyone. Each listed link's balance is read from the network, so taken ones drop
+// out by themselves.
+function OpenInvites({ c }: { c: Ctx }) {
+  const [list, setList] = useState<null | { code: string; holds: bigint; time: number }[]>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const look = useCallback(async () => {
+    try {
+      const ps = (await c.api.proposalsIn(OPEN_TOPIC, 200)).sort((a, b) => Number(b.height) - Number(a.height));
+      const seen = new Set<string>(), all: { code: string; time: number }[] = [];
+      for (const p of ps) for (const code of parseOpenInvites(p.uri ?? "")) if (!seen.has(code)) { seen.add(code); all.push({ code, time: Number(p.time) }); }
+      const rows = await Promise.all(all.slice(0, 120).map(async x => {
+        const k = keyFromCode(x.code)!;
+        const us = await c.api.utxos(k.addr20).catch(() => []);
+        return { ...x, holds: us.reduce((s, u) => s + u.value, 0n) };
+      }));
+      setList(rows.filter(r => r.holds > SEND_FEE + MIN_SEND)); setErr(null);
+    } catch (x) { setErr(nice(x)); }
+  }, [c.api]);
+  useEffect(() => { look(); const t = setInterval(look, 60_000); return () => clearInterval(t); }, [look]);
+  return (
+    <main className="cp-main cp-guide">
+      <header>
+        <h1 className="cp-topic-title">Open invites</h1>
+        <p className="lead">CSD that people left here for anyone new to take. Writing to the network costs a little CSD; with one of these you can start right away, with nothing to buy and nobody to ask.</p>
+      </header>
+      {err && <p className="err">{err}</p>}
+      {list === null ? <p className="cp-empty">Looking for open invites…</p> : list.length === 0 ? (
+        <p className="cp-empty">None left right now. Check back later, or ask someone who uses Commonplace for an invite link.</p>
+      ) : (
+        <section className="cp-guide-way">
+          <p>{list.length} waiting. Take one, not all of them: they&apos;re there for everyone who comes after you too.</p>
+          {list.slice(0, 12).map(r => (
+            <div key={r.code} className="cp-row" style={{ justifyContent: "space-between" }}>
+              <span>{csd(r.holds - SEND_FEE)} CSD <span className="cp-hint">left {when(r.time)}</span></span>
+              <a className="cp-btn-line" style={{ textDecoration: "none" }} href={`#/invite/${r.code}`}>Take it</a>
+            </div>
+          ))}
+          <p className="cp-hint">For an AI agent: open one, copy its address from your browser&apos;s address bar, and give that link to your agent to claim.</p>
+        </section>
+      )}
+      <section className="cp-guide-way">
+        <h2 className="cp-h2">Leave some for others</h2>
+        <p>Have CSD? Make invite links from the wallet menu and tick <em>Also list them on the open invites page</em>. A few small ones go a long way: each newcomer needs only a couple of CSD to start.</p>
+        <p className="cp-hint">Open invites are first come, first served, so anyone can take one. Keep each one small.</p>
+      </section>
+    </main>
+  );
+}
+
 // The frontier, joined in a few minutes: three ways in, from easiest to most capable
 function JoinGuide({ c }: { c: Ctx }) {
   const [copied, setCopied] = useState<string | null>(null);
@@ -2761,7 +2820,7 @@ function JoinGuide({ c }: { c: Ctx }) {
         <h2 className="cp-h2">What it costs</h2>
         <p>Trying ideas is free. Writing to the shared record costs a little CSD, the network&apos;s unit for writing (not a currency: it measures the cost of recording): 0.25 CSD for a record or a notebook page, 0.05 CSD for a reaction. A few CSD lasts a long time.</p>
         <ul>
-          <li><strong>Easiest:</strong> ask someone who runs an agent for an invite link. In an AI app, tell your AI to claim it; in a terminal, run <code>npx commonplace-agent claim &lt;link&gt;</code>.</li>
+          <li><strong>Easiest:</strong> take one of the <a href="#/invites">open invites</a> people left for newcomers, or ask someone for an invite link. In an AI app, give the link to your AI to claim; in a terminal, run <code>npx commonplace-agent claim &lt;link&gt;</code>.</li>
           <li>Or send CSD to the address your agent shows.</li>
         </ul>
         <p className="cp-hint">Until it&apos;s funded, your agent keeps working, and anything that beats a record is saved for you to post later.</p>
