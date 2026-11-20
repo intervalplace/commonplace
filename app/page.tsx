@@ -58,7 +58,7 @@ function chooseNode(n: string | null) {
 const OWN_NODE = "http://127.0.0.1:8789";
 const NODE_APP = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
 const RELEASES = "https://github.com/intervalplace/commonplace/blob/main/RELEASES.md";
-const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.1.8/";
+const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.2.0/";
 // the node in use: the last one that answered, or else the first to try
 function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
 // the first node that answers, starting after the one that just failed
@@ -167,7 +167,7 @@ function NodeDialog({ current, onPick, onClose, byName }: { current: string; onP
       catch {
         setTrying(null);
         return setErr(url === OWN_NODE
-          ? "No node answers on this computer. Is Compute Substrate Node open? If your browser asked whether this site may reach devices on your network, allow it and try again."
+          ? "No node answers on this computer. Is Doorway open? If your browser asked whether this site may reach devices on your network, allow it and try again."
           : `${url} doesn't answer, or doesn't let this site read it.`);
       }
       setTrying(null);
@@ -189,9 +189,9 @@ function NodeDialog({ current, onPick, onClose, byName }: { current: string; onP
         <p className="cp-hint" style={{ margin: 0 }}>Everything on this page comes from a Compute Substrate node, and what you write goes out through it. Any node holds the same network; with your own, you don&apos;t rely on anyone else&apos;s.</p>
         <div className="cp-node-rows">
           <Row n={null} label="The public nodes" hint={`${NODES.map(n => n.replace(/^https?:\/\//, "")).join(", ")}${NODES.length > 1 ? ", whichever answers" : ""}`} />
-          <Row n={OWN_NODE} label="Your own, on this computer" hint="Run by Compute Substrate Node, while it's open" />
+          <Row n={OWN_NODE} label="Your own, on this computer" hint="Run by Doorway, while it's open" />
         </div>
-        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? Compute Substrate Node, an app, runs one: download it for <a href={`${NODE_APP_DL}Compute-Substrate-Node-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Compute-Substrate-Node-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
+        <p className="cp-hint" style={{ margin: 0 }}>No node of your own yet? Doorway, an app, runs one: download it for <a href={`${NODE_APP_DL}Doorway-macOS.dmg`}>Mac</a> or <a href={`${NODE_APP_DL}Doorway-Windows-setup.exe`}>Windows</a>, open it, and choose it here once it&apos;s up to date. <a href={NODE_APP} target="_blank" rel="noreferrer noopener">More about it</a></p>
         <form className="cp-row" style={{ gap: 10 }} onSubmit={e => { e.preventDefault(); if (other.trim()) pick(other); }}>
           <input className="cp-node-input" value={other} onChange={e => setOther(e.target.value)} placeholder="Another node: a .csd name, https://…, or /ip4/…" spellCheck={false} aria-label="Another node's address" />
           <button className="cp-btn-line" disabled={!other.trim() || !!trying}>Use it</button>
@@ -1670,7 +1670,7 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
           <p style={{ margin: 0 }}>
             {target?.kind === "page" && <>Points to the page of <Who addr={target.addr} size={20} /> <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={hrefPerson(target.addr)}>Open it</a></>}
             {target?.kind === "ipfs" && <>Points to a site on IPFS
-              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`${HANDLER}:${res.name}`}>Open in Compute Substrate Node</a>
+              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`${HANDLER}:${res.name}`}>Open in Doorway</a>
               <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={gatewayUrl(target.cid)} target="_blank" rel="noreferrer noopener">Open through a gateway</a>
               <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>The app downloads the site, checks every byte against this address, and opens it from your own computer. A gateway (dweb.link) is quicker if you don&apos;t have the app, but you take its word for what it sends.</span></>}
             {target?.kind === "url" && <>Points to <a href={target.url} rel="noreferrer noopener">{target.url}</a></>}
@@ -1699,7 +1699,7 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
             {handler === "unsupported" && <span className="cp-hint">This browser didn&apos;t allow it.</span>}
           </div>
         ) : (
-          <p className="cp-hint" style={{ margin: 0 }}>This browser can&apos;t be told what opens them: Safari can&apos;t, and on iPhone and iPad no browser can, since they all run on Safari&apos;s engine. On a computer, Chrome, Firefox and Edge can, and so can the Compute Substrate Node app.</p>
+          <p className="cp-hint" style={{ margin: 0 }}>This browser can&apos;t be told what opens them: Safari can&apos;t, and on iPhone and iPad no browser can, since they all run on Safari&apos;s engine. On a computer, Chrome, Firefox and Edge can, and so can the Doorway app.</p>
         )}
         <p className="cp-hint" style={{ margin: 0 }}>A name points to a site through its profile on Cairn: <span className="cp-mono">contenthash</span> as <span className="cp-mono">ipfs://…</span> for a site on IPFS, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
       </section>
