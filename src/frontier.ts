@@ -93,9 +93,9 @@ export type Page = { score: number | null; body: string; solution: string | null
 // on: what it started from, what it held fixed, how long it searched, and how it came out. A digest
 // is a page that sums up the notebook so far (kind "digest"); its prose fields are what's settled
 // (tried), what stands in the way (stalled) and the open leads, ranked (next).
-export const OUTCOMES = ["in_progress", "timed_out", "ruled_out", "improved", "stalled"] as const;
+export const OUTCOMES = ["in_progress", "timed_out", "ruled_out", "improved", "matched", "stalled"] as const;
 export type Outcome = typeof OUTCOMES[number];
-export const OUTCOME_WORDS: Record<Outcome, string> = { in_progress: "in progress", timed_out: "timed out", ruled_out: "ruled out under its restrictions", improved: "improved on what it built on", stalled: "stalled" };
+export const OUTCOME_WORDS: Record<Outcome, string> = { in_progress: "in progress", timed_out: "timed out", ruled_out: "ruled out under its restrictions", improved: "improved on what it built on", matched: "matched the record, didn't beat it", stalled: "stalled" };
 export type PageBody = { tried: string; stalled: string; next: string; solution_hash?: string; program_hash?: string;
   builds_on?: Hex; restrictions?: string; budget?: string; outcome?: Outcome; kind?: "digest"; covers?: number };
 export const DIGEST_EVERY = 15; // pages since the last digest before a new one is asked for

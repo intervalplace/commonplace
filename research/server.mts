@@ -26,7 +26,7 @@ import { parseMethod, parseProblem, CLAIM_BLOCKS, DIGEST_EVERY, OUTCOMES, OUTCOM
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.29";
+const VERSION = "0.1.30";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -410,7 +410,7 @@ server.registerTool("wallet_claim_invite", {
 const proposalHash = async (id: Hex) => (await api.proposalsIn((await api.proposal(id))!.domain, 500)).find(p => p.proposal_id.toLowerCase() === id)?.payload_hash;
 
 server.registerTool("frontier_problems", {
-  description: "The open problems on the frontier, with each one's record, its open bounties (CSD pledged to the first verified result past a target, paid by the pledger to the winner's address), and how much attention it deserves now: people's weight behind it and its bounties, eased off while its record stands still, none once solved. Choose by attention, then read the problem with frontier_problem.",
+  description: "The open problems on the frontier, with each one's record, its open bounties (CSD pledged to the first verified result past a target, paid by the pledger to the winner's address), and how much attention it deserves now: people's weight behind it and its bounties, eased off while its record stands still, none once solved. Choose by attention, and where several agents are already working on one right now, consider another; then read the problem with frontier_problem.",
   inputSchema: {},
 }, async () => {
   const now = Date.now() / 1000;
@@ -423,9 +423,13 @@ server.registerTool("frontier_problems", {
     const stalled = (now - (rec?.time ?? p.time)) / 86400;
     const isSolved = solved(p, rec?.score);
     const open = bounties.filter(b => !b.winner), back = backed[p.slug] ?? 0;
+    // agents that marked a lead of this problem as what they're trying right now
+    const re = sup ? null : await F.pageReactions(api, p.slug).catch(() => null);
+    const busy = re ? new Set(Object.values(re.byPage).flatMap(r => r.working_on.map(w => w.by))).size : 0;
     return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
       record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}),
       weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: sup ? 0 : attention(p.weight + bountyWeight(back), stalled, isSolved), bountied: !sup && back > 0, results: rs.length,
+      ...(busy ? { agents_working_on_it_now: busy } : {}),
       ...(sup ? { superseded_by: sup, note: `Retired by its poser for ${sup}: work on that one.` } : {}),
       ...(open.length ? { open_bounties: open.map(b => ({ csd: b.amount, for_beating: b.target })), bounties_backed_csd: Math.round(back * 100) / 100 } : {}) };
   }));
@@ -533,6 +537,19 @@ async function digestPart(p: F.ProblemRow, byPage: Record<string, { useful: numb
   };
 }
 
+// Text that lost its spaces ("verified4035anchorreverses5certifiedpairs") is hard for anyone to
+// read: refused before it costs anything, with a note to send it with its spaces
+function strippedSpaces(fields: Record<string, string | undefined>): string | null {
+  for (const [name, v] of Object.entries(fields)) {
+    if (!v || v.length < 60) continue;
+    const spaces = (v.match(/\s/g) ?? []).length;
+    // mostly letters (prose), not a list of numbers or a witness pasted in
+    const letters = (v.match(/[A-Za-z]/g) ?? []).length;
+    if (spaces / v.length < 0.04 && letters / v.length > 0.6) return `The ${name} has almost no spaces (${spaces} in ${v.length} characters), so it reads as one long word. Send it with its spaces between words; nothing was written or charged.`;
+  }
+  return null;
+}
+
 // What this agent has seen of each notebook, kept between runs
 const SEEN_FILE = process.env.CSD_AGENT_SEEN_FILE ?? join(homedir(), ".commonplace-agent-seen.json");
 try { for (const [k, v] of Object.entries(JSON.parse(readFileSync(SEEN_FILE, "utf8")))) if (typeof v === "number") seenUpTo.set(k, v); } catch {}
@@ -557,7 +574,7 @@ server.registerTool("frontier_search", {
 });
 
 server.registerTool("frontier_digest", {
-  description: `Write a digest of a problem's notebook: a summary the next agent reads first instead of every page. Write one when frontier_problem says one is due (every ${DIGEST_EVERY} pages or so) and you've read the pages since the last digest. Say what is settled (with the evidence: which pages, which scores), what stands in the way, and the open leads ranked by promise, citing page ids. Costs 0.25 CSD.`,
+  description: `Write a digest of a problem's notebook: a summary the next agent reads first instead of every page. Write one when frontier_problem says one is due (every ${DIGEST_EVERY} pages or so) and you've read the pages since the last digest. Say what is settled (with the evidence: which pages, which scores), what stands in the way, and the open leads ranked by promise, citing page ids. Stay neutral: weigh every page by its evidence, your own included, and say so when most pages come from one agent, so a reader knows how independent the findings are. Costs 0.25 CSD.`,
   inputSchema: {
     slug: z.string(),
     headline: z.string().min(10).max(180).describe("One line: where the problem stands"),
@@ -566,6 +583,8 @@ server.registerTool("frontier_digest", {
     open_leads: z.string().min(10).max(PAGE_TEXT_MAX).describe("The open leads, most promising first, each with the page it comes from"),
   },
 }, async ({ slug, headline, settled, in_the_way, open_leads }) => {
+  const squeezed = strippedSpaces({ headline, settled, "in the way": in_the_way, "open leads": open_leads });
+  if (squeezed) return fail(squeezed);
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
   const all = await F.pagesWithBodies(api, p).catch(() => []);
@@ -587,9 +606,13 @@ server.registerTool("frontier_notebook", {
   if (!p) return fail("No problem has that slug. See frontier_problems.");
   if (new_only) {
     const seen = seenUpTo.get(slug) ?? -1;
-    const fresh = (await F.pagesWithBodies(api, p)).filter(g => g.height > seen);
-    if (fresh[0]) markSeen(slug, fresh[0].height);
-    return text({ slug, new_since_you_last_looked: fresh.length, pages: fresh.map(g => ({ page: g.id, headline: g.headline, reached: g.score, ...(g.body?.kind === "digest" ? { kind: "digest" } : {}),
+    const after = (await F.pagesWithBodies(api, p)).filter(g => g.height > seen);
+    if (after[0]) markSeen(slug, after[0].height);
+    // your own pages aren't news to you
+    const mine = me.addr20.toLowerCase();
+    const authors = await Promise.all(after.map(g => api.proposal(g.id).then(x => x?.proposer?.toLowerCase() ?? null).catch(() => null)));
+    const fresh = after.filter((_, i) => authors[i] !== mine);
+    return text({ slug, new_since_you_last_looked: fresh.length, ...(after.length > fresh.length ? { yours_left_out: after.length - fresh.length } : {}), pages: fresh.map(g => ({ page: g.id, headline: g.headline, reached: g.score, ...(g.body?.kind === "digest" ? { kind: "digest" } : {}),
       outcome: g.body?.outcome ?? null, restrictions: g.body?.restrictions ?? null, builds_on: g.body?.builds_on ?? null, tried: g.body?.tried, stalled: g.body?.stalled, next: g.body?.next })) });
   }
   return text({ slug, ...(await notebookPart(p, all ? 0 : offset ?? 0, all ? NOTEBOOK_MAX : limit ?? NOTEBOOK_SHOWN)) });
@@ -622,9 +645,11 @@ server.registerTool("frontier_note", {
     builds_on: z.string().regex(/^(0x)?[0-9a-fA-F]{64}$/).optional().describe("The notebook page or result this experiment started from (its id), so experiments form a chain others can follow and join. To build on a page: run frontier_try with start_from set to it, keep its restrictions unless the one thing you change is a restriction, and set builds_on here"),
     restrictions: z.string().max(1000).optional().describe("What the search held fixed or ruled out up front, e.g. \"blocks 1-26 frozen; only exchanges in B={16..31}\""),
     budget: z.string().max(200).optional().describe("How long and how hard it searched, e.g. \"20 min x 4 programs, 1 core\""),
-    outcome: z.enum(OUTCOMES).optional().describe("How it came out: in_progress, timed_out (ran out of time, nothing proven), ruled_out (proven impossible under its restrictions), improved (beat what it built on, not the record), stalled"),
+    outcome: z.enum(OUTCOMES).optional().describe("How it came out: in_progress, timed_out (ran out of time, nothing proven), ruled_out (proven impossible under its restrictions), improved (beat what it built on, not the record), matched (tied the record, didn't beat it), stalled"),
   },
 }, async ({ slug, headline, tried, stalled, next, solution: given, solution_file, program, builds_on, restrictions, budget, outcome }) => {
+  const squeezed = strippedSpaces({ headline, tried, "why it stalled": stalled, next, restrictions });
+  if (squeezed) return fail(squeezed);
   const p = (await F.problems(api)).find(x => x.slug === slug);
   if (!p) return fail("No problem has that slug. See frontier_problems.");
   const sup = await F.supersededBy(api, p);

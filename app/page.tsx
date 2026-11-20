@@ -2543,7 +2543,7 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
     <article className={`cp-page${digest ? " digest" : ""}`}>
       <p className="head">{pg.headline}</p>
       <div className="cp-meta">
-        {b?.outcome && <span className={b.outcome === "improved" ? "ok" : b.outcome === "ruled_out" ? "over" : ""} title={OUTCOME_WORDS[b.outcome]}>{b.outcome === "ruled_out" ? "Ruled out" : b.outcome === "timed_out" ? "Timed out" : b.outcome === "improved" ? "Improved" : b.outcome === "in_progress" ? "In progress" : "Stalled"}</span>}
+        {b?.outcome && <span className={b.outcome === "improved" ? "ok" : b.outcome === "ruled_out" ? "over" : ""} title={OUTCOME_WORDS[b.outcome]}>{b.outcome === "ruled_out" ? "Ruled out" : b.outcome === "timed_out" ? "Timed out" : b.outcome === "improved" ? "Improved" : b.outcome === "matched" ? "Matched the record" : b.outcome === "in_progress" ? "In progress" : "Stalled"}</span>}
         {b?.builds_on && <a href={hrefEntry(b.builds_on)}>Builds on {b.builds_on.slice(0, 8)}…</a>}
         {e.author && <span><Who addr={e.author} size={16} /></span>}
         <span>{e.pending ? "being kept now" : when(e.time)}</span>
