@@ -115,7 +115,7 @@ function Today() {
 }
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean } | { view: "join" } | { view: "invites" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean; site?: string } | { view: "join" } | { view: "invites" };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -133,7 +133,9 @@ function parseRoute(h: string): Route {
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
   // .csd names: #/names, and #/n/<name> (with /open when it came from a web+csd: link: go where it points)
   if (p[0] === "names") return { view: "name" };
-  if (p[0] === "n" && p[1]) return { view: "name", name: normName(decodeURIComponent(p[1])), open: p[2] === "open" };
+  // #/n/<name>/site/<cid>: the name's page, with a new site filled in to approve (the Node app's
+  // "Publish a site" opens this)
+  if (p[0] === "n" && p[1]) return { view: "name", name: normName(decodeURIComponent(p[1])), open: p[2] === "open", site: p[2] === "site" && /^b[a-z2-7]{50,100}$/.test(p[3] ?? "") ? p[3] : undefined };
   return { view: "me" };
 }
 const hrefTopic = (t: string) => `#/t/${encodeURIComponent(t)}`;
@@ -571,7 +573,7 @@ export default function Page() {
       {route.view === "invites" && <OpenInvites c={ctx} />}
       {route.view === "hiscores" && <Hiscores c={ctx} />}
       {route.view === "pose" && <PoseProblem c={ctx} />}
-      {route.view === "name" && <NameView c={ctx} name={route.name} open={route.open} />}
+      {route.view === "name" && <NameView c={ctx} name={route.name} open={route.open} site={route.site} />}
       {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
@@ -1618,7 +1620,7 @@ function CheckWarning({ s }: { s: CheckState | null }) {
 const HANDLER = "web+csd";
 // a site on IPFS through a public gateway, each site on its own subdomain (so its own origin)
 const gatewayUrl = (cid: string) => `https://${cid}.ipfs.dweb.link/`;
-function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) {
+function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boolean; site?: string }) {
   const [q, setQ] = useState(name ?? "");
   const [res, setRes] = useState<CsdName | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1682,7 +1684,10 @@ function NameView({ c, name, open }: { c: Ctx; name?: string; open?: boolean }) 
           {res.serverDisagrees && <p className="cp-check bad" style={{ margin: 0 }}>Cairn&apos;s server says this name points somewhere else. What&apos;s shown here is what its proven records say.</p>}
         </section>
       )}
-      {res && res.state === "held" && res.checked && res.owner?.toLowerCase() === c.me?.addr20.toLowerCase() && <NameSiteForm c={c} name={res.name} profile={res.profile} />}
+      {res && res.state === "held" && res.checked && res.owner?.toLowerCase() === c.me?.addr20.toLowerCase() && <NameSiteForm c={c} name={res.name} profile={res.profile} newSite={site} />}
+      {site && res && res.state === "held" && res.checked && res.owner?.toLowerCase() !== c.me?.addr20.toLowerCase() && (
+        <p className="cp-hint">To point {res.name}.csd at your new site, sign in with the Cairn Wallet that holds it.</p>
+      )}
       {res && res.state !== "held" && <p style={{ margin: 0 }}>{res.state === "pending" ? <>Someone is registering <strong>{name}.csd</strong> right now.</> : <>Nobody holds <strong>{name}.csd</strong>{res.state === "lapsed" ? " now; its lease lapsed" : ""}.</>} Names are registered on <a href={onCairn} target="_blank" rel="noreferrer noopener">Cairn</a>.</p>}
       <section className="cp-name-card">
         <span className="cp-h2">Links that open names</span>
@@ -1720,8 +1725,8 @@ function CsdNameTag({ name }: { name: string }) {
 
 // For a name's holder: where it points. Cairn's profile record replaces the whole profile, so every
 // other key the name has is sent along unchanged.
-function NameSiteForm({ c, name, profile }: { c: Ctx; name: string; profile: Record<string, string> }) {
-  const [site, setSite] = useState(profile["contenthash"] ?? "");
+function NameSiteForm({ c, name, profile, newSite }: { c: Ctx; name: string; profile: Record<string, string>; newSite?: string }) {
+  const [site, setSite] = useState(newSite ? `ipfs://${newSite}` : profile["contenthash"] ?? "");
   const [url, setUrl] = useState(profile["url"] ?? "");
   const [state, setState] = useState<null | "sending" | { sent: Hex } | { err: string }>(null);
   const cid = /^(?:ipfs:\/\/)?(b[a-z2-7]{50,100})\/?$/.exec(site.trim())?.[1];
