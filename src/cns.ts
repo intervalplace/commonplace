@@ -36,7 +36,7 @@ export type CsdName = {
   source?: "cairn" | "node";          // whose list of the name's records it was read from
 };
 
-type Light = { checkTx: (txid: Hex) => Promise<Verified>; syncTail: () => Promise<{ height: number }> };
+type Light = { checkTx: (txid: Hex) => Promise<Verified>; syncTail: () => Promise<{ height: number }>; authorOf: (tx: Tx) => Promise<Hex | null> };
 type History = {
   ok: boolean; name: string; tipHeight: number;
   resolve?: { addr?: string; owner?: string; lapsed?: boolean };
@@ -89,15 +89,17 @@ async function nodeHistory(node: NodeSource, tip: number, activation: number): P
 }
 
 // The events that decide one name: its own records, offers selling it, what claims and fills those
-// offers, and the commitment a sealed registration of it revealed
-function touching(core: any, name: string, evs: RawEvent[]): Set<string> {
+// offers, and the commitment a sealed registration of it revealed. A commitment names its author, so
+// each revealing record's author is read from the coin it spends (light.authorOf), not its signature.
+async function touching(core: any, name: string, evs: RawEvent[], light: Light): Promise<Set<string>> {
   const ids = new Set<string>(), offers = new Set<string>(), commits = new Set<string>();
   const recs = evs.map(e => (e.tx.app.kind === "propose" ? { e, rec: core.parseRecord(e.tx.app.uri, bytesToHex(e.tx.app.payloadHash)) } : { e, rec: null }));
   for (const { e, rec } of recs) {
     if (!rec) continue;
     if (rec.name === name) {
       ids.add(e.txid);
-      if (rec.salt && signerOf(e.tx)) commits.add(core.nameCommit(name, rec.salt, signerOf(e.tx)!).toLowerCase());
+      const by = rec.salt ? await light.authorOf(e.tx) : null;
+      if (by) commits.add(core.nameCommit(name, rec.salt, by).toLowerCase());
     }
     if (rec.t === "offer" && rec.give?.name === name) { ids.add(e.txid); offers.add(e.txid); }
   }
@@ -109,7 +111,10 @@ function touching(core: any, name: string, evs: RawEvent[]): Set<string> {
   return ids;
 }
 
-const asEvent = (e: RawEvent, paidToFromOutputs: any) => eventOf({ txid: e.txid, tx: e.tx, author: signerOf(e.tx), height: e.height, index: e.pos, blockHash: "0x" as Hex, depth: 0 }, paidToFromOutputs);
+// `authors`: the proven authors of the events that decide the name. Any other event is only a hint
+// (it decides other names), so its signature stands in for its author there.
+const asEvent = (e: RawEvent, paidToFromOutputs: any, authors?: Map<string, Hex | null>) =>
+  eventOf({ txid: e.txid, tx: e.tx, author: authors?.has(e.txid) ? authors.get(e.txid)! : signerOf(e.tx), height: e.height, index: e.pos, blockHash: "0x" as Hex, depth: 0 }, paidToFromOutputs);
 
 export type NodeSource = { base: string; fetch: typeof fetch };
 
@@ -131,12 +136,14 @@ export async function lookupCsdName(name: string, light: Light, opts: { cairn?: 
   try {
     const tip = (await light.syncTail()).height;
     const evs = await nodeHistory(opts.node, tip, core.ACTIVATION_HEIGHT);
-    const decide = touching(core, name, evs);
+    const decide = await touching(core, name, evs, light);
+    const authors = new Map<string, Hex | null>();
     for (const e of evs) if (decide.has(e.txid)) {
       const v = await light.checkTx(e.txid);
       if (v.height !== e.height || v.index !== e.pos) throw new Error("BAD_PROOF: a record isn't where the node said it is");
+      authors.set(e.txid, v.author);
     }
-    const st = core.resolve(evs.map(e => asEvent(e, core.paidToFromOutputs)).filter((x): x is NonNullable<typeof x> => !!x), tip).names[name];
+    const st = core.resolve(evs.map(e => asEvent(e, core.paidToFromOutputs, authors)).filter((x): x is NonNullable<typeof x> => !!x), tip).names[name];
     const out: CsdName = { name, state: "free", profile: {}, checked: true, source: "node" };
     if (st) {
       out.owner = st.owner as Hex; out.profile = st.profile ?? {};
