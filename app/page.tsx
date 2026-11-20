@@ -58,7 +58,7 @@ function chooseNode(n: string | null) {
 const OWN_NODE = "http://127.0.0.1:8789";
 const NODE_APP = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
 const RELEASES = "https://github.com/intervalplace/commonplace/blob/main/RELEASES.md";
-const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.1.2/";
+const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.1.3/";
 // the node in use: the last one that answered, or else the first to try
 function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
 // the first node that answers, starting after the one that just failed
