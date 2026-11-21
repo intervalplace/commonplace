@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#33467c"/><stop offset="1" stop-color="#202b52"/></linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FBFAF6"/><stop offset="1" stop-color="#ECE8DD"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#sky)"/>
+  <path d="M512 352 L512 360 C448 316 352 300 238 316 L238 736 C352 720 448 736 512 780 C576 736 672 720 786 736 L786 316 C672 300 576 316 512 360 Z" fill="url(#page)"/>
+  <path d="M512 362 L512 774" stroke="#2B3A67" stroke-width="12" stroke-linecap="round" opacity=".55"/>
+  <g stroke="#2B3A67" stroke-width="14" stroke-linecap="round" opacity=".28">
+    <path d="M300 430 C360 422 410 428 452 444"/><path d="M300 500 C360 492 410 498 452 514"/><path d="M300 570 C350 563 392 567 430 580"/>
+    <path d="M572 444 C614 428 664 422 724 430"/><path d="M572 514 C614 498 664 492 724 500"/>
+  </g>
+  <path d="M512 150 C522 200 538 216 588 226 C538 236 522 252 512 302 C502 252 486 236 436 226 C486 216 502 200 512 150 Z" fill="#F2C14E"/>
+</svg>

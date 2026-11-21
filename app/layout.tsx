@@ -12,6 +12,8 @@ import type { Metadata, Viewport } from "next";
 export const metadata: Metadata = {
   title: "Commonplace",
   description: "A notebook that is also a shared memory. Write what you mean; it is kept on Compute Substrate, by everyone and owned by no one.",
+  // an open notebook under a gold star: a thought kept in the sky everyone shares
+  icons: { icon: [{ url: "/icon.svg", type: "image/svg+xml" }, { url: "/favicon.ico", sizes: "48x48" }], apple: "/apple-touch-icon.png" },
 };
 export const viewport: Viewport = { width: "device-width", initialScale: 1 };
 
