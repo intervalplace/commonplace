@@ -1976,6 +1976,7 @@ function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
             <span>Your writing key holds {csd(balance!)} CSD and these take {csd(cost)}. They keep waiting while you add some.</span>
+            <span>Free: take one of the <a href="#/invites" onClick={onClose}>open invites</a> people left for newcomers, if any are left.</span>
             <TopUpFor me={key} />
           </div>
         ) : null}
