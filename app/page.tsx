@@ -430,6 +430,33 @@ export default function Page() {
   useEffect(() => { needAuthors(all.filter(e => e.kind === "style" && !e.pending).map(e => e.id)); }, [all, needAuthors]);
   const byId = useMemo(() => new Map(entries.map(e => [e.id, e])), [entries]);
 
+  // Replies to what you've kept, and which of them are new since you last looked: worked out here,
+  // from the network, with nothing stored anywhere but this browser. (Replies only: they're worth
+  // telling someone about; resonances aren't.)
+  const myEntries = useMemo(() => key ? entries.filter(e => e.author === key.addr20) : [], [entries, key]);
+  const myIds = useMemo(() => new Set(myEntries.map(e => e.id)), [myEntries]);
+  // the topics you've written in are read in full once, so replies to older entries are found too
+  useEffect(() => { for (const t of [...new Set(myEntries.map(e => e.topic))].slice(0, 20)) loadTopic(t); }, [myEntries.length, loadTopic]); // eslint-disable-line react-hooks/exhaustive-deps
+  const repliesToMe = useMemo(() => !key ? [] : entries
+    .filter(e => e.kind === "reply" && e.replyTo && myIds.has(e.replyTo) && !e.pending && !e.hidden && e.author !== key.addr20)
+    .sort((a, b) => b.height - a.height), [entries, myIds, key]);
+  useEffect(() => { needAuthors(entries.filter(e => e.kind === "reply" && e.replyTo && myIds.has(e.replyTo)).map(e => e.id)); }, [entries, myIds, needAuthors]);
+  const seenKey = key ? `commonplace.seen1.${key.addr20}` : "";
+  const [seen, setSeen] = useState(0);
+  useEffect(() => { setSeen(seenKey ? load(seenKey, 0) : 0); }, [seenKey]);
+  // a reply counts as new once its author is known (so your own replies never do)
+  const newReplies = useMemo(() => repliesToMe.filter(e => e.author && e.height > seen), [repliesToMe, seen]);
+  const markRepliesRead = useCallback(() => {
+    const h = Math.max(seen, ...repliesToMe.map(e => e.height));
+    setSeen(h);
+    if (seenKey) save(seenKey, h);
+  }, [repliesToMe, seen, seenKey]);
+  // and in the browser's tab, so it shows from another tab too
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\) /, "");
+    document.title = newReplies.length ? `(${newReplies.length}) ${base}` : base;
+  }, [newReplies.length]);
+
   // which topics to count: those with a Commonplace entry and, by /domains, any attestations;
   // each at most every two minutes, since the node walks back through blocks to answer
   const counted = useRef(new Map<string, number>());
@@ -570,14 +597,14 @@ export default function Page() {
   };
 
   const switchNode = (n: string) => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); };
-  const ctx: Ctx = { route, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, react, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { route, newReplies, markRepliesRead, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, react, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
     <Pay.Provider value={{ eth, setEth, api, refresh: () => { refreshBalance(); setTimeout(refreshBalance, 90_000); } }}>
     <KeyCtx.Provider value={key}>
     <Profiles.Provider value={profiles}>
-      <Header route={route} keyState={[key, setKey]} balance={balance} />
+      <Header route={route} keyState={[key, setKey]} balance={balance} newReplies={newReplies.length} />
       {welcomed !== null && (
         <div className="cp-welcome" role="status">
           <span>Welcome. Someone left you {csd(welcomed)} CSD to write with, ready in about two minutes.</span>
@@ -663,6 +690,7 @@ function WhoPlain({ addr }: { addr: string }) {
 }
 
 type Ctx = {
+  newReplies: Entry[]; markRepliesRead: () => void;
   route: Route; entries: Entry[]; byId: Map<string, Entry>; height: number; loaded: boolean; netError: string | null;
   resonance: Record<string, Resonance>; me: Me | null; balance: bigint | null;
   authors: Record<string, Hex>; needAuthors: (ids: Hex[]) => void; resonated: Record<string, true>; resonate: (id: Hex) => Promise<void>;
@@ -681,13 +709,13 @@ type Ctx = {
 };
 
 // ── header: the zoom, and the wallet ────────────────────────────────────────
-function Header({ route, keyState, balance }: { route: Route; keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null }) {
+function Header({ route, keyState, balance, newReplies = 0 }: { route: Route; keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null; newReplies?: number }) {
   const level = route.view === "me" ? "me" : route.view === "everyone" ? "everyone" : route.view === "topic" || route.view === "topics" ? "topics" : "";
   return (
     <header className="cp-header">
       <a className="cp-mark" href="#/">Commonplace</a>
       <nav className="cp-zoom" aria-label="Zoom">
-        <a href="#/" aria-current={level === "me" ? "page" : undefined}>Me</a>
+        <a href="#/" aria-current={level === "me" ? "page" : undefined} title={newReplies ? `${newReplies} new ${newReplies === 1 ? "reply" : "replies"} to you` : undefined}>Me{newReplies > 0 && <span className="cp-badge" aria-label={`${newReplies} new`}>{newReplies}</span>}</a>
         <span className="rule" aria-hidden="true" />
         <a href="#/topics" aria-current={level === "topics" ? "page" : undefined}>Topics</a>
         <span className="rule" aria-hidden="true" />
@@ -1284,6 +1312,24 @@ function Me(c: Ctx) {
             </article>
           ))}
           <p className="cp-hint" style={{ margin: 0 }}>Only in this browser until you keep {c.waiting.length === 1 ? "it" : "them"}. Nobody else can see {c.waiting.length === 1 ? "it" : "them"} yet.</p>
+        </section>
+      )}
+
+      {c.newReplies.length > 0 && (
+        <section className="cp-list cp-replies" aria-labelledby="new-replies">
+          <div className="cp-row">
+            <h2 id="new-replies" className="cp-h2">{c.newReplies.length === 1 ? "A new reply to you" : `${c.newReplies.length} new replies to you`}</h2>
+            <button className="cp-btn-ghost" onClick={c.markRepliesRead}>Mark as read</button>
+          </div>
+          {c.newReplies.slice(0, 20).map(r => {
+            const parent = c.byId.get(r.replyTo!);
+            return (
+              <div key={r.id}>
+                {parent && <a className="cp-replyto" href={hrefEntry(parent.id)}>To: {parent.text.length > 90 ? parent.text.slice(0, 90) + "…" : parent.text}</a>}
+                <EntryItem e={r} resonance={c.resonance[r.id]} showAuthor />
+              </div>
+            );
+          })}
         </section>
       )}
 
