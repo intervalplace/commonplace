@@ -9,7 +9,7 @@ import { tally } from "@/research";
 import { OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
-import { OPEN_TOPIC, fundFor, inviteCode, inviteKey, inviteLink, keyFromCode, openInvitesArgs, parseOpenInvites } from "@/invite";
+import { OPEN_TOPICS, welcome, fundFor, inviteCode, inviteKey, inviteLink, keyFromCode, openInvitesArgs, parseOpenInvites } from "@/invite";
 import { FREE_BYTES, GATEWAY, contentTypeOf, fetchDoc, upload } from "@/arweave";
 import { Markdown } from "@/markdown";
 import hiddenList from "../moderation/hidden.json";
@@ -347,6 +347,15 @@ export default function Page() {
     return () => { c.removeListener?.("accountsChanged", off); c.removeListener?.("disconnect", off); };
   }, [key, setKey]);
   const [balance, setBalance] = useState<bigint | null>(null);
+  // a writing key made here that has never held anything gets one open invite, so its first entry
+  // just works (once per key, in this browser)
+  const [welcomed, setWelcomed] = useState<bigint | null>(null);
+  useEffect(() => {
+    if (!key || !local(key)) return;
+    let gone = false;
+    welcome(api, key.addr20).then(v => { if (!gone && v) setWelcomed(v); }).catch(() => {});
+    return () => { gone = true; };
+  }, [api, key]);
   // change from our own sends that isn't in a block yet: spendable after the next block, and
   // still ours, so it counts in the balance shown
   const inflight = useRef<{ txid: string; change: bigint; at: number }[]>([]);
@@ -561,6 +570,12 @@ export default function Page() {
     <KeyCtx.Provider value={key}>
     <Profiles.Provider value={profiles}>
       <Header route={route} keyState={[key, setKey]} balance={balance} />
+      {welcomed !== null && (
+        <div className="cp-welcome" role="status">
+          <span>Welcome. Someone left you {csd(welcomed)} CSD to write with, ready in about two minutes.</span>
+          <button className="cp-linkbtn" onClick={() => setWelcomed(null)}>OK</button>
+        </div>
+      )}
       {route.view === "me" && <Me {...ctx} />}
       {route.view === "topics" && <Topics {...ctx} />}
       {route.view === "topic" && <Topic {...ctx} topic={route.topic} />}
@@ -2726,7 +2741,7 @@ function OpenInvites({ c }: { c: Ctx }) {
   const [err, setErr] = useState<string | null>(null);
   const look = useCallback(async () => {
     try {
-      const ps = (await c.api.proposalsIn(OPEN_TOPIC, 200)).sort((a, b) => Number(b.height) - Number(a.height));
+      const ps = (await Promise.all(OPEN_TOPICS.map(t => c.api.proposalsIn(t, 200).catch(() => [])))).flat().sort((a, b) => Number(b.height) - Number(a.height));
       const seen = new Set<string>(), all: { code: string; time: number }[] = [];
       for (const p of ps) for (const code of parseOpenInvites(p.uri ?? "")) if (!seen.has(code)) { seen.add(code); all.push({ code, time: Number(p.time) }); }
       const rows = await Promise.all(all.slice(0, 120).map(async x => {
