@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { COIN, MIN_FEE_PROPOSE, type CsdKey, type Hex, type Node } from "./csd";
-import { aonLink, findReceipt, quotes, refund, refundable, topUp, topUpStatus, usdcBalance, USDC_UNIT, type TopUp } from "./market";
+import { aonLink, findReceipt, quotes, refund, refundable, topUp, topUpStatus, usdcBalance, USDC_UNIT, type TopUp, type TopUpKey } from "./market";
 import { account, discoverWallets, type WalletInfo } from "./wallet";
 
 export type EthWallet = { wallet: WalletInfo; account: Hex };
@@ -26,7 +26,7 @@ function explain(e: any): string {
 }
 
 export function TopUpBox({ me, eth, setEth, csdNode, onLocked, compact }: {
-  me: CsdKey; eth: EthWallet | null; setEth: (e: EthWallet) => void; csdNode: Node; onLocked: () => void; compact?: boolean;
+  me: TopUpKey; eth: EthWallet | null; setEth: (e: EthWallet) => void; csdNode: Node; onLocked: () => void; compact?: boolean;
 }) {
   const [spend, setSpend] = useState("2");
   const [preview, setPreview] = useState<null | { csd: bigint; total: bigint; fee: bigint }>(null);

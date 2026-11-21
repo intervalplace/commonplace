@@ -19,13 +19,15 @@ import { fetchFor, isPeerAddr } from "@/p2p";
 import { readMeta, registerWorker, updateFromNetwork, RELEASE_NAME, type Meta } from "@/install";
 import { CAIRN, NAME_RE as CSD_NAME_RE, lookupCsdName, nodeOf, primaryCsdName, normName, targetOf, type CsdName } from "@/cns";
 import { K_PAYER, TopUpBox, type EthWallet } from "@/topup";
-import { usdPerCsd } from "@/market";
+import { usdPerCsd, type TopUpKey } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
 import { NoPrf, makePasskey, passkeysHere, signInWithPasskey } from "@/passkey";
 import { cairnConnect, cairnSubmit, discoverCairn, type CairnMe, type CairnProvider } from "@/cairn";
-// who is writing: a key this page holds (from a wallet signature or a passkey), or a Cairn account,
-// whose key stays in Cairn
-type Me = CsdKey | CairnMe;
+import { doorwayAccount, doorwayProve, doorwaySubmit, type DoorwayMe } from "@/doorway";
+// who is writing: a key this page holds (from a wallet signature or a passkey), a Cairn account,
+// whose key stays in Cairn, or Doorway's key, which stays in Doorway
+type Me = CsdKey | CairnMe | DoorwayMe;
+const viaDoorway = (k: Me | null | undefined): k is DoorwayMe => !!k && "doorway" in k;
 const local = (k: Me | null | undefined): k is CsdKey => !!k && "priv" in k;
 
 // ── settings and small stores ───────────────────────────────────────────────
@@ -58,7 +60,7 @@ function chooseNode(n: string | null) {
 const OWN_NODE = "http://127.0.0.1:8789";
 const NODE_APP = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
 const RELEASES = "https://github.com/intervalplace/commonplace/blob/main/RELEASES.md";
-const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.2.0/";
+const NODE_APP_DL = "https://github.com/compute-substrate/compute-substrate/releases/download/app-v0.2.2/";
 // the node in use: the last one that answered, or else the first to try
 function nodeUrl(): string { return workingNode ?? nodeCandidates()[0] ?? DEFAULT_NODE; }
 // the first node that answers, starting after the one that just failed
@@ -322,12 +324,18 @@ export default function Page() {
   const [key, setKeyState] = useState<Me | null>(null);
   const setKey = useCallback((k: Me | null) => {
     setKeyState(k);
-    try { k ? sessionStorage.setItem(K_SESSION, local(k) ? bytesToHex(k.priv) : `cairn:${k.addr20}`) : sessionStorage.removeItem(K_SESSION); } catch {}
+    try { k ? sessionStorage.setItem(K_SESSION, local(k) ? bytesToHex(k.priv) : viaDoorway(k) ? `doorway:${k.addr20}` : `cairn:${k.addr20}`) : sessionStorage.setItem(K_SESSION, "out"); } catch {}
   }, []);
   useEffect(() => {
     let h: string | null = null;
     try { h = sessionStorage.getItem(K_SESSION); } catch {}
-    if (!h) return;
+    // opened through Doorway: write with its key, with nothing to sign in to (unless signed out
+    // in this tab, or signed in some other way)
+    if (!h || h.startsWith("doorway:")) {
+      doorwayAccount().then(a => { if (a) setKeyState({ addr20: a, doorway: true }); });
+      return;
+    }
+    if (h === "out") return;
     if (!h.startsWith("cairn:")) { try { setKeyState(keyFromPrivate(hexToBytes(h))); } catch {} return; }
     // Cairn answers without asking while it's unlocked and on the same account
     const want = h.slice(6);
@@ -341,7 +349,7 @@ export default function Page() {
   }, [setKey]);
   // Cairn says when it locks or switches accounts; then this page stops writing as that account
   useEffect(() => {
-    if (!key || local(key) || !key.cairn.on) return;
+    if (!key || local(key) || viaDoorway(key) || !key.cairn.on) return;
     const c = key.cairn, off = () => setKey(null);
     c.on!("accountsChanged", off); c.on!("disconnect", off);
     return () => { c.removeListener?.("accountsChanged", off); c.removeListener?.("disconnect", off); };
@@ -371,11 +379,11 @@ export default function Page() {
   const send = async (app: Parameters<typeof buildAppTx>[2], fee: bigint) => {
     if (!key) throw new Error("Sign in first.");
     if (!local(key)) {
-      // Cairn picks the coins and keeps the change; until the change is in a block the node lists
-      // neither, so count what's left as change the way our own sends do
+      // Cairn (or Doorway) picks the coins and keeps the change; until the change is in a block
+      // the node lists neither, so count what's left as change the way our own sends do
       const sum = (us: { value: bigint }[]) => us.reduce((s, u) => s + u.value, 0n);
       const before = sum(await api.utxos(key.addr20));
-      const id = await cairnSubmit(key.cairn, app, fee);
+      const id = viaDoorway(key) ? await doorwaySubmit(app, fee) : await cairnSubmit(key.cairn, app, fee);
       const after = sum(await api.utxos(key.addr20).catch(() => []));
       if (before - fee > after) inflight.current.push({ txid: id, change: before - fee - after, at: Date.now() });
       refreshBalance();
@@ -468,7 +476,7 @@ export default function Page() {
     if (!key) throw new Error("Sign in first.");
     // a document: the file goes to Arweave first, then the entry that points at it
     let docId: string | undefined;
-    if (doc && !local(key)) throw new Error("Documents are signed by the writing key in this page, which Cairn keeps to itself. Sign in with a passkey or wallet to publish one.");
+    if (doc && !local(key)) throw new Error("Documents are signed by the writing key in this page, which Cairn or Doorway keeps to itself. Sign in with a passkey or wallet to publish one.");
     if (doc && local(key)) { step?.("Storing the file on Arweave…"); docId = await upload(key, doc.bytes, doc.type, text); step?.("Keeping the entry…"); }
     const t = await api.tip();
     const args = doc && docId ? docArgs(docId, text, topic, sha256d(doc.bytes), t.height) : proposeArgs(text, topic, t.height, replyTo);
@@ -628,7 +636,7 @@ export default function Page() {
 
 // The Ethereum wallet that made the key (and can pay for top-ups), shared with the dialogs
 const Pay = createContext<{ eth: EthWallet | null; setEth: (e: EthWallet | null) => void; api: ReturnType<typeof node> | null; refresh: () => void }>({ eth: null, setEth: () => {}, api: null, refresh: () => {} });
-function TopUpHere({ me, compact }: { me: CsdKey; compact?: boolean }) {
+function TopUpHere({ me, compact }: { me: TopUpKey; compact?: boolean }) {
   const p = useContext(Pay);
   if (!p.api) return null;
   return <TopUpBox me={me} eth={p.eth} setEth={p.setEth} csdNode={p.api} onLocked={p.refresh} compact={compact} />;
@@ -726,8 +734,10 @@ function WalletButton({ keyState: [key, setKey], balance }: { keyState: [Me | nu
 }
 
 // buying CSD with USDC needs the writing key to prove it owns the address, which Cairn can't do here
+// (Doorway can: it proves it for its own key)
 function TopUpFor({ me }: { me: Me }) {
   if (local(me)) return <TopUpHere me={me} />;
+  if (viaDoorway(me)) return <TopUpHere me={{ addr20: me.addr20, prove: doorwayProve }} />;
   return <span className="cp-hint">Add CSD to your Cairn account from Cairn or another wallet, or open an invite link someone made for you.</span>;
 }
 
@@ -749,7 +759,12 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: Me;
           <button className="choice" onClick={onShowKey}>Show writing key</button>
         </>
       ) : (
-        <span className="cp-hint">This is your Cairn account. Cairn keeps its key and asks you to approve each entry and resonance. Sending CSD and making invite links happen in Cairn.</span>
+        viaDoorway(k)
+          ? <>
+              <TopUpFor me={k} />
+              <span className="cp-hint">This is your Doorway key, the same one every site you open through Doorway uses. Doorway keeps it and asks you before each entry and resonance. Back it up in Doorway&apos;s Settings.</span>
+            </>
+          : <span className="cp-hint">This is your Cairn account. Cairn keeps its key and asks you to approve each entry and resonance. Sending CSD and making invite links happen in Cairn.</span>
       )}
       <button className="choice" onClick={onForget}>{local(k) ? "Disconnect" : "Sign out"}</button>
     </>
@@ -2380,7 +2395,7 @@ function PoseProblem({ c }: { c: Ctx }) {
       )}
       {problems.length > 0 && <p className="cp-hint" style={{ margin: 0 }}>Still needed: {problems.join(", ")}.</p>}
       {!c.me ? <p className="cp-notice" style={{ margin: 0 }}>Sign in (top right) to pose it.</p>
-        : !local(c.me) ? <p className="cp-notice" style={{ margin: 0 }}>Posing signs the verifier with the writing key in this page, which Cairn keeps to itself. Sign in with a passkey or wallet, or ask your agent to pose it.</p>
+        : !local(c.me) ? <p className="cp-notice" style={{ margin: 0 }}>Posing signs the verifier with the writing key in this page, which Cairn or Doorway keeps to itself. Sign in with a passkey or wallet, or ask your agent to pose it.</p>
         : null}
       {err && <p className="err">{err}</p>}
       <div className="actions" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>

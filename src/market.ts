@@ -197,7 +197,10 @@ export async function usdcBalance(provider: Provider, owner: Address): Promise<b
 // `sign`, when given, signs the two messages instead of the wallet behind `provider` (an agent
 // signing with its own key, with `provider` only reading Ethereum)
 type Signer = (a: { domain: any; types: any; primaryType: string; message: any }) => Promise<Hex>;
-export async function topUp(args: { provider: Provider; buyer: Address; key: CsdKey; spend: bigint; csdNode: Node; onStep: (s: string) => void; sign?: Signer }): Promise<TopUp> {
+// `key`: the writing key the CSD goes to, or its address and a way to prove the key controls it
+// (Doorway's key, which this page never holds)
+export type TopUpKey = CsdKey | { addr20: Hex; prove: (authHash: Hex) => Promise<{ pubKey: string; sig: string }> };
+export async function topUp(args: { provider: Provider; buyer: Address; key: TopUpKey; spend: bigint; csdNode: Node; onStep: (s: string) => void; sign?: Signer }): Promise<TopUp> {
   const { provider, buyer, key, spend, csdNode, onStep } = args;
   await onMainnet(provider);
   const { read, wallet } = eth(provider);
@@ -243,7 +246,7 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Csd
     const { finalizeObject } = await aonSdk();
     const obj: any = finalizeObject({
       objectType: "authorization", schemaVersion: "1", namespace: NS, createdAt: Date.now(), references: [String(q.offer.objectHash).toLowerCase()],
-      payload: { authorizationType: "csd_usdc_release", authorization, csdAddressProof: addressProof(key, authHash),
+      payload: { authorizationType: "csd_usdc_release", authorization, csdAddressProof: "prove" in key ? await key.prove(authHash) : addressProof(key, authHash),
         usdcPermit: strs({ deadline, r: ps.slice(0, 66), s: "0x" + ps.slice(66, 130), v: parseInt(ps.slice(130, 132), 16) }) },
       signature: { scheme: "eip712", signer: getAddress(buyer), domain, types: AUTH_TYPES, primaryType: "CsdUsdcAuthorization", message: authorization, signature },
     } as any);
