@@ -1695,7 +1695,7 @@ function CheckWarning({ s }: { s: CheckState | null }) {
 // ── .csd names: Cairn's name service, read and checked here (src/cns.ts) ─────
 const HANDLER = "web+csd";
 // a site on IPFS through a public gateway, each site on its own subdomain (so its own origin)
-const gatewayUrl = (cid: string) => `https://${cid}.ipfs.dweb.link/`;
+const DOORWAY = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
 function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boolean; site?: string }) {
   const [q, setQ] = useState(name ?? "");
   const [res, setRes] = useState<CsdName | null>(null);
@@ -1717,8 +1717,8 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
     if (!open || !target) return;
     if (target.kind === "page") window.location.replace(hrefPerson(target.addr));
     else if (target.kind === "url") window.location.href = target.url;
-    else window.location.href = gatewayUrl(target.cid);
-  }, [open, target]);
+    else window.location.href = `http://${res!.name}.localhost/`; // opened by Doorway, checked there
+  }, [open, target, res]);
   const register = () => {
     try {
       if (!("registerProtocolHandler" in navigator)) return setHandler("unsupported");
@@ -1745,10 +1745,10 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
         <section className="cp-name-card">
           <p style={{ margin: 0 }}>
             {target?.kind === "page" && <>Points to the page of <Who addr={target.addr} size={20} /> <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={hrefPerson(target.addr)}>Open it</a></>}
-            {target?.kind === "ipfs" && <>Points to a site on IPFS
-              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`${HANDLER}:${res.name}`}>Open in Doorway</a>
-              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={gatewayUrl(target.cid)} target="_blank" rel="noreferrer noopener">Open through a gateway</a>
-              <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>The app downloads the site, checks every byte against this address, and opens it from your own computer. A gateway (dweb.link) is quicker if you don&apos;t have the app, but you take its word for what it sends.</span></>}
+            {target?.kind === "ipfs" && <>Points to a site
+              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`http://${res.name}.localhost/`}>Open it</a>
+              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={DOORWAY} target="_blank" rel="noreferrer noopener">Get Doorway</a>
+              <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>It opens at <span className="cp-mono">{res.name}.localhost</span> on a computer running Doorway, a small app that fetches the site from the doors, checks every byte against the address this name points to, and serves it from your own computer. Its address: <span className="cp-mono" style={{ overflowWrap: "anywhere" }}>ipfs://{target.cid}</span></span></>}
             {target?.kind === "url" && <>Points to <a href={target.url} rel="noreferrer noopener">{target.url}</a></>}
           </p>
           {node && <p style={{ margin: 0 }}>Its node: <span className="cp-mono">{nodeLabel(node)}</span> <button className="cp-btn-line" style={{ marginLeft: 8 }} onClick={() => c.switchNode(node)}>Read through it</button></p>}
