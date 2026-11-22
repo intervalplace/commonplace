@@ -2136,10 +2136,21 @@ function verifyResult(problem: Entry, r: ResultEntry): Promise<Verdict | undefin
 // A problem's results, best claims first: all of them (up to 50), or for a large problem only until
 // one verifies, which is the record (and at most 5 downloads); the rest are checked on request
 const autoRunning = new Set<string>();
-async function autoVerify(problem: Entry, rs: ResultEntry[]) {
+// `history`: every result, oldest first. The records it ever held are verified first, so a browser
+// that has never seen this problem counts the same records as one that watched them arrive; then the
+// best claims, in `rs`.
+async function autoVerify(problem: Entry, rs: ResultEntry[], history: ResultEntry[] = []) {
   if (autoRunning.has(problem.id)) return;
   autoRunning.add(problem.id);
   try {
+    const dir = problem.problem!.direction;
+    let best: number | undefined;
+    for (const r of largeProblems.has(problem.id) ? [] : history) {
+      if (best !== undefined && !better(dir, r.result.score, best)) continue; // couldn't have been a record
+      const v = verdictsNow()[r.id] ?? await verifyResult(problem, r);
+      if (largeProblems.has(problem.id)) break;
+      if (v?.ok && !v.unchecked) best = r.result.score;
+    }
     let fetched = 0;
     for (const r of rs) {
       const cached = verdictsNow()[r.id];
@@ -2220,7 +2231,7 @@ function useFrontier(c: Ctx) {
     for (const p of f.problems) {
       const dir = p.problem!.direction;
       const rs = f.resultsFor(p.problem!.slug).slice().sort((a, b) => (better(dir, a.result.score, b.result.score) ? -1 : 1)).slice(0, 50);
-      autoVerify(p, rs);
+      autoVerify(p, rs, f.resultsFor(p.problem!.slug));
     }
   }, [f.problems.length, nResults]); // eslint-disable-line react-hooks/exhaustive-deps
   return f;
