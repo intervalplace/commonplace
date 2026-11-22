@@ -23,6 +23,7 @@ import { usdPerCsd, type TopUpKey } from "@/market";
 import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
 import { NoPrf, makePasskey, passkeysHere, signInWithPasskey } from "@/passkey";
 import { cairnConnect, cairnSubmit, discoverCairn, type CairnMe, type CairnProvider } from "@/cairn";
+import { keepArgs, keptUntilYear } from "@/keep";
 import { doorwayAccount, doorwayProve, doorwaySubmit, type DoorwayMe } from "@/doorway";
 // who is writing: a key this page holds (from a wallet signature or a passkey), a Cairn account,
 // whose key stays in Cairn, or Doorway's key, which stays in Doorway
@@ -596,8 +597,10 @@ export default function Page() {
     setResonated(prev => { const next = { ...prev, [id]: true as const }; save(K_MINE, next); return next; });
   };
 
+  // keeping a site up one more year on the doors (src/keep.ts)
+  const keepSite = async (cid: string) => send(keepArgs(cid, (await api.tip()).height), MIN_FEE_PROPOSE);
   const switchNode = (n: string) => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); };
-  const ctx: Ctx = { route, newReplies, markRepliesRead, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, react, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
+  const ctx: Ctx = { keepSite, route, newReplies, markRepliesRead, entries, byId, height, loaded, netError, resonance, me: key, balance, authors, needAuthors, resonated, resonate, all, api, light, nodeSrc, switchNode, learnAuthors, domains, loadTopic, styles, keepStyle, poseProblem, postBounty, payBounty, remembered, rememberPerson, setNameProfile, react, startKeep: (text, topic, replyTo, done, doc) => setKeeping({ text, topic, replyTo, done, doc }),
     waiting, unwait: (at: number) => putWaiting(w => w.filter(x => x.at !== at)), keepWaiting: () => setKeepingWaiting(true), editProfile: () => setEditingProfile(true) };
 
   return (
@@ -690,6 +693,7 @@ function WhoPlain({ addr }: { addr: string }) {
 }
 
 type Ctx = {
+  keepSite: (cid: string) => Promise<Hex>;
   newReplies: Entry[]; markRepliesRead: () => void;
   route: Route; entries: Entry[]; byId: Map<string, Entry>; height: number; loaded: boolean; netError: string | null;
   resonance: Record<string, Resonance>; me: Me | null; balance: bigint | null;
@@ -1713,6 +1717,23 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
   }, [name, c.light, c.nodeSrc]);
   // from a web+csd: link: go straight where it points
   const target = res ? targetOf(res) : null;
+  // how long the site it points to is kept up on the doors, name or not, and adding a year
+  const siteCid = target?.kind === "ipfs" ? target.cid : null;
+  const [kept, setKept] = useState<{ cid: string; year: number | null } | null>(null);
+  const [keepSaid, setKeepSaid] = useState<string | null>(null);
+  useEffect(() => {
+    setKept(null); setKeepSaid(null);
+    if (!siteCid) return;
+    let live = true;
+    keptUntilYear(c.api, siteCid).then(year => live && setKept({ cid: siteCid, year })).catch(() => {});
+    return () => { live = false; };
+  }, [siteCid, c.api]);
+  const addYear = async () => {
+    if (!siteCid) return;
+    setKeepSaid("Keeping it up another year…");
+    try { await c.keepSite(siteCid); setKeepSaid("Done. It counts from the next block, in about two minutes."); }
+    catch (e: any) { setKeepSaid(String(e?.message ?? e)); }
+  };
   useEffect(() => {
     if (!open || !target) return;
     if (target.kind === "page") window.location.replace(hrefPerson(target.addr));
@@ -1749,6 +1770,13 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
               <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`http://${res.name}.localhost/`}>Open it</a>
               <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={DOORWAY} target="_blank" rel="noreferrer noopener">Get Doorway</a>
               <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>It opens at <span className="cp-mono">{res.name}.localhost</span> on a computer running Doorway, a small app that fetches the site from the doors, checks every byte against the address this name points to, and serves it from your own computer. Its address: <span className="cp-mono" style={{ overflowWrap: "anywhere" }}>ipfs://{target.cid}</span></span></>}
+            {target?.kind === "ipfs" && kept?.cid === target.cid && (
+              <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>
+                {kept.year ? <>Kept up until <strong>{kept.year}</strong>, whether or not a name still points to it.</> : <>Kept up as long as a name points to it.</>}{" "}
+                {c.me ? <button className="cp-btn-line" style={{ marginLeft: 6 }} onClick={addYear} disabled={keepSaid === "Keeping it up another year…"}>Add a year (0.25 CSD)</button> : null}
+                {keepSaid && <span style={{ display: "block", marginTop: 4 }}>{keepSaid}</span>}
+              </span>
+            )}
             {target?.kind === "url" && <>Points to <a href={target.url} rel="noreferrer noopener">{target.url}</a></>}
           </p>
           {node && <p style={{ margin: 0 }}>Its node: <span className="cp-mono">{nodeLabel(node)}</span> <button className="cp-btn-line" style={{ marginLeft: 8 }} onClick={() => c.switchNode(node)}>Read through it</button></p>}
