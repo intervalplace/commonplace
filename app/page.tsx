@@ -118,7 +118,7 @@ function Today() {
 }
 
 // ── routing by hash, so the static site works from any folder or gateway ───
-type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; open?: boolean; site?: string } | { view: "join" } | { view: "invites" };
+type Route = { view: "me" } | { view: "topics" } | { view: "topic"; topic: string } | { view: "entry"; id: Hex } | { view: "everyone" } | { view: "person"; addr: Hex } | { view: "about" } | { view: "invite"; code: string } | { view: "frontier"; slug?: string; work?: boolean } | { view: "hiscores" } | { view: "pose" } | { view: "name"; name?: string; site?: string } | { view: "join" } | { view: "invites" };
 function parseRoute(h: string): Route {
   const p = h.replace(/^#\/?/, "").split("/");
   if (p[0] === "topics") return { view: "topics" };
@@ -134,11 +134,11 @@ function parseRoute(h: string): Route {
   if (p[0] === "frontier") return { view: "frontier", slug: p[1] && SLUG.test(p[1]) ? p[1] : undefined, work: p[2] === "work" };
   if (p[0] === "invite" && /^[A-Za-z0-9_-]{40,48}$/.test(p[1] ?? "")) return { view: "invite", code: p[1] };
   if (p[0] === "p" && /^0x[0-9a-f]{40}$/i.test(p[1] ?? "")) return { view: "person", addr: p[1].toLowerCase() as Hex };
-  // .csd names: #/names, and #/n/<name> (with /open when it came from a web+csd: link: go where it points)
+  // .csd names: #/names, and #/n/<name>
   if (p[0] === "names") return { view: "name" };
   // #/n/<name>/site/<cid>: the name's page, with a new site filled in to approve (the Node app's
   // "Publish a site" opens this)
-  if (p[0] === "n" && p[1]) return { view: "name", name: normName(decodeURIComponent(p[1])), open: p[2] === "open", site: p[2] === "site" && /^b[a-z2-7]{50,100}$/.test(p[3] ?? "") ? p[3] : undefined };
+  if (p[0] === "n" && p[1]) return { view: "name", name: normName(decodeURIComponent(p[1])), site: p[2] === "site" && /^b[a-z2-7]{50,100}$/.test(p[3] ?? "") ? p[3] : undefined };
   return { view: "me" };
 }
 const hrefTopic = (t: string) => `#/t/${encodeURIComponent(t)}`;
@@ -213,11 +213,6 @@ export default function Page() {
   const [choosingNode, setChoosingNode] = useState(false);
   useEffect(() => {
     setBase(nodeUrl());
-    // a web+csd: link, handed over by the browser (see NameView): open the name it names
-    try {
-      const u = new URL(window.location.href), csd = u.searchParams.get("csd");
-      if (csd) { u.searchParams.delete("csd"); u.hash = `#/n/${encodeURIComponent(normName(csd))}/open`; history.replaceState(null, "", u.toString()); }
-    } catch {}
     const on = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
     on(); window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
@@ -626,7 +621,7 @@ export default function Page() {
       {route.view === "invites" && <OpenInvites c={ctx} />}
       {route.view === "hiscores" && <Hiscores c={ctx} />}
       {route.view === "pose" && <PoseProblem c={ctx} />}
-      {route.view === "name" && <NameView c={ctx} name={route.name} open={route.open} site={route.site} />}
+      {route.view === "name" && <NameView c={ctx} name={route.name} site={route.site} />}
       {route.view === "invite" && <Invite code={route.code} keyState={[key, setKey]} />}
       <footer className="cp-foot">
         <span>Kept on Compute Substrate. No account, no server, no owner.</span>
@@ -1697,16 +1692,11 @@ function CheckWarning({ s }: { s: CheckState | null }) {
 }
 
 // ── .csd names: Cairn's name service, read and checked here (src/cns.ts) ─────
-const HANDLER = "web+csd";
-// a site on IPFS through a public gateway, each site on its own subdomain (so its own origin)
 const DOORWAY = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
-function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boolean; site?: string }) {
+function NameView({ c, name, site }: { c: Ctx; name?: string; site?: string }) {
   const [q, setQ] = useState(name ?? "");
   const [res, setRes] = useState<CsdName | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [handler, setHandler] = useState<null | "asked" | "unsupported">(null);
-  const [canHandle, setCanHandle] = useState(true);
-  useEffect(() => { setCanHandle(typeof navigator !== "undefined" && "registerProtocolHandler" in navigator); }, []);
   useEffect(() => {
     setQ(name ?? ""); setRes(null); setErr(null);
     if (!name) return;
@@ -1715,7 +1705,6 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
       ? "Neither Cairn's server nor this node could list this name's records just now. Try again in a moment, or another node." : /NODE_404/.test(String(x?.message)) ? "Cairn's server didn't answer, and this node can't list a name's history on its own (it needs newer node software). Try another node." : nice(x)));
     return () => { live = false; };
   }, [name, c.light, c.nodeSrc]);
-  // from a web+csd: link: go straight where it points
   const target = res ? targetOf(res) : null;
   // how long the site it points to is kept up on the doors, name or not, and adding a year
   const siteCid = target?.kind === "ipfs" ? target.cid : null;
@@ -1733,19 +1722,6 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
     setKeepSaid("Keeping it up another year…");
     try { await c.keepSite(siteCid); setKeepSaid("Done. It counts from the next block, in about two minutes."); }
     catch (e: any) { setKeepSaid(String(e?.message ?? e)); }
-  };
-  useEffect(() => {
-    if (!open || !target) return;
-    if (target.kind === "page") window.location.replace(hrefPerson(target.addr));
-    else if (target.kind === "url") window.location.href = target.url;
-    else window.location.href = `http://${res!.name}.localhost/`; // opened by Doorway, checked there
-  }, [open, target, res]);
-  const register = () => {
-    try {
-      if (!("registerProtocolHandler" in navigator)) return setHandler("unsupported");
-      navigator.registerProtocolHandler(HANDLER, `${location.origin}${location.pathname}?csd=%s`);
-      setHandler("asked");
-    } catch { setHandler("unsupported"); }
   };
   const go = (e: React.FormEvent) => { e.preventDefault(); const n = normName(q); if (n) window.location.hash = `#/n/${encodeURIComponent(n)}`; };
   const node = res ? nodeOf(res) : null;
@@ -1793,20 +1769,6 @@ function NameView({ c, name, open, site }: { c: Ctx; name?: string; open?: boole
         <p className="cp-hint">To point {res.name}.csd at your new site, sign in with the Cairn Wallet that holds it.</p>
       )}
       {res && res.state !== "held" && <p style={{ margin: 0 }}>{res.state === "pending" ? <>Someone is registering <strong>{name}.csd</strong> right now.</> : <>Nobody holds <strong>{name}.csd</strong>{res.state === "lapsed" ? " now; its lease lapsed" : ""}.</>} Names are registered on <a href={onCairn} target="_blank" rel="noreferrer noopener">Cairn</a>.</p>}
-      <section className="cp-name-card">
-        <span className="cp-h2">Links that open names</span>
-        <p className="cp-hint" style={{ margin: 0 }}>A link like <span className="cp-mono">{HANDLER}:{name ?? "alice"}</span> opens a name in any browser that has been told what opens them. Let this page open them: it looks the name up, checks it, and goes where it points.</p>
-        {canHandle ? (
-          <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12 }}>
-            <button className="cp-btn-line" onClick={register}>Open {HANDLER}: links here</button>
-            {handler === "asked" && <span className="cp-hint">Your browser asks you to allow it, usually at the right end of the address bar.</span>}
-            {handler === "unsupported" && <span className="cp-hint">This browser didn&apos;t allow it.</span>}
-          </div>
-        ) : (
-          <p className="cp-hint" style={{ margin: 0 }}>This browser can&apos;t be told what opens them: Safari can&apos;t, and on iPhone and iPad no browser can, since they all run on Safari&apos;s engine. On a computer, Chrome, Firefox and Edge can, and so can the Doorway app.</p>
-        )}
-        <p className="cp-hint" style={{ margin: 0 }}>A name points to a site through its profile on Cairn: <span className="cp-mono">contenthash</span> as <span className="cp-mono">ipfs://…</span> for a site on IPFS, <span className="cp-mono">url</span> for a link. Otherwise it opens its holder&apos;s page here.</p>
-      </section>
     </main>
   );
 }
