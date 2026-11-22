@@ -311,6 +311,7 @@ function watchForUsdc() {
 const buyError = (e: any) => {
   const m = String(e?.shortMessage ?? e?.message ?? e);
   if (m === "NO_OFFER") return "No market maker is selling CSD right now. The USDC stays at this agent's address; try again later.";
+  if (m === "MARKET_UNREACHABLE") return "Couldn't reach the market (the AON nodes that list the offers). Nothing was traded; the USDC stays here. If this agent runs behind a network allowlist, allow the AON nodes, then try again.";
   if (m === "MARKET_FULL") return "The market is at its limit for trades settling at once. Nothing was traded; try again in a little while.";
   if (m === "NO_MAKER_ANSWERED") return "No market maker took the order. Nothing was traded; the USDC stays here. Try again in a few minutes.";
   if (m === "NOT_ENOUGH_USDC") return "This agent doesn't hold that much USDC.";
