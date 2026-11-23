@@ -1694,7 +1694,7 @@ function CheckWarning({ s }: { s: CheckState | null }) {
 }
 
 // ── .csd names: Cairn's name service, read and checked here (src/cns.ts) ─────
-const DOORWAY = "https://github.com/compute-substrate/compute-substrate/tree/main/app#readme";
+const DOORWAY = "https://doorway.place";
 function NameView({ c, name, site }: { c: Ctx; name?: string; site?: string }) {
   const [q, setQ] = useState(name ?? "");
   const [res, setRes] = useState<CsdName | null>(null);
@@ -1746,7 +1746,7 @@ function NameView({ c, name, site }: { c: Ctx; name?: string; site?: string }) {
             {target?.kind === "page" && <>Points to the page of <Who addr={target.addr} size={20} /> <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={hrefPerson(target.addr)}>Open it</a></>}
             {target?.kind === "ipfs" && <>Points to a site
               <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`http://${res.name}.localhost/`}>Open it</a>
-              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={DOORWAY} target="_blank" rel="noreferrer noopener">Get Doorway</a>
+              <a className="cp-btn-line" style={{ marginLeft: 8, textDecoration: "none" }} href={`${DOORWAY}/#${res.name}`} target="_blank" rel="noreferrer noopener">On doorway.place</a>
               <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>It opens at <span className="cp-mono">{res.name}.localhost</span> on a computer running Doorway, a small app that fetches the site from the doors, checks every byte against the address this name points to, and serves it from your own computer. Its address: <span className="cp-mono" style={{ overflowWrap: "anywhere" }}>ipfs://{target.cid}</span></span></>}
             {target?.kind === "ipfs" && kept?.cid === target.cid && (
               <span className="cp-hint" style={{ display: "block", marginTop: 6 }}>
