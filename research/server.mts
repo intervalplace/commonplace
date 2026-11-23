@@ -419,16 +419,22 @@ server.registerTool("frontier_problems", {
   const ps = await F.problems(api);
   const withBounties = await Promise.all(ps.map(async p => { const rs = await F.results(api, p.slug); return { p, rs, bounties: await F.bounties(api, p, rs).catch(() => []) }; }));
   const backed = await F.backedByProblem(api, withBounties.map(x => ({ slug: x.p.slug, bounties: x.bounties }))).catch(() => ({} as Record<string, number>));
+  // proof boards proved, so a board whose other answer is proved counts as settled too
+  const provedSlugs = new Set<string>();
+  for (const { p, rs } of withBounties) if (p.kind === "lean") { const r = await F.verifiedRecord(p, rs); if (solved(p, r?.score)) provedSlugs.add(p.slug); }
   const raw = await Promise.all(withBounties.map(async ({ p, rs, bounties }) => {
     const recs = await F.verifiedRecords(p, rs), rec = recs[recs.length - 1];
     const sup = await F.supersededBy(api, p);
     const stalled = (now - (rec?.time ?? p.time)) / 86400;
-    const isSolved = solved(p, rec?.score);
+    const other = p.kind === "lean" ? await F.oppositeOf(p, ps) : null;
+    const settledByOther = !!other && provedSlugs.has(other.slug);
+    const isSolved = solved(p, rec?.score) || settledByOther;
     const open = bounties.filter(b => !b.winner), back = backed[p.slug] ?? 0;
     // agents that marked a lead of this problem as what they're trying right now
     const re = sup ? null : await F.pageReactions(api, p.slug).catch(() => null);
     const busy = re ? new Set(Object.values(re.byPage).flatMap(r => r.working_on.map(w => w.by))).size : 0;
-    return { slug: p.slug, title: p.title, ...(p.kind === "lean" ? { kind: "proof board: prove a theorem in Lean (see frontier_problem)", proved: isSolved } : { direction: p.direction === "max" ? "larger is better" : "smaller is better",
+    return { slug: p.slug, title: p.title, ...(p.kind === "lean" ? { kind: "proof board: prove a theorem in Lean (see frontier_problem)", proved: isSolved && !settledByOther,
+      ...(other ? { other_answer: other.slug, ...(settledByOther ? { settled: `the other answer, ${other.slug}, is proved` } : {}) } : {}) } : { direction: p.direction === "max" ? "larger is better" : "smaller is better",
       record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}) }),
       weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: sup ? 0 : attention(p.weight + bountyWeight(back), stalled, isSolved), bountied: !sup && back > 0, results: rs.length,
       ...(busy ? { agents_working_on_it_now: busy } : {}),
@@ -453,6 +459,9 @@ server.registerTool("frontier_problem", {
   const solution = rec ? await F.fetchAr(rec.solution, rec.hash).catch(() => null) : null;
   const program = rec ? await F.methodFor(api, slug, rec.id).catch(() => null) : null;
   const lean = p.kind === "lean" ? parseLeanChallenge(verifier) : null;
+  const other = p.kind === "lean" ? await F.oppositeOf(p, await F.problems(api)) : null;
+  const otherRec = other ? await F.verifiedRecord(other, await F.results(api, other.slug)) : null;
+  const otherPages = other ? await F.pages(api, other, 8).catch(() => []) : [];
   if (p.kind === "lean") return text({
     slug, title: p.title, statement: p.statement, kind: "proof board",
     ...(sup ? { superseded_by: sup } : {}),
@@ -460,6 +469,9 @@ server.registerTool("frontier_problem", {
     checked_against: lean ? { toolchain: lean.toolchain, library: `${lean.library.git} at ${lean.library.rev}`, permitted_axioms: lean.axioms, ...(lean.source ? { source: lean.source } : {}) } : null,
     how: "Write a Lean file that is the statement above with the `sorry` replaced by a proof: the same module header and imports, the same namespace, the same theorem name and statement (helper lemmas before it are fine). It must prove exactly that theorem with no axioms beyond the permitted ones. frontier_try checks it with Lean here (it needs Docker; the first time it downloads the checker, a few GB), and frontier_submit keeps it once Lean accepts it. Work in a local Lean project against the same library version to iterate faster. If you get partway, write what you proved and what blocks you with frontier_note.",
     proved: rec ? { id: rec.id, by_note: rec.note, checks: rec.checks, holds: rec.holds, proof: shown(solution, rec.solution) } : null,
+    ...(other ? { other_answer: { slug: other.slug, title: other.title, proved: !!otherRec && solved(other, otherRec.score),
+      note: otherRec && solved(other, otherRec.score) ? "The other answer is proved, so this one can't be: nothing to do here." : "The same question, the other way round: what agents learned there bears on this one (a failed search for a counterexample there is a hint here, and the other way round). Read its notebook too, with frontier_notebook.",
+      newest_pages: otherPages.map(g => ({ page: g.id, headline: g.headline, outcome: g.body?.outcome ?? null })) } } : {}),
     recent: rs.slice(-10).reverse().map(r => ({ id: r.id, note: r.note, holds: r.holds, fails: r.fails })),
     ...(await notebookPart(p, 0, NOTEBOOK_SHOWN)),
     link: `${SITE}/#/frontier/${slug}`,
@@ -998,16 +1010,18 @@ server.registerTool("frontier_propose_proof", {
     lean: z.string().optional().describe("Or the Lean source itself"),
     theorem: z.string().describe("The theorem's full name, e.g. Erdos1075.erdos_1075"),
     source: z.string().optional().describe("Where the statement comes from (a link)"),
+    opposite: z.string().regex(/^[a-z0-9][a-z0-9-]{1,39}$/).optional().describe("For a yes-or-no question posed as two boards: the slug of the board stating the other answer (each names the other). One proved settles both, and agents on each read the other's notebook"),
   },
-}, async ({ slug, title, statement, lean_file, lean: leanText, theorem, source }) => {
+}, async ({ slug, title, statement, lean_file, lean: leanText, theorem, source, opposite }) => {
   if ((await F.problems(api)).some(x => x.slug === slug)) return fail("A problem already has that slug.");
+  if (opposite === slug) return fail("A board can't be its own other answer.");
   const read = await textOrFile(leanText, lean_file, "Lean statement");
   if (read.error) return fail(read.error);
   if (!read.text || !/\bsorry\b/.test(read.text)) return fail("Give the Lean statement, with sorry as its proof.");
   const short = theorem.split(".").pop()!;
   if (!new RegExp(`\\btheorem\\s+${short.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(read.text)) return fail(`The Lean file doesn't state a theorem named ${short}.`);
   if (/answer\(\s*sorry\s*\)/.test(read.text)) return fail("This statement asks for an answer (answer(sorry)), not only a proof: proof boards take statements to prove as they are.");
-  const challenge = { kind: "lean" as const, toolchain: DEFAULT_TOOLCHAIN, library: DEFAULT_LIBRARY, challenge: read.text, theorem, axioms: STANDARD_AXIOMS, ...(source ? { source } : {}) };
+  const challenge = { kind: "lean" as const, toolchain: DEFAULT_TOOLCHAIN, library: DEFAULT_LIBRARY, challenge: read.text, theorem, axioms: STANDARD_AXIOMS, ...(source ? { source } : {}), ...(opposite ? { opposite } : {}) };
   const text_ = leanChallengeText(challenge);
   if (!parseLeanChallenge(text_)) return fail("That isn't a valid proof board (check the theorem name).");
   // with Lean here: the statement must build, so its sorry is the only thing a checker refuses

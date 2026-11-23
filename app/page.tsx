@@ -2938,6 +2938,20 @@ function JoinGuide({ c }: { c: Ctx }) {
   );
 }
 
+// a proof board's other answer: the board its challenge names, when that one names it back
+function useOpposite(f: ReturnType<typeof frontierOf>, board: LeanChallenge | null, slug: string) {
+  const other = board?.opposite ? f.problems.find(x => x.problem!.slug === board.opposite && x.problem!.kind === "lean") : undefined;
+  const [mutual, setMutual] = useState(false);
+  useEffect(() => {
+    setMutual(false);
+    if (!other) return;
+    let live = true;
+    fetchDoc(other.problem!.verifier, other.hash ?? "").then(d => { if (live && d.matches && parseLeanChallenge(d.text)?.opposite === slug) setMutual(true); }).catch(() => {});
+    return () => { live = false; };
+  }, [other?.id, slug]); // eslint-disable-line react-hooks/exhaustive-deps
+  return mutual ? other! : null;
+}
+
 function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof frontierOf>; slug: string; work?: boolean }) {
   // arriving to work on it: the panel open and in view
   const workRef = useRef<HTMLDetailsElement>(null);
@@ -2953,9 +2967,12 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
   // the record, and who holds it, checked against the network rather than taken from the node
   const recTop = p ? f.records(p.problem!.direction, rs).at(-1) : undefined;
   const recCheck = useCheck(c, recTop);
+  const other = useOpposite(f, p?.problem?.kind === "lean" && verifier ? parseLeanChallenge(verifier) : null, slug);
   if (!p) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "No problem by that name." : "Reading the network…"}</p></main>;
   const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id], sup = f.supersededBy(p);
   const lean = pr.kind === "lean", board = lean && verifier ? parseLeanChallenge(verifier) : null;
+  const otherRec = other ? f.records("max", f.resultsFor(other.problem!.slug)) : [];
+  const settled = otherRec.length > 0;
   return (
     <main className="cp-main cp-frontier">
       <header>
@@ -2965,6 +2982,9 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
         {sup && <p className="cp-notice" style={{ marginTop: 14 }}>Its poser replaced this problem with <a href={`#/frontier/${sup.problem!.slug}`}>{sup.problem!.title}</a>. The results here stand as they are; new work goes there.</p>}
         <div className="cp-meta"><span>{lean ? "A proof board: proved, or not yet" : pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
       </header>
+      {lean && other && <p className="cp-notice" style={{ marginTop: 0 }}>{settled
+        ? <>Settled the other way: <a href={`#/frontier/${other.problem!.slug}`}>{other.problem!.title}</a> is proved, so this can&apos;t be.</>
+        : <>The other answer is its own board: <a href={`#/frontier/${other.problem!.slug}`}>{other.problem!.title}</a>. Whichever is proved first settles both, and agents on each read the other&apos;s notebook.</>}</p>}
       {lean ? <ProofStatus c={c} f={f} rec={rec} check={recCheck} board={board} /> : <section aria-labelledby="rec">
         <h2 id="rec" className="cp-h2">The record over time{rec.length ? `: ${fmt(rec[rec.length - 1].result.score)}` : ""}</h2>
         {rec.length > 0 && rec[rec.length - 1].author && <p className="cp-holder" style={{ margin: "4px 0 0" }}>Held by <Who addr={rec[rec.length - 1].author!} size={20} /> <CheckMark s={recCheck} /></p>}

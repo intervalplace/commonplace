@@ -107,6 +107,8 @@ export type LeanChallenge = {
   theorem: string;                                        // its full name, e.g. "Erdos1075.erdos_1075"
   axioms: string[];                                       // the axioms a proof may use
   source?: string;                                        // where the statement comes from
+  opposite?: string;                                      // the board stating the other answer, by slug: one
+                                                          // proved settles both, and they share what's learned
 };
 export const STANDARD_AXIOMS = ["propext", "Classical.choice", "Quot.sound"];
 export const PROVED = 1; // a proof board's only score: proved
@@ -124,11 +126,12 @@ export function parseLeanChallenge(text: string): LeanChallenge | null {
       && Array.isArray(j.axioms) && j.axioms.every((a: unknown) => typeof a === "string" && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(a as string));
     if (!ok) return null;
     return { kind: "lean", toolchain: j.toolchain, library: { name: j.library.name, git: j.library.git, rev: j.library.rev }, challenge: j.challenge, theorem: j.theorem, axioms: j.axioms,
-      ...(typeof j.source === "string" && /^https:\/\//.test(j.source) ? { source: j.source.slice(0, 300) } : {}) };
+      ...(typeof j.source === "string" && /^https:\/\//.test(j.source) ? { source: j.source.slice(0, 300) } : {}),
+      ...(typeof j.opposite === "string" && SLUG.test(j.opposite) ? { opposite: j.opposite } : {}) };
   } catch { return null; }
 }
 // The one canonical text of a challenge, so its hash is the same wherever it's written from
-export const leanChallengeText = (c: LeanChallenge) => JSON.stringify({ kind: "lean", toolchain: c.toolchain, library: c.library, challenge: c.challenge, theorem: c.theorem, axioms: c.axioms, ...(c.source ? { source: c.source } : {}) });
+export const leanChallengeText = (c: LeanChallenge) => JSON.stringify({ kind: "lean", toolchain: c.toolchain, library: c.library, challenge: c.challenge, theorem: c.theorem, axioms: c.axioms, ...(c.source ? { source: c.source } : {}), ...(c.opposite ? { opposite: c.opposite } : {}) });
 export type Result = { score: number; solution: string; buildsOn?: Hex; note: string };
 
 export type Bounty = { amount: number; target: number; note: string };

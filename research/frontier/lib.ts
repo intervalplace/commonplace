@@ -2,7 +2,7 @@
 
 import { bytesToHex, sha256d, utf8, type Hex, type Node, type CsdKey } from "../../src/csd";
 import { tally } from "../../src/research";
-import { FRONTIER, backedCsd, better, parseBounty, parseMethod, parsePage, parseSuperseded, parsePageBody, type PageBody, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
+import { parseLeanChallenge, type LeanChallenge, FRONTIER, backedCsd, better, parseBounty, parseMethod, parsePage, parseSuperseded, parsePageBody, type PageBody, parseProblem, parseResult, resultsTopic, sameScore, type Bounty, type Problem, type Result } from "../../src/frontier";
 import { verifyNode } from "../../src/run-node";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -265,4 +265,20 @@ export async function supersededBy(api: Node, p: ProblemRow): Promise<string | n
     if (who && who === p.by?.toLowerCase()) return by;
   }
   return null;
+}
+
+// A proof board's challenge (cached), and the board stating its other answer: only when each names
+// the other, so nobody can attach a board to one they didn't pose with it
+const challenges = new Map<string, Promise<LeanChallenge | null>>();
+export function challengeOf(p: ProblemRow): Promise<LeanChallenge | null> {
+  if (p.kind !== "lean") return Promise.resolve(null);
+  let c = challenges.get(p.id);
+  if (!c) { c = fetchAr(p.verifier, p.hash).then(parseLeanChallenge).catch(() => null); challenges.set(p.id, c); c.then(x => { if (!x) challenges.delete(p.id); }); }
+  return c;
+}
+export async function oppositeOf(p: ProblemRow, all: ProblemRow[]): Promise<ProblemRow | null> {
+  const c = await challengeOf(p);
+  const o = c?.opposite ? all.find(x => x.slug === c.opposite && x.kind === "lean") : undefined;
+  if (!o) return null;
+  return (await challengeOf(o))?.opposite === p.slug ? o : null;
 }

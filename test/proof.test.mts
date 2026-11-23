@@ -35,3 +35,8 @@ import { verifyNode } from "../src/run-node";
 const v = await verifyNode(text, challenge.challenge);
 if (v.unavailable) ok(!v.valid && /Docker|image/.test(v.reason ?? ""), `no Lean here: unavailable, not refused (${v.reason})`);
 else ok(!v.valid && /sorry/i.test(v.reason ?? ""), "with Lean here: a sorry proof is refused");
+
+// a yes-or-no question as two boards, each naming the other
+const yes = { ...challenge, opposite: "erdos-1075-no" };
+ok(parseLeanChallenge(leanChallengeText(yes))?.opposite === "erdos-1075-no", "a board names its other answer");
+ok(parseLeanChallenge(JSON.stringify({ ...yes, opposite: "Not A Slug" }))?.opposite === undefined, "and only by a slug");

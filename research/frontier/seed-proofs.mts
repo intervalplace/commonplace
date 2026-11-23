@@ -20,7 +20,7 @@ const head = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"]).toString().tr
 if (head !== PIN) { console.error(`The checkout is at ${head}, not ${PIN} (formal-conjectures of 21 Nov 2026), which the checker pins.`); process.exit(1); }
 const ED = join(dir, "FormalConjectures/ErdosProblems");
 
-type Board = { n: string; slug: string; title: string; statement: string; theorem: string; lean: string; source: string };
+type Board = { n: string; slug: string; title: string; statement: string; theorem: string; lean: string; source: string; opposite?: string };
 // The problem's own statement, `theorem erdos_<n>`, marked open and proved by sorry; the rest of
 // its file (variants, solved special cases) stays as it is around it. Most of Erdős's ask yes or
 // no: formal-conjectures states those as `answer(sorry) ↔ P`, so each becomes two boards, one with
@@ -51,7 +51,7 @@ function board(n: string, lean: string, m: RegExpExecArray, answer?: "yes" | "no
   if (statement.length < 20) statement = `Erdős Problem ${n}, as formal-conjectures states it.`;
   if (answer) statement = `${answer === "yes" ? "Prove yes" : "Prove no"}: ${statement}`;
   const slug = `erdos-${n}${answer ? `-${answer}` : ""}`;
-  return { n: answer ? `${n}-${answer}` : n, slug, title: `Erdős Problem ${n}${answer ? `, answer ${answer}` : ""}`, statement, theorem: ns ? `${ns}.${m[1]}` : m[1], lean, source: `https://www.erdosproblems.com/${n}` };
+  return { n: answer ? `${n}-${answer}` : n, slug, ...(answer ? { opposite: `erdos-${n}-${answer === "yes" ? "no" : "yes"}` } : {}), title: `Erdős Problem ${n}${answer ? `, answer ${answer}` : ""}`, statement, theorem: ns ? `${ns}.${m[1]}` : m[1], lean, source: `https://www.erdosproblems.com/${n}` };
 }
 
 // The Millennium Prize problems formal-conjectures states, each as Clay poses it, and its
@@ -60,7 +60,8 @@ const MIL = join(dir, "FormalConjectures/Millennium");
 function swap(src: string, from: string, to: string) { if (!src.includes(from)) throw new Error(`formal-conjectures no longer has: ${from}`); return src.replace(from, to); }
 function millennium(): Board[] {
   const pnp = readFileSync(join(MIL, "PvsNP.lean"), "utf8"), rh = readFileSync(join(MIL, "RiemannHypothesis.lean"), "utf8");
-  const b = (slug: string, title: string, statement: string, theorem: string, lean: string, source: string): Board => ({ n: slug, slug, title, statement, theorem, lean, source });
+  const OPP: Record<string, string> = { "p-ne-np": "p-eq-np", "p-eq-np": "p-ne-np", "riemann-hypothesis": "riemann-hypothesis-false", "riemann-hypothesis-false": "riemann-hypothesis" };
+  const b = (slug: string, title: string, statement: string, theorem: string, lean: string, source: string): Board => ({ n: slug, slug, title, statement, theorem, lean, source, opposite: OPP[slug] });
   return [
     b("p-ne-np", "P vs NP: prove P ≠ NP", "The Millennium Prize problem: show that the complexity classes P and NP are different, as formal-conjectures states it.", "ComplexityTheory.P_ne_NP", pnp, "https://www.claymath.org/millennium/p-vs-np/"),
     b("p-eq-np", "P vs NP: prove P = NP", "The Millennium Prize problem, the other way: show that P and NP are the same class, with P and NP as formal-conjectures defines them.", "ComplexityTheory.P_eq_NP",
@@ -89,7 +90,7 @@ if (cmd === "list") {
   const c = new Client({ name: "seed-proofs", version: "1" });
   await c.connect(new StdioClientTransport({ command: "npx", args: ["tsx", join(import.meta.dirname, "../server.mts")], env: process.env as Record<string, string> }));
   for (const b of bs) {
-    const r: any = await c.callTool({ name: "frontier_propose_proof", arguments: { slug: b.slug, title: b.title, statement: b.statement, lean: b.lean, theorem: b.theorem, source: b.source } }, undefined, { timeout: 40 * 60_000 });
+    const r: any = await c.callTool({ name: "frontier_propose_proof", arguments: { slug: b.slug, title: b.title, statement: b.statement, lean: b.lean, theorem: b.theorem, source: b.source, ...(b.opposite ? { opposite: b.opposite } : {}) } }, undefined, { timeout: 40 * 60_000 });
     console.log(b.slug, r.content?.[0]?.text ?? "");
     if (r.isError) break;
     await new Promise(res => setTimeout(res, 5_000));
