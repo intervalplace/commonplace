@@ -38,7 +38,9 @@ export async function leanReady(c: LeanChallenge, pull = true): Promise<{ ok: bo
   const has = await run("docker", ["image", "inspect", image], 20_000);
   if (has.code === 0) return { ok: true, image };
   if (!pull) return { ok: false, reason: `the checker image isn't here yet: docker pull ${image}` };
-  const p = await run("docker", ["pull", image], 60 * 60_000);
+  let p = await run("docker", ["pull", image], 60 * 60_000);
+  // no build for this machine's kind of processor: the Intel/AMD one, translated (slower)
+  if (p.code !== 0 && /no matching manifest/i.test(p.out)) p = await run("docker", ["pull", "--platform", "linux/amd64", image], 60 * 60_000);
   return p.code === 0 ? { ok: true, image } : { ok: false, reason: `couldn't download the checker image (${image}): ${p.out.trim().split("\n").slice(-2).join(" ")}` };
 }
 
@@ -52,7 +54,9 @@ export async function checkProof(c: LeanChallenge, solution: string, ms = 30 * 6
   try {
     writeFileSync(join(dir, "Challenge.lean"), c.challenge);
     writeFileSync(join(dir, "Solution.lean"), solution);
-    const r = await run("docker", ["run", "--rm", "--network", "none", "--memory", "8g", "--cpus", "2", "--pids-limit", "512",
+    const plat = await run("docker", ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", ready.image!], 20_000);
+    const platform = plat.code === 0 && /^linux\/[a-z0-9]+$/.test(plat.out.trim()) ? ["--platform", plat.out.trim()] : [];
+    const r = await run("docker", ["run", "--rm", ...platform, "--network", "none", "--memory", "8g", "--cpus", "2", "--pids-limit", "512",
       "-v", `${dir}:/in:ro`, ready.image!, "cp-check", c.theorem, c.axioms.join(",")], ms);
     if (r.timedOut) return { valid: false, unavailable: true, reason: `Lean didn't finish within ${Math.round(ms / 60_000)} minutes here` };
     const line = r.out.trim().split("\n").reverse().find(l => l.startsWith("{"));

@@ -1,6 +1,7 @@
 # Builds the Lean checker image for proof boards (lean/), proves it on its own tests (a good proof
 # passes; a different statement, a sorry and an extra axiom are each refused; a real Erdős statement
-# builds), and only then publishes it, tagged by the library commit it checks against.
+# builds), and only then publishes it, tagged by the library commit it checks against. It's built
+# natively for Intel/AMD and for ARM (Apple Silicon Macs, ARM servers), under one tag.
 name: Lean checker
 
 on:
@@ -19,8 +20,16 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - name: Make room
@@ -58,6 +67,20 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          tag="$IMAGE:fc-${LIB_REV:0:12}"
+          tag="$IMAGE:fc-${LIB_REV:0:12}-${{ matrix.arch }}"
           docker tag checker "$tag" && docker push "$tag"
           echo "Published $tag" >> "$GITHUB_STEP_SUMMARY"
+
+  # one tag for both: Docker picks the one for the machine it runs on
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Join the two
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          tag="$IMAGE:fc-${LIB_REV:0:12}"
+          docker buildx imagetools create -t "$tag" "$tag-amd64" "$tag-arm64"
+          docker buildx imagetools inspect "$tag"
+          echo "Published $tag for amd64 and arm64" >> "$GITHUB_STEP_SUMMARY"
