@@ -89,11 +89,19 @@ if (cmd === "list") {
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const c = new Client({ name: "seed-proofs", version: "1" });
   await c.connect(new StdioClientTransport({ command: "npx", args: ["tsx", join(import.meta.dirname, "../server.mts")], env: process.env as Record<string, string> }));
+  const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
   for (const b of bs) {
-    const r: any = await c.callTool({ name: "frontier_propose_proof", arguments: { slug: b.slug, title: b.title, statement: b.statement, lean: b.lean, theorem: b.theorem, source: b.source, ...(b.opposite ? { opposite: b.opposite } : {}) } }, undefined, { timeout: 40 * 60_000 });
-    console.log(b.slug, r.content?.[0]?.text ?? "");
-    if (r.isError) break;
-    await new Promise(res => setTimeout(res, 5_000));
+    // one key's coins can all be in its last record until the next block: wait for it, then go on
+    for (let i = 0; ; i++) {
+      const r: any = await c.callTool({ name: "frontier_propose_proof", arguments: { slug: b.slug, title: b.title, statement: b.statement, lean: b.lean, theorem: b.theorem, source: b.source, ...(b.opposite ? { opposite: b.opposite } : {}) } }, undefined, { timeout: 40 * 60_000 });
+      const said = String(r.content?.[0]?.text ?? "");
+      if (r.isError && /already has that slug/.test(said)) { console.log(b.slug, "already up"); break; }
+      if (r.isError && i < 12 && /next block|in flight|spent|no coins|insufficient|not enough/i.test(said)) { console.log(b.slug, "waiting for the next block…"); await wait(30_000); continue; }
+      console.log(b.slug, said);
+      if (r.isError) { await c.close(); process.exit(1); }
+      break;
+    }
+    await wait(5_000);
   }
   await c.close();
 }
