@@ -6,6 +6,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, otherApp, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
+import { friendlyName } from "@/friendly";
 import { PROVED, parseLeanChallenge, type LeanChallenge, type Checker, OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
@@ -667,16 +668,16 @@ function TopUpHere({ me, compact }: { me: TopUpKey; compact?: boolean }) {
   return <TopUpBox me={me} eth={p.eth} setEth={p.setEth} csdNode={p.api} onLocked={p.refresh} compact={compact} />;
 }
 
-// ── who wrote it: picture, chosen name, and always the address ──────────────
+// ── who wrote it: picture and name (chosen, or the two words made from its address); the address
+// itself is on their page, and in the link's tooltip ─────────────────────────
 type Profile = { pic: number; name: string };
 const Profiles = createContext<Record<string, Profile>>({});
 function Who({ addr, you, size = 20 }: { addr: string; you?: boolean; size?: number }) {
   const p = useContext(Profiles)[addr];
   return (
-    <a href={hrefPerson(addr)} className="cp-whois" style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none" }}>
+    <a href={hrefPerson(addr)} className="cp-whois" title={addr} style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none" }}>
       <Avatar addr={addr} pic={p?.pic} size={size} />
-      {p?.name ? <span style={{ color: "var(--ink)", fontWeight: 500 }}>{you ? "you" : p.name}</span> : you ? <span style={{ color: "var(--ink)" }}>you</span> : null}
-      <span className="cp-who">{short(addr)}</span>
+      <span style={{ color: "var(--ink)", fontWeight: 500 }}>{you ? "you" : p?.name || friendlyName(addr)}</span>
     </a>
   );
 }
@@ -684,7 +685,7 @@ function Who({ addr, you, size = 20 }: { addr: string; you?: boolean; size?: num
 // a name and picture without a link, for inside other links
 function WhoPlain({ addr }: { addr: string }) {
   const p = useContext(Profiles)[addr];
-  return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Avatar addr={addr} pic={p?.pic} size={18} /><span style={{ color: "var(--ink)", fontWeight: 500 }}>{p?.name || short(addr)}</span></span>;
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Avatar addr={addr} pic={p?.pic} size={18} /><span style={{ color: "var(--ink)", fontWeight: 500 }} title={addr}>{p?.name || friendlyName(addr)}</span></span>;
 }
 
 type Ctx = {
@@ -732,6 +733,7 @@ function Header({ route, keyState, balance, newReplies = 0 }: { route: Route; ke
 }
 
 function WalletButton({ keyState: [key, setKey], balance }: { keyState: [Me | null, (k: Me | null) => void]; balance: bigint | null }) {
+  const myName = useContext(Profiles)[key?.addr20 ?? ""]?.name;
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<"send" | "key" | "invite" | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -746,7 +748,7 @@ function WalletButton({ keyState: [key, setKey], balance }: { keyState: [Me | nu
   return (
     <div className="cp-wallet" ref={box}>
       <button aria-expanded={open} onClick={() => setOpen(o => !o)}>
-        {key ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><WalletPic addr={key.addr20} />{short(key.addr20)}{balance !== null && <span className="bal">{csd(balance)} CSD</span>}</span> : "Sign in"}
+        {key ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }} title={key.addr20}><WalletPic addr={key.addr20} />{myName || "You"}</span> : "Sign in"}
       </button>
       {open && (
         <div className="cp-menu">
@@ -1304,7 +1306,7 @@ function Me(c: Ctx) {
             <article key={w.at} className="cp-entry">
               <p className="text">{w.text}</p>
               <div className="cp-meta">
-                <span>{guestbookOwner(w.topic) ? `In ${short(guestbookOwner(w.topic)!)}'s guestbook` : w.replyTo ? `A reply in ${w.topic}` : w.topic}</span>
+                <span>{guestbookOwner(w.topic) ? `In ${friendlyName(guestbookOwner(w.topic)!)}'s guestbook` : w.replyTo ? `A reply in ${w.topic}` : w.topic}</span>
                 <span>Written {when(Math.floor(w.at / 1000))}</span>
                 <button type="button" className="cp-linkbtn" onClick={() => c.unwait(w.at)}>Remove</button>
               </div>
@@ -3330,7 +3332,7 @@ function Person(c: Ctx & { addr: Hex }) {
       <header style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
         <Avatar addr={c.addr} pic={prof?.pic} size={84} label={prof?.name ? `${prof.name}'s picture` : "Picture"} />
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: "1 1 260px" }}>
-          <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || (csdName ? <>{csdName}<span className="cp-name-scheme">.csd</span></> : short(c.addr))}</h1>
+          <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || (csdName ? <>{csdName}<span className="cp-name-scheme">.csd</span></> : friendlyName(c.addr))}</h1>
           {csdName && prof?.name && <CsdNameTag name={csdName} />}
           <span className="cp-who" style={{ color: "var(--muted)", overflowWrap: "anywhere" }}>{c.addr}</span>
           {lately && (
@@ -3415,7 +3417,7 @@ function RememberDialog({ who, name, known, balance, onKeep, onClose }: {
   const [err, setErr] = useState<string | null>(null);
   useEscape(onClose, busy);
   const low = balance !== null && balance < MIN_FEE_PROPOSE;
-  const them = name || short(who);
+  const them = name || friendlyName(who);
   return (
     <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="rm-title">
@@ -3535,7 +3537,7 @@ function StyleDialog({ me, balance, draft, setDraft, current, kept, onKeep, onCl
 function TopicLink({ topic }: { topic: string }) {
   const owner = guestbookOwner(topic);
   const p = useContext(Profiles)[owner ?? ""];
-  if (owner) return <a className="topic" href={hrefPerson(owner)}>in the guestbook of {p?.name || short(owner)}</a>;
+  if (owner) return <a className="topic" href={hrefPerson(owner)}>in the guestbook of {p?.name || friendlyName(owner)}</a>;
   return <a className="topic" href={hrefTopic(topic)}>{topic}</a>;
 }
 
