@@ -44,7 +44,7 @@ function board(n: string, lean: string, m: RegExpExecArray, answer?: "yes" | "no
   const ns = /^namespace\s+([\w.]+)/m.exec(lean)?.[1];
   // the docstring just before it, if it has one
   const before = lean.slice(0, m.index);
-  const d = /\/--([\s\S]*?)-\/\s*$/.exec(before);
+  const d = /\/--((?:(?!\/--)[\s\S])*?)-\/\s*$/.exec(before);
   const doc = (d?.[1] ?? "").replace(/\s+/g, " ").trim();
   // a sentence boundary within 300 characters, for people; the Lean is what counts
   let statement = doc.length <= 260 ? doc : doc.slice(0, 260).replace(/[^.?]*$/, "").trim() || `${doc.slice(0, 256).trim()}…`;
