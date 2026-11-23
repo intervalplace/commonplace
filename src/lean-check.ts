@@ -59,7 +59,11 @@ export async function checkProof(c: LeanChallenge, solution: string, ms = 30 * 6
     if (!line) return { valid: false, unavailable: true, reason: `the checker didn't answer: ${r.out.trim().slice(-300)}` };
     const j = JSON.parse(line);
     if (r.code === 2) return { valid: false, unavailable: true, reason: String(j.reason ?? "the checker couldn't run") };
-    return j.ok === true ? { valid: true } : { valid: false, reason: String(j.reason ?? "Lean refused it").slice(0, 1500) };
+    if (j.ok === true) return { valid: true };
+    // comparator's own verdict, without the build log before it
+    const said = String(j.reason ?? "Lean refused it");
+    const why = /uncaught exception:\s*(.*)$/.exec(said)?.[1]?.trim();
+    return { valid: false, reason: (why || said).slice(0, 1500) };
   } catch (e: any) {
     return { valid: false, unavailable: true, reason: String(e?.message ?? e) };
   } finally { rmSync(dir, { recursive: true, force: true }); }
