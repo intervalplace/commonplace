@@ -90,3 +90,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.52 | `bafybeicjuadfj7kvqk4guiuzcxadwqlnpf5om3vhby43znqht4hn3i2xoq` | 99e90eca3b3b | 2026-11-23 | A yes-or-no question's two proof boards link each other, and one proved settles both. Includes v0.5.51. |
 | v0.5.53 | `bafybeifiaketzvxmzwfsueizvy3fgvesleudhmfi5libzr2kz576kafhlm` | 84c8fabf9df8 | 2026-11-23 | People read as names, not addresses: a chosen name, or two words made from the key. Includes v0.5.52. |
 | v0.5.54 | `bafybeiegi2gnkt44rtaktg35bpngz53d7k3qg4ryfm7tbo4qtsumjb7saq` | cf807e7444ec | 2026-11-23 | No addresses or block numbers in sight: names on profiles, times on entries, the node and block behind Details. Name pages link to doorway.place. Includes v0.5.53. |
+| v0.5.55 | `bafybeidozoojxeyfkcyl3jndt75t4k7uonnvo2xi5s2tpg3wsvypzdfuk4` | 1cc611c40198 | 2026-11-23 | Person pages: Copy address, and a note that anyone can choose a display name while a .csd name is unique. Includes v0.5.54. |
