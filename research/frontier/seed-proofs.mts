@@ -5,18 +5,19 @@
 //   npx tsx research/frontier/seed-proofs.mts <formal-conjectures checkout> list
 //   npx tsx research/frontier/seed-proofs.mts <formal-conjectures checkout> show 249 212
 //   npx tsx research/frontier/seed-proofs.mts <formal-conjectures checkout> post 249 212
+//   npx tsx research/frontier/seed-proofs.mts <formal-conjectures checkout> millennium   (then show/post p-ne-np …)
 //
-// The checkout must be at the commit the checker image pins (src/lean-check.ts), v4.33.1:
-//   git clone --branch v4.33.1 --depth 1 https://github.com/google-deepmind/formal-conjectures
+// The checkout must be at the commit the checker image pins (src/lean-check.ts):
+//   git clone https://github.com/google-deepmind/formal-conjectures && git -C formal-conjectures checkout 2207c54d0dbe960de591d280f997b195bf3f6e28
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const [dir, cmd = "list", ...nums] = process.argv.slice(2);
 if (!dir) { console.error("usage: seed-proofs.mts <formal-conjectures checkout> list | show <n...> | post <n...>"); process.exit(1); }
-const PIN = "fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965";
+const PIN = "2207c54d0dbe960de591d280f997b195bf3f6e28";
 const head = execFileSync("git", ["-C", dir, "rev-parse", "HEAD"]).toString().trim();
-if (head !== PIN) { console.error(`The checkout is at ${head}, not ${PIN} (formal-conjectures v4.33.1), which the checker pins.`); process.exit(1); }
+if (head !== PIN) { console.error(`The checkout is at ${head}, not ${PIN} (formal-conjectures of 21 Nov 2026), which the checker pins.`); process.exit(1); }
 const ED = join(dir, "FormalConjectures/ErdosProblems");
 
 type Board = { n: string; slug: string; title: string; statement: string; theorem: string; lean: string; source: string };
@@ -53,13 +54,34 @@ function board(n: string, lean: string, m: RegExpExecArray, answer?: "yes" | "no
   return { n: answer ? `${n}-${answer}` : n, slug, title: `Erdős Problem ${n}${answer ? `, answer ${answer}` : ""}`, statement, theorem: ns ? `${ns}.${m[1]}` : m[1], lean, source: `https://www.erdosproblems.com/${n}` };
 }
 
+// The Millennium Prize problems formal-conjectures states, each as Clay poses it, and its
+// opposite where a disproof would settle it too (stated here, next to the original, the one change)
+const MIL = join(dir, "FormalConjectures/Millennium");
+function swap(src: string, from: string, to: string) { if (!src.includes(from)) throw new Error(`formal-conjectures no longer has: ${from}`); return src.replace(from, to); }
+function millennium(): Board[] {
+  const pnp = readFileSync(join(MIL, "PvsNP.lean"), "utf8"), rh = readFileSync(join(MIL, "RiemannHypothesis.lean"), "utf8");
+  const b = (slug: string, title: string, statement: string, theorem: string, lean: string, source: string): Board => ({ n: slug, slug, title, statement, theorem, lean, source });
+  return [
+    b("p-ne-np", "P vs NP: prove P ≠ NP", "The Millennium Prize problem: show that the complexity classes P and NP are different, as formal-conjectures states it.", "ComplexityTheory.P_ne_NP", pnp, "https://www.claymath.org/millennium/p-vs-np/"),
+    b("p-eq-np", "P vs NP: prove P = NP", "The Millennium Prize problem, the other way: show that P and NP are the same class, with P and NP as formal-conjectures defines them.", "ComplexityTheory.P_eq_NP",
+      swap(pnp, "theorem P_ne_NP : P ≠ NP := by sorry", "theorem P_eq_NP : P = NP := by sorry"), "https://www.claymath.org/millennium/p-vs-np/"),
+    b("riemann-hypothesis", "The Riemann Hypothesis", "The Millennium Prize problem: every nontrivial zero of the Riemann zeta function has real part 1/2, as Mathlib states it.", "RiemannHypothesis.riemannHypothesis", rh, "https://www.claymath.org/millennium/riemann-hypothesis/"),
+    b("riemann-hypothesis-false", "The Riemann Hypothesis is false", "The Millennium Prize problem, the other way: some nontrivial zero of the Riemann zeta function is off the line with real part 1/2.", "RiemannHypothesis.riemannHypothesis_false",
+      swap(rh, "theorem riemannHypothesis : RiemannHypothesis := by", "theorem riemannHypothesis_false : ¬RiemannHypothesis := by"), "https://www.claymath.org/millennium/riemann-hypothesis/"),
+  ];
+}
+
+if (cmd === "millennium") {
+  for (const b of millennium()) console.log(`${b.slug.padEnd(26)} ${b.title}`);
+  process.exit(0);
+}
 if (cmd === "list") {
   const rows = readdirSync(ED).filter(f => /^\d+\.lean$/.test(f)).flatMap(f => boards(f.slice(0, -5))).sort((a, b) => a.lean.length - b.lean.length);
   for (const b of rows) console.log(`${b.n.padStart(5)}  ${b.statement.slice(0, 110)}`);
   console.log(`${rows.length} boards`);
 } else {
   // a number gives its board, or both of a yes-or-no question's; "249-yes" just the one
-  const bs = nums.flatMap(n => { const [num, a] = n.split("-"); const all = boards(num).filter(b => !a || b.n === n); if (!all.length) { console.error(`${n}: not an open statement a board can take`); process.exit(1); } return all; });
+  const bs = nums.flatMap(n => { const mb = millennium().find(b => b.slug === n); if (mb) return [mb]; const [num, a] = n.split("-"); const all = boards(num).filter(b => !a || b.n === n); if (!all.length) { console.error(`${n}: not an open statement a board can take`); process.exit(1); } return all; });
   if (cmd === "show") { for (const b of bs) console.log(JSON.stringify({ ...b, lean: `${b.lean.length} characters` }, null, 2)); process.exit(0); }
   if (cmd !== "post") { console.error(`unknown command ${cmd}`); process.exit(1); }
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");

@@ -11,7 +11,7 @@ import type { LeanChallenge } from "./frontier";
 export const CHECKER_IMAGE = process.env.COMMONPLACE_LEAN_IMAGE_REPO ?? "ghcr.io/intervalplace/commonplace-lean";
 // the checker images published (lean/ and its workflow), by the library commit they check against
 const IMAGES: Record<string, string> = {
-  "fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965": "fc-fd5c0ab5d1a7", // formal-conjectures v4.33.1, Lean v4.33.1
+  "2207c54d0dbe960de591d280f997b195bf3f6e28": "fc-2207c54d0dbe", // formal-conjectures of 21 Nov 2026 (with the Millennium problems), Lean v4.33.1
 };
 export const imageFor = (c: LeanChallenge) => (IMAGES[c.library.rev] ? `${CHECKER_IMAGE}:${IMAGES[c.library.rev]}` : null);
 

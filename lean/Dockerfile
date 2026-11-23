@@ -12,7 +12,7 @@
 FROM ubuntu:24.04
 
 ARG LIB_GIT=https://github.com/google-deepmind/formal-conjectures
-ARG LIB_REV=fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965
+ARG LIB_REV=2207c54d0dbe960de591d280f997b195bf3f6e28
 ARG LIB_TARGETS="FormalConjecturesUtil FormalConjecturesForMathlib"
 ARG COMPARATOR_REV=c0c5a52d2aff92b457c3e5ed4a68c1ebc5795809
 

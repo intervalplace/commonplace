@@ -147,7 +147,7 @@ others' checks confirm it, and the board shows who checked it. Anyone can replay
 couldn't check, and records nothing.
 
 Boards come from [formal-conjectures](https://github.com/google-deepmind/formal-conjectures)'s open
-Erdős problems at v4.33.1, stated exactly as that project states them; a yes-or-no question becomes
+Erdős problems and Millennium Prize problems (at its commit of 21 November 2026), stated exactly as that project states them; a yes-or-no question becomes
 two boards, one for each answer. `research/frontier/seed-proofs.mts` lists them and puts them on
 through `frontier_propose_proof`, which first builds each statement with Lean when Docker is there.
 

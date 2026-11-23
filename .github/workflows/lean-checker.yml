@@ -14,7 +14,7 @@ permissions:
   packages: write
 
 env:
-  LIB_REV: fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965
+  LIB_REV: 2207c54d0dbe960de591d280f997b195bf3f6e28
   IMAGE: ghcr.io/${{ github.repository_owner }}/commonplace-lean
 
 jobs:
@@ -44,7 +44,16 @@ jobs:
           out=$(docker run --rm --network none -v "$PWD/lean/test/erdos:/in:ro" checker cp-check Erdos1075.erdos_1075)
           echo "erdos: $out"
           echo "$out" | grep -q '"ok":false' || { echo "::error::a sorry proof of erdos_1075 passed"; exit 1; }
-          echo "$out" | grep -qi 'sorry' || { echo "::error::erdos_1075 was refused for another reason than its sorry"; exit 1; }
+          echo "$out" | grep -q "Illegal axiom detected: 'sorryAx'" || { echo "::error::erdos_1075 was refused for another reason than its sorry"; exit 1; }
+          # and the Millennium statements boards use, both ways round
+          sorry_only() { # <case> <theorem>: the statement builds, and only its sorry is refused
+            out=$(docker run --rm --network none -v "$PWD/lean/test/$1:/in:ro" checker cp-check "$2")
+            echo "$1: $out"
+            echo "$out" | grep -q '"ok":false' && echo "$out" | grep -q "Illegal axiom detected: 'sorryAx'" || { echo "::error::$2 wasn't refused for its sorry alone"; exit 1; }
+          }
+          sorry_only pvsnp ComplexityTheory.P_ne_NP
+          sorry_only pnp-eq ComplexityTheory.P_eq_NP
+          sorry_only rh-false RiemannHypothesis.riemannHypothesis_false
       - name: Publish
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         run: |

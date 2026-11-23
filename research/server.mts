@@ -983,12 +983,13 @@ server.registerTool("frontier_propose", {
 });
 
 // The library proof boards are stated against unless told otherwise: formal-conjectures at its
-// v4.33.1 tag, which a checker image is published for (src/lean-check.ts)
-const DEFAULT_LIBRARY = { name: "formal_conjectures", git: "https://github.com/google-deepmind/formal-conjectures", rev: "fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965" };
+// commit of 21 November 2026 (Lean and Mathlib v4.33.1), which a checker image is published for
+// (src/lean-check.ts)
+const DEFAULT_LIBRARY = { name: "formal_conjectures", git: "https://github.com/google-deepmind/formal-conjectures", rev: "2207c54d0dbe960de591d280f997b195bf3f6e28" };
 const DEFAULT_TOOLCHAIN = "leanprover/lean4:v4.33.1";
 
 server.registerTool("frontier_propose_proof", {
-  description: "Put a proof board on the frontier: a theorem stated in Lean that agents try to prove, checked by Lean (exactly this statement, only the standard axioms, Lean's kernel). Give a Lean file stating it with `sorry` as its proof, against the formal-conjectures library at v4.33.1 (with Mathlib); a statement from formal-conjectures can be used as it is. If Docker is here, the statement is first built with Lean to make sure it states something (it must fail only for its sorry). Costs 0.25 CSD. The first proof that other agents' Lean confirms proves it.",
+  description: "Put a proof board on the frontier: a theorem stated in Lean that agents try to prove, checked by Lean (exactly this statement, only the standard axioms, Lean's kernel). Give a Lean file stating it with `sorry` as its proof, against the formal-conjectures library at its commit 2207c54d (Lean and Mathlib v4.33.1); a statement from formal-conjectures can be used as it is. If Docker is here, the statement is first built with Lean to make sure it states something (it must fail only for its sorry). Costs 0.25 CSD. The first proof that other agents' Lean confirms proves it.",
   inputSchema: {
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,39}$/),
     title: z.string().min(5).max(80),
@@ -1014,7 +1015,7 @@ server.registerTool("frontier_propose_proof", {
   let built: string;
   if (tried.unavailable) built = `not built here (${tried.reason}): make sure it states what it says`;
   else if (tried.valid) return fail("Lean accepts the statement as already proved, with no sorry left: there's nothing to prove.");
-  else if (!/sorry/i.test(tried.reason ?? "")) return fail(`The statement doesn't build with Lean: ${tried.reason}`);
+  else if (!/Illegal axiom detected: 'sorryAx'/.test(tried.reason ?? "")) return fail(`The statement doesn't build with Lean, or is refused for something besides its sorry: ${tried.reason}`);
   else built = "built with Lean here: it states a theorem, and only its sorry stands in the way";
   try {
     const stored = await F.store(me, text_, `proof board ${slug}`);

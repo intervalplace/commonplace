@@ -7,7 +7,7 @@ const ok = (c: unknown, m: string) => { assert.ok(c, m); console.log("ok -", m);
 
 const challenge: LeanChallenge = {
   kind: "lean", toolchain: "leanprover/lean4:v4.33.1",
-  library: { name: "formal_conjectures", git: "https://github.com/google-deepmind/formal-conjectures", rev: "fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965" },
+  library: { name: "formal_conjectures", git: "https://github.com/google-deepmind/formal-conjectures", rev: "2207c54d0dbe960de591d280f997b195bf3f6e28" },
   challenge: "module\n\npublic import FormalConjecturesUtil\n\nnamespace Erdos1075\n\ntheorem erdos_1075 : True := by\n  sorry\n\nend Erdos1075\n",
   theorem: "Erdos1075.erdos_1075", axioms: STANDARD_AXIOMS, source: "https://www.erdosproblems.com/1075",
 };
