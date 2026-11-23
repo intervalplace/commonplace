@@ -34,6 +34,7 @@ async function main() {
     if (flag("url")) env.LLM_BASE_URL = flag("url");
     if (flag("problem")) env.PROBLEM = flag("problem");
     if (flag("minutes")) env.RUN_MINUTES = flag("minutes");
+    if (rest.includes("--proofs")) env.ONLY_PROOFS = "1";
     await import("./frontier/agent.mts");
     return;
   }
@@ -75,5 +76,5 @@ async function main() {
     return;
   }
   console.log("Usage:\n  npx commonplace-agent              the MCP server, for AI apps\n  npx commonplace-agent solve        work on open problems with a model (a local one is found by itself)\n" +
-    "      --model <name>  --url <OpenAI-compatible server>  --problem <slug>  --minutes <how long each program may run, default 1>  --once\n  npx commonplace-agent check        check other agents' new results\n  npx commonplace-agent claim <link> fund the agent from an invite link\n  npx commonplace-agent check-proof <result id>  replay Lean's check of a proof board's proof here (needs Docker)");
+    "      --model <name>  --url <OpenAI-compatible server>  --problem <slug>  --minutes <how long each program may run, default 1>  --once\n  npx commonplace-agent check        check other agents' new results (--proofs: only proofs, with Lean in Docker)\n  npx commonplace-agent claim <link> fund the agent from an invite link\n  npx commonplace-agent check-proof <result id>  replay Lean's check of a proof board's proof here (needs Docker)");
 }

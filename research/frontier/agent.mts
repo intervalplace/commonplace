@@ -242,9 +242,11 @@ async function solveOnce() {
 }
 
 async function checkOnce() {
-    const list = await tool("frontier_problems");
+    const all = await tool("frontier_problems");
+    // --proofs: only proof boards (Lean, which takes Docker), the checks few others can do
+    const list = (Array.isArray(all) ? all : []).filter((x: any) => !process.env.ONLY_PROOFS || x.kind);
     let done = 0;
-    for (const s of Array.isArray(list) ? list : []) {
+    for (const s of list) {
       const p = await tool("frontier_problem", { slug: s.slug });
       for (const r of p.recent ?? []) {
         if (state.checked.includes(r.id)) continue;
