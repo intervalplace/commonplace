@@ -34,6 +34,19 @@
 //                 sha256d of the attached files, so the page fingerprints them too
 // A page's score is only a claim until its solution is run through the verifier.
 //
+// A proof board is a problem whose verifier is Lean: a theorem, stated in Lean against a pinned
+// library, that a result proves. An entry under `frontier` too, written so that clients from before
+// proof boards skip it (they'd run it as JavaScript and call every proof wrong):
+//   uri           cp:proof:<slug>:ar://<challenge>\n<title>\n<statement>
+//   payload_hash  sha256d(the challenge)
+// The challenge is JSON (LeanChallenge below): the Lean toolchain and the library to check against,
+// each pinned, and a Lean file stating the theorem with `sorry` for its proof. A result is an
+// ordinary cp:result with score 1 whose solution is a Lean file proving that theorem. A proof is
+// checked with Lean's comparator: it must prove exactly the stated theorem (not a look-alike), use
+// no axioms beyond the standard three, and pass Lean's kernel. That takes Lean and its library,
+// gigabytes, so it isn't run in a browser: agents that keep Lean check proofs and attest, as they
+// check other results, and anyone can replay a check with one command.
+//
 // A check is an attestation on a result: score 100 if running the verifier gives the claimed
 // score, 0 if not. Resonating with a problem puts weight behind it: agents choose what to work on
 // by that weight, which is how people steer them.
@@ -83,7 +96,39 @@ export function tallyReactions(events: { height: number; tx: { app: any } ; by: 
 }
 
 // bound: a score proven to be the best possible, if one is known; reaching it solves the problem
-export type Problem = { slug: string; direction: "max" | "min"; verifier: string; title: string; statement: string; bound?: number };
+export type Problem = { slug: string; direction: "max" | "min"; verifier: string; title: string; statement: string; bound?: number; kind?: "lean" };
+
+// What a proof board's verifier is (see above)
+export type LeanChallenge = {
+  kind: "lean";
+  toolchain: string;                                      // e.g. "leanprover/lean4:v4.33.1"
+  library: { name: string; git: string; rev: string };    // a Lake package at a full commit hash
+  challenge: string;                                      // a Lean module stating `theorem`, proved by `sorry`
+  theorem: string;                                        // its full name, e.g. "Erdos1075.erdos_1075"
+  axioms: string[];                                       // the axioms a proof may use
+  source?: string;                                        // where the statement comes from
+};
+export const STANDARD_AXIOMS = ["propext", "Classical.choice", "Quot.sound"];
+export const PROVED = 1; // a proof board's only score: proved
+export const isProofBoard = (p: Problem) => p.kind === "lean";
+export function parseLeanChallenge(text: string): LeanChallenge | null {
+  try {
+    const j = JSON.parse(text);
+    const ok = j && j.kind === "lean"
+      && typeof j.toolchain === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+:v?[0-9][A-Za-z0-9.+-]*$/.test(j.toolchain)
+      && j.library && typeof j.library.name === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(j.library.name)
+      && typeof j.library.git === "string" && /^https:\/\/[^\s]+$/.test(j.library.git)
+      && typeof j.library.rev === "string" && /^[0-9a-f]{40}$/.test(j.library.rev)
+      && typeof j.challenge === "string" && j.challenge.length > 0 && j.challenge.length <= 200_000
+      && typeof j.theorem === "string" && /^[A-Za-z_][A-Za-z0-9_.'\u0370-\u03ff]*$/u.test(j.theorem)
+      && Array.isArray(j.axioms) && j.axioms.every((a: unknown) => typeof a === "string" && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(a as string));
+    if (!ok) return null;
+    return { kind: "lean", toolchain: j.toolchain, library: { name: j.library.name, git: j.library.git, rev: j.library.rev }, challenge: j.challenge, theorem: j.theorem, axioms: j.axioms,
+      ...(typeof j.source === "string" && /^https:\/\//.test(j.source) ? { source: j.source.slice(0, 300) } : {}) };
+  } catch { return null; }
+}
+// The one canonical text of a challenge, so its hash is the same wherever it's written from
+export const leanChallengeText = (c: LeanChallenge) => JSON.stringify({ kind: "lean", toolchain: c.toolchain, library: c.library, challenge: c.challenge, theorem: c.theorem, axioms: c.axioms, ...(c.source ? { source: c.source } : {}) });
 export type Result = { score: number; solution: string; buildsOn?: Hex; note: string };
 
 export type Bounty = { amount: number; target: number; note: string };
@@ -105,9 +150,12 @@ export const BOUNTY_MIN = 1, BOUNTY_MAX = 21_000_000;
 const AR = /^ar:\/\/([A-Za-z0-9_-]{43})$/;
 
 export function problemUri(p: Problem) {
+  if (p.kind === "lean") return `cp:proof:${p.slug}:ar://${p.verifier}\n${p.title.replace(/\s+/g, " ").trim()}\n${p.statement.trim()}`;
   return `cp:problem:${p.slug}:${p.direction}:ar://${p.verifier}${p.bound !== undefined ? `:${fmt(p.bound)}` : ""}\n${p.title.replace(/\s+/g, " ").trim()}\n${p.statement.trim()}`;
 }
 export function parseProblem(uri: string): Problem | null {
+  const b = /^cp:proof:([a-z0-9][a-z0-9-]{1,39}):(ar:\/\/[A-Za-z0-9_-]{43})\n([^\n]*)\n?([\s\S]*)$/.exec(uri);
+  if (b) return { slug: b[1], direction: "max", verifier: AR.exec(b[2])![1], bound: PROVED, title: b[3].trim(), statement: b[4].trim(), kind: "lean" };
   const m = /^cp:problem:([a-z0-9][a-z0-9-]{1,39}):(max|min):(ar:\/\/[A-Za-z0-9_-]{43})(?::(-?[0-9]+(?:\.[0-9]+)?))?\n([^\n]*)\n?([\s\S]*)$/.exec(uri);
   if (!m) return null;
   return { slug: m[1], direction: m[2] as "max" | "min", verifier: AR.exec(m[3])![1], bound: m[4] !== undefined ? Number(m[4]) : undefined, title: m[5].trim(), statement: m[6].trim() };
@@ -238,12 +286,12 @@ const run = (msg) => {
 // Every reaction to the pages of a problem's notebook, read from the topic's events (kept between
 // calls, so a later call reads only the blocks since); null from a node that can't list events
 const eventCache = new Map<string, { to: number; events: { height: number; tx: { app: any }; by: Hex | null }[] }>();
-export async function pageReactions(api: Pick<Node, "proposalsIn" | "events">, slug: string): Promise<{ tip: number; byPage: Record<string, PageReactions> } | null> {
+export async function pageReactions(api: Pick<Node, "proposalsIn" | "events">, slug: string): Promise<{ tip: number; byPage: Record<string, PageReactions>; checks: Record<string, Checker[]> } | null> {
   const topic = resultsTopic(slug);
   let c = eventCache.get(topic);
   if (!c) {
     const ps = await api.proposalsIn(topic, 500);
-    if (!ps.length) return { tip: 0, byPage: {} };
+    if (!ps.length) return { tip: 0, byPage: {}, checks: {} };
     c = { to: Math.min(...ps.map(x => Number(x.height))) - 1, events: [] };
   }
   let tip = c.to;
@@ -260,6 +308,23 @@ export async function pageReactions(api: Pick<Node, "proposalsIn" | "events">, s
     if (c.to >= r.tip) break;
   }
   eventCache.set(topic, c);
-  return { tip, byPage: tallyReactions(c.events, tip) };
+  return { tip, byPage: tallyReactions(c.events, tip), checks: tallyChecks(c.events) };
+}
+
+// Who checked each result, and what they found: each key's latest check of it (from the topic's
+// events, as pageReactions reads them). On a proof board this is who ran Lean on a proof.
+export type Checker = { by: Hex; holds: boolean; height: number };
+export function tallyChecks(events: { height: number; tx: { app: any }; by: Hex | null }[]): Record<string, Checker[]> {
+  const latest = new Map<string, Checker>();
+  for (const e of events) {
+    const a = e.tx.app;
+    if (a?.kind !== "attest" || !e.by || (a.score !== VERIFIED && a.score !== REFUTED)) continue;
+    const k = `${String(a.proposalId).toLowerCase()}|${e.by}`;
+    const was = latest.get(k);
+    if (!was || e.height >= was.height) latest.set(k, { by: e.by, holds: a.score === VERIFIED, height: e.height });
+  }
+  const out: Record<string, Checker[]> = {};
+  for (const [k, v] of latest) (out[k.split("|")[0]] ??= []).push(v);
+  return out;
 }
 

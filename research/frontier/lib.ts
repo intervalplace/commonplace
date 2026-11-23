@@ -99,10 +99,19 @@ export async function methodFor(api: Node, slug: string, resultId: Hex): Promise
 const VERDICTS = join(homedir(), ".commonplace-agent-verdicts.json");
 let verdicts: Record<string, { ok: boolean; score: number }> | null = null;
 const verifierText = new Map<string, Promise<string>>();
+// what this agent found when it checked a result itself (frontier_check), kept like its own verdicts
+export function rememberVerdict(id: string, ok: boolean, score: number) {
+  verdicts ??= (() => { try { return JSON.parse(readFileSync(VERDICTS, "utf8")); } catch { return {}; } })();
+  verdicts![id] = { ok, score };
+  try { writeFileSync(VERDICTS, JSON.stringify(verdicts)); } catch {}
+}
 export async function verified(p: ProblemRow, r: ResultRow): Promise<boolean> {
   verdicts ??= (() => { try { return JSON.parse(readFileSync(VERDICTS, "utf8")); } catch { return {}; } })();
   const known = verdicts![r.id];
   if (known) return known.ok;
+  // a proof takes Lean minutes to check: it counts by agents' checks (frontier_check runs Lean)
+  // until this agent checks it itself
+  if (p.kind === "lean") return r.holds > r.fails;
   let v = verifierText.get(p.id);
   if (!v) { v = fetchAr(p.verifier, p.hash); verifierText.set(p.id, v); v.catch(() => verifierText.delete(p.id)); }
   let ok = false, score = NaN;

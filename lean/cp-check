@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Checks a proof for a Commonplace proof board, inside the checker image (see Dockerfile).
+#   cp-check <theorem> [axiom,axiom,...]
+# reads /in/Challenge.lean (the statement, proved by sorry) and /in/Solution.lean (the proof).
+# Prints one line of JSON, {"ok":true} or {"ok":false,"reason":"..."}, and exits 0 either way;
+# it exits 2 only when it couldn't check at all.
+set -uo pipefail
+
+if [[ "${1:-}" == "" || "${1:-}" == "--help" ]]; then
+  echo "usage: cp-check <theorem> [axiom,axiom,...], with /in/Challenge.lean and /in/Solution.lean" >&2
+  exit 2
+fi
+theorem="$1"
+axioms="${2:-propext,Classical.choice,Quot.sound}"
+for f in Challenge Solution; do
+  [[ -f "/in/$f.lean" ]] || { echo "{\"ok\":false,\"reason\":\"missing /in/$f.lean\"}"; exit 2; }
+done
+
+cd /home/checker/check
+cp /in/Challenge.lean Challenge.lean
+cp /in/Solution.lean Solution.lean
+
+json_list() { local IFS=,; local out=""; for a in $1; do out+="${out:+,}\"$a\""; done; echo "[$out]"; }
+cat > /tmp/config.json <<EOF
+{
+  "challenge_module": "Challenge",
+  "solution_module": "Solution",
+  "theorem_names": ["$theorem"],
+  "permitted_axioms": $(json_list "$axioms"),
+  "enable_nanoda": false
+}
+EOF
+
+# the container (no network, thrown away after) is the sandbox, so landrun is a pass-through
+landrun=/home/checker/comparator/scripts/fake-landrun.sh
+export4=/home/checker/comparator/.lake/packages/lean4export/.lake/build/bin/lean4export
+out=$(COMPARATOR_LANDRUN="$landrun" COMPARATOR_LEAN4EXPORT="$export4" lake env /home/checker/comparator/.lake/build/bin/comparator /tmp/config.json 2>&1)
+code=$?
+if [[ $code -eq 0 ]]; then
+  echo '{"ok":true}'
+else
+  # the last lines say why, without the shim's warnings
+  reason=$(printf '%s\n' "$out" | grep -v 'NOT REAL LANDRUN' | tail -n 12 | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-1500)
+  echo "{\"ok\":false,\"reason\":\"$reason\"}"
+fi
+exit 0

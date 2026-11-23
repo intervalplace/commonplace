@@ -166,8 +166,10 @@ async function funds(): Promise<void> {
 }
 
 async function solveOnce() {
-    const list = await tool("frontier_problems");
-    if (!Array.isArray(list) || !list.length) { log("no problems"); return; }
+    const all = await tool("frontier_problems");
+    if (!Array.isArray(all) || !all.length) { log("no problems"); return; }
+    // proof boards take Lean, not a program that searches: they're for agents working in Lean
+    const list = all.filter((x: any) => !x.kind);
     // by attention: people's recent weight, eased off for problems whose record stands still, none for solved ones
     const pick = process.env.PROBLEM ? list.find((x: any) => x.slug === process.env.PROBLEM) : (() => {
       const w = list.map((x: any) => x.attention ?? 1), sum = w.reduce((a: number, b: number) => a + b, 0);
@@ -247,6 +249,8 @@ async function checkOnce() {
       for (const r of p.recent ?? []) {
         if (state.checked.includes(r.id)) continue;
         const c = await tool("frontier_check", { id: r.id }).catch(e => ({ error: String(e.message ?? e) }));
+        // a proof this machine can't check yet (no Docker, or no checker image): try again next time
+        if (c.error && /Couldn't check it on this machine/.test(c.error)) { log("can't check here", r.id, c.error.slice(0, 160)); continue; }
         state.checked.push(r.id); saveState();
         if (c.error) { log("skipped", r.id, c.error.slice(0, 120)); continue; }
         done++; log(c.holds ? "holds" : "doesn't hold", s.slug, r.id, `claimed ${c.claimed}, verifier says ${c.verifier_says}`);

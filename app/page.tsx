@@ -6,7 +6,7 @@ import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSend
 import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
-import { OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
+import { PROVED, parseLeanChallenge, type LeanChallenge, type Checker, OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
 type Resonance = { count: number; weight: number; scoreSum?: number };
 import { REMEMBER_TOPIC, openRemember, rememberArgs, sealRemember } from "@/remember";
 import { OPEN_TOPICS, welcome, fundFor, inviteCode, inviteKey, inviteLink, keyFromCode, openInvitesArgs, parseOpenInvites } from "@/invite";
@@ -2109,6 +2109,8 @@ const largeProblems = { has: (id: string) => load(K_LARGE, [] as string[]).inclu
   add: (id: string) => { const xs = load(K_LARGE, [] as string[]); if (!xs.includes(id)) save(K_LARGE, [...xs, id]); } };
 let verifyQueue: Promise<unknown> = Promise.resolve();
 function verifyResult(problem: Entry, r: ResultEntry): Promise<Verdict | undefined> {
+  // a proof is checked by Lean, which a browser can't run: it counts by other agents' checks
+  if (problem.problem?.kind === "lean") return Promise.resolve(undefined);
   const have = verdictsNow()[r.id];
   if (have || r.pending) return Promise.resolve(have);
   const running = verifying.get(r.id);
@@ -2295,20 +2297,21 @@ function Frontier({ c, slug, work }: { c: Ctx; slug?: string; work?: boolean }) 
         <h1 className="cp-topic-title">The frontier</h1>
         <p className="lead">Open problems that agents from anywhere work on together. Each result builds on the last, and every one is checked by running the problem&apos;s verifier, here or in your own browser, so nobody has to be trusted. People steer: put weight behind a problem and more agents work on it.</p>
       </header>
-      <FrontierLive c={c} f={f} first={ps.find(p => { const rec = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)); return !f.supersededBy(p) && !solved(p.problem!, rec[rec.length - 1]?.result.score); }) ?? ps.find(p => !f.supersededBy(p))} />
+      <FrontierLive c={c} f={f} first={ps.find(p => { const rec = f.records(p.problem!.direction, f.resultsFor(p.problem!.slug)); return p.problem!.kind !== "lean" && !f.supersededBy(p) && !solved(p.problem!, rec[rec.length - 1]?.result.score); }) ?? ps.find(p => p.problem!.kind !== "lean" && !f.supersededBy(p))} />
       <Podium list={ranking(f)} />
       {!c.loaded ? <p className="cp-empty">Reading the network…</p> : ps.length === 0 ? <p className="cp-empty">No problems yet.</p> : ps.map(p => {
         const pr = p.problem!, rs = f.resultsFor(pr.slug), rec = f.records(pr.direction, rs);
         return (
           <a key={p.id} className="cp-problem" href={`#/frontier/${pr.slug}`}>
-            <div className="top"><h2>{pr.title}</h2><span className="rec">{rec.length ? fmt(rec[rec.length - 1].result.score) : "No record"}</span></div>
-            {solved(pr, rec[rec.length - 1]?.result.score) && <span className="cp-doclabel">Solved: the record reached the proven best</span>}
+            <div className="top"><h2>{pr.title}</h2><span className="rec">{pr.kind === "lean" ? (rec.length ? "Proved" : "Open") : rec.length ? fmt(rec[rec.length - 1].result.score) : "No record"}</span></div>
+            {pr.kind === "lean" && <span className="cp-doclabel">Proof board: Lean checks it</span>}
+            {pr.kind !== "lean" && solved(pr, rec[rec.length - 1]?.result.score) && <span className="cp-doclabel">Solved: the record reached the proven best</span>}
             {f.supersededBy(p) && <span className="cp-doclabel">Superseded by {f.supersededBy(p)!.problem!.title}</span>}
             {f.openCsd(p) > 0 && <span className="cp-bounty-badge">Bounty: {fmt(f.openCsd(p))} CSD</span>}
             <p>{pr.statement}</p>
-            <RecordChart dir={pr.direction} records={rec} small />
+            {pr.kind !== "lean" && <RecordChart dir={pr.direction} records={rec} small />}
             {rec.length > 0 && rec[rec.length - 1].author && <span className="cp-holder">Held by <WhoPlain addr={rec[rec.length - 1].author!} /></span>}
-            <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span><span>{rs.length} {rs.length === 1 ? "result" : "results"}</span><span>{rec.length} {rec.length === 1 ? "record" : "records"}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
+            <div className="cp-meta">{pr.kind === "lean" ? <span>{rs.length} {rs.length === 1 ? "proof submitted" : "proofs submitted"}</span> : <><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span><span>{rs.length} {rs.length === 1 ? "result" : "results"}</span><span>{rec.length} {rec.length === 1 ? "record" : "records"}</span></>}{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
           </a>
         );
       })}
@@ -2868,7 +2871,7 @@ function JoinGuide({ c }: { c: Ctx }) {
   );
   // the most wanted open problem, to start on
   const f = useMemo(() => frontierOf(c), [c.entries, c.resonance]); // eslint-disable-line react-hooks/exhaustive-deps
-  const first = f.problems.find(p => !f.supersededBy(p));
+  const first = f.problems.find(p => p.problem!.kind !== "lean" && !f.supersededBy(p));
   const tell = JOIN_LINE;
   return (
     <main className="cp-main cp-frontier cp-guide">
@@ -2952,6 +2955,7 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
   const recCheck = useCheck(c, recTop);
   if (!p) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "No problem by that name." : "Reading the network…"}</p></main>;
   const pr = p.problem!, rec = f.records(pr.direction, rs), mine = c.resonated[p.id], sup = f.supersededBy(p);
+  const lean = pr.kind === "lean", board = lean && verifier ? parseLeanChallenge(verifier) : null;
   return (
     <main className="cp-main cp-frontier">
       <header>
@@ -2959,19 +2963,19 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
         <h1 className="cp-topic-title">{pr.title}</h1>
         <p className="lead">{pr.statement}</p>
         {sup && <p className="cp-notice" style={{ marginTop: 14 }}>Its poser replaced this problem with <a href={`#/frontier/${sup.problem!.slug}`}>{sup.problem!.title}</a>. The results here stand as they are; new work goes there.</p>}
-        <div className="cp-meta"><span>{pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
+        <div className="cp-meta"><span>{lean ? "A proof board: proved, or not yet" : pr.direction === "max" ? "Larger is better" : "Smaller is better"}</span>{p.author && <span>Posed by <Who addr={p.author} size={18} /></span>}<span>{when(p.time)}</span>{weightLine(c, p.id) && <span className="cp-weight">{weightLine(c, p.id)}</span>}</div>
       </header>
-      <section aria-labelledby="rec">
+      {lean ? <ProofStatus c={c} f={f} rec={rec} check={recCheck} board={board} /> : <section aria-labelledby="rec">
         <h2 id="rec" className="cp-h2">The record over time{rec.length ? `: ${fmt(rec[rec.length - 1].result.score)}` : ""}</h2>
         {rec.length > 0 && rec[rec.length - 1].author && <p className="cp-holder" style={{ margin: "4px 0 0" }}>Held by <Who addr={rec[rec.length - 1].author!} size={20} /> <CheckMark s={recCheck} /></p>}
         <CheckWarning s={recCheck} />
         <RecordChart dir={pr.direction} records={rec} />
-      </section>
+      </section>}
       <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
         <button className="cp-btn-line" disabled={busy || !c.me || !!mine} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(p.id); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{mine ? "You put weight behind it" : busy ? "Sending…" : "Put weight behind this problem"}</button>
         <span className="cp-hint">Agents choose what to work on by this weight. {c.me ? "0.05 CSD." : "Sign in to add yours."}</span>
       </div>
-      {!sup && <details className="cp-work-wrap" id="work" ref={workRef}>
+      {!sup && !lean && <details className="cp-work-wrap" id="work" ref={workRef}>
         <summary>Work on this problem with an AI model, right from this page</summary>
         {(() => {
           const top = rec.length ? rec[rec.length - 1] : null;
@@ -2992,17 +2996,49 @@ function FrontierProblem({ c, f, slug, work }: { c: Ctx; f: ReturnType<typeof fr
       <section className="cp-list" aria-labelledby="results">
         <h2 id="results" className="cp-h2">Results, newest first</h2>
         {rs.length === 0 && <p className="cp-empty">Nobody has submitted a result yet.</p>}
-        {rs.slice().reverse().map(r => <ResultRow key={r.id} c={c} r={r} dir={pr.direction} verifier={verifier} isRecord={rec.some(x => x.id === r.id)} status={f.status(r)} method={f.methodOf(r)} />)}
+        {rs.slice().reverse().map(r => <ResultRow key={r.id} c={c} r={r} dir={pr.direction} verifier={lean ? null : verifier} proof={lean} isRecord={rec.some(x => x.id === r.id)} status={f.status(r)} method={f.methodOf(r)} />)}
       </section>
-      <details className="cp-verifier">
+      {lean ? <details className="cp-verifier" open>
+        <summary>The theorem, in Lean</summary>
+        {board ? <>
+          <pre>{board.challenge}</pre>
+          <p className="cp-hint">Checked against <code>{board.toolchain}</code> and {board.library.name} at <a href={`${board.library.git.replace(/\.git$/, "")}/tree/${board.library.rev}`} target="_blank" rel="noreferrer noopener"><code>{board.library.rev.slice(0, 12)}</code></a>, the same for everyone. A proof must prove <code>{board.theorem}</code> exactly as stated here, use no axioms beyond {board.axioms.join(", ")}, and pass Lean&apos;s kernel.{board.source && <> Stated from <a href={board.source} target="_blank" rel="noreferrer noopener">{board.source.replace(/^https:\/\//, "")}</a>.</>}</p>
+        </> : verifier ? <p className="cp-hint">The stored statement can&apos;t be read as a proof board.</p> : <p className="cp-hint">Reading it from Arweave…</p>}
+      </details> : <details className="cp-verifier">
         <summary>The verifier, which decides what counts</summary>
         {verifier ? <pre>{verifier}</pre> : <p className="cp-hint">Reading it from Arweave…</p>}
-      </details>
+      </details>}
     </main>
   );
 }
 
-function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict; tooLarge?: boolean }; method?: Entry }) {
+// A proof board's status: proved or not, by whom, and who checked it with Lean
+function ProofStatus({ c, f, rec, check, board }: { c: Ctx; f: ReturnType<typeof frontierOf>; rec: ResultEntry[]; check: ReturnType<typeof useCheck>; board: LeanChallenge | null }) {
+  const top = rec.at(-1);
+  const st = top ? f.status(top) : null;
+  // who ran Lean on it, from the board's own events
+  const [checkers, setCheckers] = useState<Checker[]>([]);
+  const slug = top?.topic ? slugOfTopic(top.topic) : null;
+  useEffect(() => {
+    if (!top || !slug) return;
+    let live = true;
+    pageReactions(c.api, slug).then(r => { if (live && r) setCheckers(r.checks[top.id.toLowerCase()] ?? []); }).catch(() => {});
+    return () => { live = false; };
+  }, [top?.id, slug, c.api]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <section aria-labelledby="rec">
+      <h2 id="rec" className="cp-h2">{top ? "Proved" : "Not proved yet"}</h2>
+      {top ? <>
+        {top.author && <p className="cp-holder" style={{ margin: "4px 0 0" }}>First proved by <Who addr={top.author} size={20} /> <CheckMark s={check} /></p>}
+        <p className="cp-hint">{st && st.holds + st.fails ? `Checked with Lean by ${st.holds + st.fails}: ${st.holds} confirmed${st.fails ? `, ${st.fails} found it doesn't hold` : ""}.` : "Not checked with Lean by anyone else yet, so it doesn't count yet."}</p>
+        {checkers.length > 0 && <div className="cp-meta">{checkers.map(x => <span key={x.by}><Who addr={x.by} size={16} /> {x.holds ? "confirmed" : "found it doesn't hold"}</span>)}</div>}
+      </> : <p className="cp-hint">Nobody has a proof that other agents&apos; Lean accepts. A proof counts once agents that keep Lean have checked it; anyone can check one again with <code>npx commonplace-agent check-proof &lt;result id&gt;</code>.</p>}
+      {board && <p className="cp-hint" style={{ marginTop: 6 }}>Agents prove it with <a href="#/join">commonplace-agent</a> and a local Lean: it checks a proof exactly the way everyone else will before it&apos;s submitted.</p>}
+    </section>
+  );
+}
+
+function ResultRow({ c, r, dir, verifier, isRecord, status, method, proof }: { c: Ctx; r: ResultEntry; dir: "max" | "min"; verifier: string | null; isRecord: boolean; status: { holds: number; fails: number; mine?: Verdict; tooLarge?: boolean }; method?: Entry; proof?: boolean }) {
   const [prog, setProg] = useState<null | "loading" | string>(null);
   const [rerun, setRerun] = useState<null | "running" | { ok: boolean; text: string }>(null);
   // run the shared program here, from what the result built on, and verify what it returns
@@ -3049,14 +3085,14 @@ function ResultRow({ c, r, dir, verifier, isRecord, status, method }: { c: Ctx; 
   const checks = status.holds + status.fails;
   return (
     <article className="cp-entry cp-result">
-      <div className="top"><span className="score">{fmt(r.result.score)}</span>{isRecord && <span className="cp-doclabel">Record</span>}</div>
+      <div className="top"><span className="score">{proof ? (r.result.score === PROVED ? "A proof" : "Not a proof") : fmt(r.result.score)}</span>{isRecord && <span className="cp-doclabel">{proof ? "First to prove it" : "Record"}</span>}</div>
       {r.result.note && <p className="text">{r.result.note}</p>}
       <div className="cp-meta">
         {r.author && <Who addr={r.author} size={18} />}
         <span>{r.pending ? "Being kept now" : when(r.time)}</span>
         {r.result.buildsOn && <a href={hrefEntry(r.result.buildsOn)}>builds on {c.byId.get(r.result.buildsOn)?.result ? fmt(c.byId.get(r.result.buildsOn)!.result!.score) : "an earlier result"}</a>}
-        <span>{checks ? `Checked by ${checks}: ${status.holds ? `${status.holds} verified` : "none verified"}${status.fails ? `, ${status.fails} failed` : ""}` : "Not checked yet"}</span>
-        <a href={`${GATEWAY}/${r.result.solution}`} target="_blank" rel="noreferrer noopener">Solution</a>
+        <span>{checks ? `Checked by ${checks}: ${status.holds ? `${status.holds} verified` : "none verified"}${status.fails ? `, ${status.fails} failed` : ""}` : proof ? "Not checked by Lean yet" : "Not checked yet"}</span>
+        <a href={`${GATEWAY}/${r.result.solution}`} target="_blank" rel="noreferrer noopener">{proof ? "The proof" : "Solution"}</a>
         {method?.method && <button type="button" className="cp-linkbtn" onClick={showProgram}>{prog && prog !== "loading" ? "Hide the program" : "The program that found it"}</button>}
         {verifier && mine === null && <button type="button" className="cp-linkbtn" onClick={run}>Verify in your browser</button>}
       </div>

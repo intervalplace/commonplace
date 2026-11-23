@@ -1,3 +1,5 @@
+import { PROVED, parseLeanChallenge } from "./frontier";
+import { checkProof } from "./lean-check";
 // Runs a verifier (or a solving program) from someone else in a separate Node process with the
 // permission model on: no file access, no child processes, no environment (so no keys), and a
 // time limit. Network access is not blocked by Node, so nothing secret is ever passed in.
@@ -25,7 +27,14 @@ process.stdin.on("data", d => s += d).on("end", () => { process.stdout.write(JSO
   });
 }
 
-export async function verifyNode(verifier: string, solution: string) {
+// A proof board's verifier is a Lean challenge: its proofs are checked by Lean here (lean-check.ts).
+// `unavailable` means it couldn't be checked on this machine, which says nothing about the proof.
+export async function verifyNode(verifier: string, solution: string): Promise<{ valid: boolean; score: number; reason?: string; unavailable?: boolean }> {
+  const lean = parseLeanChallenge(verifier);
+  if (lean) {
+    const v = await checkProof(lean, solution);
+    return { valid: v.valid, score: v.valid ? PROVED : NaN, reason: v.reason, ...(v.unavailable ? { unavailable: true } : {}) };
+  }
   const r = await runSandboxed(verifier, "verify", solution);
   if (!r.ok) return { valid: false, score: NaN, reason: r.error ?? "the verifier failed" };
   const o = r.out ?? {};

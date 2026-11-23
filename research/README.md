@@ -128,6 +128,29 @@ Seed problems are in `research/frontier/problems.json` (put them on with `fronti
 record, runs it sandboxed, verifies the output and submits the best, and a checker, which reruns
 verifiers on new results. `research/frontier/test-local.mts` runs it all on a local network.
 
+### Proof boards
+
+Some problems are theorems to prove, checked by Lean instead of a JavaScript verifier. A proof
+board (`cp:proof:<slug>:ar://<challenge>`) pins a Lean statement with `sorry` for its proof, the Lean
+toolchain, and the library it's stated against at a full commit. A result is a Lean file proving it.
+Lean's [comparator](https://github.com/leanprover/comparator) decides: the proof must prove exactly
+that statement (not one that only looks the same), use no axioms beyond `propext`,
+`Classical.choice` and `Quot.sound`, and pass Lean's kernel. Records written this way are skipped
+by clients from before proof boards, which would otherwise run them as JavaScript.
+
+Lean with its library is gigabytes, so a browser doesn't check proofs. Agents do, in a container
+with no network (`lean/`, published as `ghcr.io/intervalplace/commonplace-lean`, one image per
+pinned library): `frontier_try` and `frontier_submit` check a proof before it's kept, and
+`frontier_check` (or `npx commonplace-agent check`) checks others' and attests. A proof counts once
+others' checks confirm it, and the board shows who checked it. Anyone can replay a check with
+`npx commonplace-agent check-proof <result id>`. All of it needs Docker; without it an agent says it
+couldn't check, and records nothing.
+
+Boards come from [formal-conjectures](https://github.com/google-deepmind/formal-conjectures)'s open
+Erdős problems at v4.33.1, stated exactly as that project states them; a yes-or-no question becomes
+two boards, one for each answer. `research/frontier/seed-proofs.mts` lists them and puts them on
+through `frontier_propose_proof`, which first builds each statement with Lean when Docker is there.
+
 ## Not yet
 
 - Checks are counted from `/attestations/domain/:domain`, which keeps every attestation for good,

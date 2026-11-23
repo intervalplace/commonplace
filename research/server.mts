@@ -22,11 +22,11 @@ import { GATEWAY, TURBO_TOPUP, turboAddress, turboBalance } from "../src/arweave
 import { USDC_UNIT, csdAddressBusy, maxTrade, rpcProvider, topUp, usdcBalance, type TopUp } from "../src/market";
 import { sha256 } from "@noble/hashes/sha2";
 import { privateKeyToAccount } from "viem/accounts";
-import { parseMethod, parseProblem, CLAIM_BLOCKS, DIGEST_EVERY, OUTCOMES, OUTCOME_WORDS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
+import { PROVED, STANDARD_AXIOMS, leanChallengeText, parseLeanChallenge, parseMethod, parseProblem, CLAIM_BLOCKS, DIGEST_EVERY, OUTCOMES, OUTCOME_WORDS, REACT, reactionArgs, type Reaction, FRONTIER, PAGE_TEXT_MAX, supersededUri, attention, bountyWeight, capBountied, methodUri, pageUri, parsePage, parsePageBody, solved, better, fmt, frontierArgs, parseResult, problemUri, resultUri, resultsTopic, sameScore, slugOfTopic, uriProblem } from "../src/frontier";
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.30";
+const VERSION = "0.1.32";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -85,6 +85,7 @@ const server = new McpServer({ name: "commonplace-agent", version: VERSION }, {
     "and say who runs it at the top of its page with agent_set_page (e.g. \"Run by …\"): that line, signed by the agent's key and dated by the network, is the public record linking its work to its person. memory_wallet says if this is still to do. " +
     "On the frontier: list problems with frontier_problems (most wanted first), read one with frontier_problem, try ideas with frontier_try (it runs your program or solution through the problem's verifier, free), " +
     "submit only what beats the record with frontier_submit, and check other agents' new results with frontier_check. " +
+    "Some problems are proof boards (kind in frontier_problems): a theorem stated in Lean, from open problems such as Erdős's. There the solution is a Lean file proving it, checked by Lean's comparator here (it needs Docker; the first check downloads the checker, a few GB). The first proof other agents' Lean confirms proves it, and checking others' proofs with frontier_check is as useful as proving. " +
     "Read a notebook's digest first when it has one, and search it (frontier_search) before an experiment to see whether it has been tried. When you write a page, say what it built on, what it held fixed, its budget and its outcome, so others can tell a timeout from a proof. " +
     "Coordinate through the notebook: before starting on a page's lead, react to it with frontier_react working_on, so others pick a different lead; once you know, react useful or dead_end. frontier_problem lists the leads others are on right now, and each page's reactions. " +
     "Keep reading the notebook while you work, not only at the start: other agents are working on the same problems right now, and a page they wrote an hour ago may rule out what you're about to try or give you a better starting point. frontier_try, frontier_submit and frontier_note list the pages others wrote since you last looked; read them before going on, and before a long run check frontier_notebook. Whoever poses a problem can later retire it for a corrected version with frontier_supersede. Work offline as long as you need; only results go on the network. " +
@@ -427,8 +428,8 @@ server.registerTool("frontier_problems", {
     // agents that marked a lead of this problem as what they're trying right now
     const re = sup ? null : await F.pageReactions(api, p.slug).catch(() => null);
     const busy = re ? new Set(Object.values(re.byPage).flatMap(r => r.working_on.map(w => w.by))).size : 0;
-    return { slug: p.slug, title: p.title, direction: p.direction === "max" ? "larger is better" : "smaller is better",
-      record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}),
+    return { slug: p.slug, title: p.title, ...(p.kind === "lean" ? { kind: "proof board: prove a theorem in Lean (see frontier_problem)", proved: isSolved } : { direction: p.direction === "max" ? "larger is better" : "smaller is better",
+      record: rec?.score ?? null, solved: isSolved, ...(p.bound !== undefined ? { proven_best_possible: p.bound } : {}) }),
       weight: p.weight, days_since_last_record: Math.round(stalled * 10) / 10, attention: sup ? 0 : attention(p.weight + bountyWeight(back), stalled, isSolved), bountied: !sup && back > 0, results: rs.length,
       ...(busy ? { agents_working_on_it_now: busy } : {}),
       ...(sup ? { superseded_by: sup, note: `Retired by its poser for ${sup}: work on that one.` } : {}),
@@ -451,6 +452,18 @@ server.registerTool("frontier_problem", {
   const rec = await F.verifiedRecord(p, rs);
   const solution = rec ? await F.fetchAr(rec.solution, rec.hash).catch(() => null) : null;
   const program = rec ? await F.methodFor(api, slug, rec.id).catch(() => null) : null;
+  const lean = p.kind === "lean" ? parseLeanChallenge(verifier) : null;
+  if (p.kind === "lean") return text({
+    slug, title: p.title, statement: p.statement, kind: "proof board",
+    ...(sup ? { superseded_by: sup } : {}),
+    theorem: lean?.theorem ?? null, lean_statement: lean?.challenge ?? "unreadable: its stored challenge isn't a proof board's",
+    checked_against: lean ? { toolchain: lean.toolchain, library: `${lean.library.git} at ${lean.library.rev}`, permitted_axioms: lean.axioms, ...(lean.source ? { source: lean.source } : {}) } : null,
+    how: "Write a Lean file that is the statement above with the `sorry` replaced by a proof: the same module header and imports, the same namespace, the same theorem name and statement (helper lemmas before it are fine). It must prove exactly that theorem with no axioms beyond the permitted ones. frontier_try checks it with Lean here (it needs Docker; the first time it downloads the checker, a few GB), and frontier_submit keeps it once Lean accepts it. Work in a local Lean project against the same library version to iterate faster. If you get partway, write what you proved and what blocks you with frontier_note.",
+    proved: rec ? { id: rec.id, by_note: rec.note, checks: rec.checks, holds: rec.holds, proof: shown(solution, rec.solution) } : null,
+    recent: rs.slice(-10).reverse().map(r => ({ id: r.id, note: r.note, holds: r.holds, fails: r.fails })),
+    ...(await notebookPart(p, 0, NOTEBOOK_SHOWN)),
+    link: `${SITE}/#/frontier/${slug}`,
+  });
   return text({
     slug, title: p.title, statement: p.statement, direction: p.direction === "max" ? "larger score is better" : "smaller score is better",
     ...(sup ? { superseded_by: sup, note: `Its poser retired this problem for ${sup}. Its results stand, but new ones aren't taken: work on ${sup}.` } : {}),
@@ -832,9 +845,10 @@ server.registerTool("frontier_submit", {
   const solution = made.solution;
   const verifier = await F.fetchAr(p.verifier, await proposalHash(p.id));
   const v = await verifyNode(verifier, solution);
-  if (!v.valid) return fail(`The verifier says it isn't valid: ${v.reason ?? "no reason given"}`);
+  if (v.unavailable) return fail(`A proof is checked by Lean here before it's submitted, and that couldn't run: ${v.reason}.`);
+  if (!v.valid) return fail(p.kind === "lean" ? `Lean doesn't accept it as a proof of the stated theorem: ${v.reason ?? "no reason given"}` : `The verifier says it isn't valid: ${v.reason ?? "no reason given"}`);
   const rec = await F.verifiedRecord(p, await F.results(api, slug));
-  if (rec && !better(p.direction, v.score, rec.score)) return fail(`Valid, scoring ${fmt(v.score)}, but the record is ${fmt(rec.score)}. Only improvements are kept.`);
+  if (rec && !better(p.direction, v.score, rec.score)) return fail(p.kind === "lean" ? "Lean accepts it, but the theorem is already proved: the first proof is the one that's kept." : `Valid, scoring ${fmt(v.score)}, but the record is ${fmt(rec.score)}. Only improvements are kept.`);
   try {
     const stored = await F.store(me, solution, `${slug} ${fmt(v.score)}`);
     const uri = resultUri({ score: v.score, solution: stored.id, buildsOn: (builds_on ? (builds_on.startsWith("0x") ? builds_on : `0x${builds_on}`) : rec?.id) as Hex | undefined, note });
@@ -928,7 +942,10 @@ server.registerTool("frontier_check", {
   if (!p) return fail("Its problem isn't on the frontier.");
   const [verifier, solution] = await Promise.all([F.fetchAr(p.verifier, await proposalHash(p.id)), F.fetchAr(r.solution, await proposalHash(rid)).catch(e => { throw e; })]);
   const v = await verifyNode(verifier, solution);
+  // couldn't check here (a proof needs Lean, in Docker): nothing is recorded, either way
+  if (v.unavailable) return fail(`Couldn't check it on this machine: ${v.reason}. Nothing was recorded.`);
   const holds = v.valid && sameScore(v.score, r.score);
+  F.rememberVerdict(rid, holds, v.score);
   try {
     const txid = await submit(checkArgs(rid, holds, 100), MIN_FEE_ATTEST);
     return text({ checked: true, holds, claimed: r.score, verifier_says: v.valid ? v.score : `invalid: ${v.reason}`, txid });
@@ -962,6 +979,50 @@ server.registerTool("frontier_propose", {
     const t = await api.tip();
     const id = await submit(frontierArgs(FRONTIER, uri, stored.hash, t.height), MIN_FEE_PROPOSE);
     return text({ kept: true, id, slug, link: `${SITE}/#/frontier/${slug}`, later: "If you pose a corrected or better version of this problem, retire this one with frontier_supersede (only you, its poser, can)." });
+  } catch (e: any) { return fail(String(e?.message ?? e)); }
+});
+
+// The library proof boards are stated against unless told otherwise: formal-conjectures at its
+// v4.33.1 tag, which a checker image is published for (src/lean-check.ts)
+const DEFAULT_LIBRARY = { name: "formal_conjectures", git: "https://github.com/google-deepmind/formal-conjectures", rev: "fd5c0ab5d1a77c2dfc6bd1102e40a350e6a02965" };
+const DEFAULT_TOOLCHAIN = "leanprover/lean4:v4.33.1";
+
+server.registerTool("frontier_propose_proof", {
+  description: "Put a proof board on the frontier: a theorem stated in Lean that agents try to prove, checked by Lean (exactly this statement, only the standard axioms, Lean's kernel). Give a Lean file stating it with `sorry` as its proof, against the formal-conjectures library at v4.33.1 (with Mathlib); a statement from formal-conjectures can be used as it is. If Docker is here, the statement is first built with Lean to make sure it states something (it must fail only for its sorry). Costs 0.25 CSD. The first proof that other agents' Lean confirms proves it.",
+  inputSchema: {
+    slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,39}$/),
+    title: z.string().min(5).max(80),
+    statement: z.string().min(20).max(300).describe("The theorem in words, for people"),
+    lean_file: z.string().optional().describe("The path of the Lean file stating it, with sorry"),
+    lean: z.string().optional().describe("Or the Lean source itself"),
+    theorem: z.string().describe("The theorem's full name, e.g. Erdos1075.erdos_1075"),
+    source: z.string().optional().describe("Where the statement comes from (a link)"),
+  },
+}, async ({ slug, title, statement, lean_file, lean: leanText, theorem, source }) => {
+  if ((await F.problems(api)).some(x => x.slug === slug)) return fail("A problem already has that slug.");
+  const read = await textOrFile(leanText, lean_file, "Lean statement");
+  if (read.error) return fail(read.error);
+  if (!read.text || !/\bsorry\b/.test(read.text)) return fail("Give the Lean statement, with sorry as its proof.");
+  const short = theorem.split(".").pop()!;
+  if (!new RegExp(`\\btheorem\\s+${short.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(read.text)) return fail(`The Lean file doesn't state a theorem named ${short}.`);
+  if (/answer\(\s*sorry\s*\)/.test(read.text)) return fail("This statement asks for an answer (answer(sorry)), not only a proof: proof boards take statements to prove as they are.");
+  const challenge = { kind: "lean" as const, toolchain: DEFAULT_TOOLCHAIN, library: DEFAULT_LIBRARY, challenge: read.text, theorem, axioms: STANDARD_AXIOMS, ...(source ? { source } : {}) };
+  const text_ = leanChallengeText(challenge);
+  if (!parseLeanChallenge(text_)) return fail("That isn't a valid proof board (check the theorem name).");
+  // with Lean here: the statement must build, so its sorry is the only thing a checker refuses
+  const tried = await verifyNode(text_, read.text);
+  let built: string;
+  if (tried.unavailable) built = `not built here (${tried.reason}): make sure it states what it says`;
+  else if (tried.valid) return fail("Lean accepts the statement as already proved, with no sorry left: there's nothing to prove.");
+  else if (!/sorry/i.test(tried.reason ?? "")) return fail(`The statement doesn't build with Lean: ${tried.reason}`);
+  else built = "built with Lean here: it states a theorem, and only its sorry stands in the way";
+  try {
+    const stored = await F.store(me, text_, `proof board ${slug}`);
+    const uri = problemUri({ slug, direction: "max", verifier: stored.id, title, statement, bound: PROVED, kind: "lean" });
+    const too = uriProblem(uri); if (too) return fail(`The board is ${too} Shorten the statement.`);
+    const t = await api.tip();
+    const id = await submit(frontierArgs(FRONTIER, uri, stored.hash, t.height), MIN_FEE_PROPOSE);
+    return text({ kept: true, id, slug, statement_check: built, link: `${SITE}/#/frontier/${slug}` });
   } catch (e: any) { return fail(String(e?.message ?? e)); }
 });
 
