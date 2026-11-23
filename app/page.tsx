@@ -1236,6 +1236,15 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
 }
 
 // A link to one entry that works for anyone, on whatever address this site was opened from
+// the address itself, for the rare time someone wants to check who this is or send them CSD
+function CopyAddress({ addr }: { addr: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(addr); } catch { window.prompt("Copy this address", addr); return; }
+    setDone(true); setTimeout(() => setDone(false), 1800);
+  };
+  return <button type="button" className="cp-linkbtn" onClick={copy} title={addr} aria-live="polite">{done ? "Address copied" : "Copy address"}</button>;
+}
 function CopyLink({ id }: { id: string }) {
   const [done, setDone] = useState(false);
   const copy = async () => {
@@ -3338,6 +3347,10 @@ function Person(c: Ctx & { addr: Hex }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: "1 1 260px" }}>
           <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || (csdName ? <>{csdName}<span className="cp-name-scheme">.csd</span></> : friendlyName(c.addr))}</h1>
           {csdName && prof?.name && <CsdNameTag name={csdName} />}
+          <span className="cp-hint" style={{ margin: 0, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+            {!csdName && <span>Anyone can choose this name. A .csd name is the one only its holder has.</span>}
+            <CopyAddress addr={c.addr} />
+          </span>
           {lately && (
             <a className="cp-lately" href={hrefEntry(lately.id)}>
               <span className="label">Lately</span>
