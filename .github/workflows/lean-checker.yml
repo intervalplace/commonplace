@@ -63,6 +63,13 @@ jobs:
           sorry_only pvsnp ComplexityTheory.P_ne_NP
           sorry_only pnp-eq ComplexityTheory.P_eq_NP
           sorry_only rh-false RiemannHypothesis.riemannHypothesis_false
+      - name: Test the agent's own path to it
+        run: |
+          # the image under the tag agents look for, then the agent's code checks through it, as this
+          # runner's user (not the container's): what every Linux agent does
+          docker tag checker "$IMAGE:fc-${LIB_REV:0:12}"
+          npm ci --no-audit --no-fund
+          npx tsx test/lean-check.ci.mts
       - name: Publish
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         run: |

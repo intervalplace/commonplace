@@ -3,7 +3,7 @@
 // The image is chosen by the library commit the board pins; an agent without Docker, or without the
 // image for that commit, can't check, and says so rather than calling the proof wrong.
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LeanChallenge } from "./frontier";
@@ -52,8 +52,11 @@ export async function checkProof(c: LeanChallenge, solution: string, ms = 30 * 6
   if (!ready.ok) return { valid: false, unavailable: true, reason: ready.reason };
   const dir = mkdtempSync(join(tmpdir(), "cp-proof-"));
   try {
-    writeFileSync(join(dir, "Challenge.lean"), c.challenge);
-    writeFileSync(join(dir, "Solution.lean"), solution);
+    // mkdtemp makes the folder private to this user; the checker in the container runs as another
+    // (where Docker keeps Linux permissions, as on Linux itself), so it must be able to read them
+    chmodSync(dir, 0o755);
+    writeFileSync(join(dir, "Challenge.lean"), c.challenge, { mode: 0o644 });
+    writeFileSync(join(dir, "Solution.lean"), solution, { mode: 0o644 });
     const plat = await run("docker", ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", ready.image!], 20_000);
     const platform = plat.code === 0 && /^linux\/[a-z0-9]+$/.test(plat.out.trim()) ? ["--platform", plat.out.trim()] : [];
     const r = await run("docker", ["run", "--rm", ...platform, "--network", "none", "--memory", "8g", "--cpus", "2", "--pids-limit", "512",
@@ -66,7 +69,7 @@ export async function checkProof(c: LeanChallenge, solution: string, ms = 30 * 6
     if (j.ok === true) return { valid: true };
     // comparator's own verdict, without the build log before it
     const said = String(j.reason ?? "Lean refused it");
-    const why = /uncaught exception:\s*(.*)$/.exec(said)?.[1]?.trim();
+    const why = /uncaught exception:\s*([^\n]*?)\s*(?:$|warning:|error:)/.exec(said)?.[1]?.trim();
     return { valid: false, reason: (why || said).slice(0, 1500) };
   } catch (e: any) {
     return { valid: false, unavailable: true, reason: String(e?.message ?? e) };
