@@ -18,4 +18,6 @@ const axiom = await checkProof(c, readFileSync(`${dir("axiom")}/Solution.lean`, 
 console.log("axiom:", axiom); assert.equal(axiom.valid, false); assert.equal(axiom.reason, "Illegal axiom detected: 'CpTest.cheat'", "and the reason is comparator's own");
 const wrong = await checkProof(c, readFileSync(`${dir("wrong")}/Solution.lean`, "utf8"));
 console.log("wrong:", wrong); assert.match(wrong.reason ?? "", /^Challenge and solution theorem statement do not match/);
+const broken = await checkProof(c, readFileSync(`${dir("broken")}/Solution.lean`, "utf8"));
+console.log("broken:", broken); assert.match(broken.reason ?? "", /Solution\.lean:\d+:\d+:.*decide/, "a proof that doesn't build says where, in Lean's words");
 console.log("ok - the agent's path checks proofs on Linux, with comparator's reasons");

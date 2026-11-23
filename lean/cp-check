@@ -39,10 +39,13 @@ code=$?
 if [[ $code -eq 0 ]]; then
   echo '{"ok":true}'
 else
-  # comparator's own verdict when it gave one, else the last lines (without the shim's warnings or
-  # the linters' notes about the file, which come after it and would push it out)
+  # why, in this order: Lean's own error when the proof doesn't build; comparator's verdict when it
+  # builds but isn't a proof of the statement; else the last lines (without the shim's warnings)
+  # a proof (or the statement) that doesn't build: Lean's first error, with the lines that explain it
+  # (comparator itself only says "Child exited with 1" then)
+  built=$(printf '%s\n' "$out" | awk 'on && /^(warning|info|error|uncaught)/ { exit } /^error: (\.\/)*(Solution|Challenge)\.lean:/ { on = 1 } on { print; if (++n >= 8) exit }' | tr '\n' ' ')
   verdict=$(printf '%s\n' "$out" | grep -m1 'uncaught exception' || true)
-  if [[ -n "$verdict" ]]; then reason="$verdict"; else
+  if [[ -n "$built" ]]; then reason="$built"; elif [[ -n "$verdict" ]]; then reason="$verdict"; else
     reason=$(printf '%s\n' "$out" | grep -v 'NOT REAL LANDRUN' | tail -n 12 | tr '\n' ' ')
   fi
   reason=$(printf '%s' "$reason" | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-1500)
