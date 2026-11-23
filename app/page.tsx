@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { WorkPanel } from "./work-panel";
 import { COIN, MIN_FEE_ATTEST, MIN_FEE_PROPOSE, EPOCH_LEN, buildAppTx, buildSendTx, buildSplitTx, MIN_SEND, SEND_FEE, bytesToHex, hexToBytes, keyFromPrivate, node, txid as txidOf, type CsdKey, type Hex } from "@/csd";
-import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
+import { BACKGROUNDS, DEFAULT_TOPIC, KEEP_EPOCHS, NAME_MAX, PROFILE_TOPIC, STYLE_TOPIC, TYPEFACES, cleanName, styleArgs, styleRoom, type PageStyle, docArgs, docRoom, guestbookOwner, guestbookTopic, isReserved, linkHref, otherApp, normTopic, parseEntry, profileArgs, proposeArgs, room, topicOk, type Entry } from "@/entries";
 import { Avatar, PICTURES } from "@/avatars";
 import { tally } from "@/research";
 import { PROVED, parseLeanChallenge, type LeanChallenge, type Checker, OUTCOME_WORDS, BOUNTY_MAX, BOUNTY_MIN, FRONTIER, RUNNER, SLUG, attention, backedCsd, better, bountyUri, bountyWeight, bountyWinner, capBountied, fmt, frontierArgs, pageReactions, parsePageBody, reactionArgs, type PageReactions, type Reaction, problemUri, resultsTopic, sameScore, slugOfTopic, solved, uriProblem, type Bounty, type Problem } from "@/frontier";
@@ -406,7 +406,7 @@ export default function Page() {
     const mine = pending.map(p => ({ ...p, author: key?.addr20 ?? p.author }));
     return [...mine, ...withAuthor];
   }, [chain, older, pending, authors, key]);
-  const entries = useMemo(() => all.filter(e => e.kind !== "profile" && !isReserved(e.topic)), [all]);
+  const entries = useMemo(() => all.filter(e => e.kind !== "profile" && !isReserved(e.topic) && !otherApp(e)), [all]);
   // each key's newest profile entry (pending ones first, so a change shows at once)
   const profiles = useMemo(() => {
     const out: Record<string, Profile> = {};

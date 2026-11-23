@@ -123,6 +123,15 @@ export function styleArgs(s: PageStyle, height: number) {
 
 // Topics starting "cp." belong to the app (profiles, guestbooks) and aren't listed as topics
 export const isReserved = (topic: string) => topic.startsWith("cp.");
+// Another app's record, kept on the same network by the same key (a chess move, a site's
+// recommendation, a keep record): its own app shows it, so Commonplace doesn't list it as writing.
+// Commonplace's own entries are never JSON; another app's records under any topic usually are.
+const OTHER_APPS = /^(chess\.|csd\.|cairnx[:.]|kit\.)/;
+export function otherApp(e: { topic: string; kind: string; text: string }) {
+  if (OTHER_APPS.test(e.topic)) return true;
+  if (e.kind !== "link" || !e.text.startsWith("{")) return false;
+  try { const j = JSON.parse(e.text); return !!j && typeof j === "object" && !Array.isArray(j); } catch { return false; }
+}
 // A guestbook is the entries under a topic named after the page's key, so every key has one
 export const guestbookTopic = (addr: string) => `cp.guestbook.${addr.toLowerCase().replace(/^0x/, "")}`;
 export const guestbookOwner = (topic: string): Hex | null => { const m = /^cp\.guestbook\.([0-9a-f]{40})$/.exec(topic); return m ? (`0x${m[1]}` as Hex) : null; };
