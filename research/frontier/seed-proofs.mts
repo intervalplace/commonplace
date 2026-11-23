@@ -20,32 +20,37 @@ if (head !== PIN) { console.error(`The checkout is at ${head}, not ${PIN} (forma
 const ED = join(dir, "FormalConjectures/ErdosProblems");
 
 type Board = { n: string; slug: string; title: string; statement: string; theorem: string; lean: string; source: string };
-// One open statement, proved by sorry. Most of Erdős's ask yes or no: formal-conjectures states those
-// as `answer(sorry) ↔ P`, so each becomes two boards, one with the answer yes (`True ↔ P`, a proof
-// of P) and one with no (`False ↔ P`, a proof that P fails); whichever is proved settles it.
+// The problem's own statement, `theorem erdos_<n>`, marked open and proved by sorry; the rest of
+// its file (variants, solved special cases) stays as it is around it. Most of Erdős's ask yes or
+// no: formal-conjectures states those as `answer(sorry) ↔ P`, so each becomes two boards, one with
+// the answer yes (`True ↔ P`, a proof of P) and one with no (`False ↔ P`, a proof that P fails);
+// whichever is proved settles it.
 function boards(n: string): Board[] {
   const src = readFileSync(join(ED, `${n}.lean`), "utf8");
-  const asks = src.match(/answer\(sorry\)/g)?.length ?? 0;
-  if (asks === 0) { const b = board(n, src); return b ? [b] : []; }
+  const m = new RegExp(`@\\[category research open[^\\]]*\\]\\s*theorem\\s+(erdos_${n})\\b([\\s\\S]*?):=`).exec(src);
+  if (!m) return [];
+  const sig = m[2], at = m.index + m[0].length - sig.length - 2;
+  const asks = sig.match(/answer\(sorry\)/g)?.length ?? 0;
+  if (asks === 0) { const b = board(n, src, m); return b ? [b] : []; }
   // only a single yes-or-no question
-  if (asks !== 1 || !/answer\(sorry\)\s*↔/.test(src)) return [];
-  return (["yes", "no"] as const).map(a => board(n, src.replace("answer(sorry)", a === "yes" ? "True" : "False"), a)).filter((b): b is Board => !!b);
+  if (asks !== 1 || !/answer\(sorry\)\s*↔/.test(sig)) return [];
+  return (["yes", "no"] as const).map(a => {
+    const lean = src.slice(0, at) + sig.replace("answer(sorry)", a === "yes" ? "True" : "False") + src.slice(at + sig.length);
+    return board(n, lean, m, a);
+  }).filter((b): b is Board => !!b);
 }
-function board(n: string, lean: string, answer?: "yes" | "no"): Board | null {
-  if (/answer\(/.test(lean)) return null;
-  const m = [...lean.matchAll(/@\[category research open[^\]]*\]\s*theorem\s+([\w.']+)/g)];
-  if (m.length !== 1) return null;
+function board(n: string, lean: string, m: RegExpExecArray, answer?: "yes" | "no"): Board | null {
   const ns = /^namespace\s+([\w.]+)/m.exec(lean)?.[1];
   // the docstring just before it, if it has one
-  const before = lean.slice(0, m[0].index);
+  const before = lean.slice(0, m.index);
   const d = /\/--([\s\S]*?)-\/\s*$/.exec(before);
   const doc = (d?.[1] ?? "").replace(/\s+/g, " ").trim();
   // a sentence boundary within 300 characters, for people; the Lean is what counts
-  let statement = doc.length <= 300 ? doc : doc.slice(0, 300).replace(/[^.]*$/, "").trim() || `${doc.slice(0, 296).trim()}…`;
+  let statement = doc.length <= 260 ? doc : doc.slice(0, 260).replace(/[^.?]*$/, "").trim() || `${doc.slice(0, 256).trim()}…`;
   if (statement.length < 20) statement = `Erdős Problem ${n}, as formal-conjectures states it.`;
-  if (answer) statement = `${answer === "yes" ? "Prove the answer is yes" : "Prove the answer is no"}: ${statement}`.slice(0, 300);
+  if (answer) statement = `${answer === "yes" ? "Prove yes" : "Prove no"}: ${statement}`;
   const slug = `erdos-${n}${answer ? `-${answer}` : ""}`;
-  return { n: answer ? `${n}-${answer}` : n, slug, title: `Erdős Problem ${n}${answer ? `, answer ${answer}` : ""}`, statement, theorem: ns ? `${ns}.${m[0][1]}` : m[0][1], lean, source: `https://www.erdosproblems.com/${n}` };
+  return { n: answer ? `${n}-${answer}` : n, slug, title: `Erdős Problem ${n}${answer ? `, answer ${answer}` : ""}`, statement, theorem: ns ? `${ns}.${m[1]}` : m[1], lean, source: `https://www.erdosproblems.com/${n}` };
 }
 
 if (cmd === "list") {
