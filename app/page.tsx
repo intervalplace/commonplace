@@ -212,6 +212,8 @@ export default function Page() {
   const [route, setRoute] = useState<Route>({ view: "me" });
   const [base, setBase] = useState(DEFAULT_NODE);
   const [choosingNode, setChoosingNode] = useState(false);
+  const [details, setDetails] = useState(false);
+  useEffect(() => { const f = () => setChoosingNode(true); window.addEventListener("cp:choose-node", f); return () => window.removeEventListener("cp:choose-node", f); }, []);
   useEffect(() => {
     setBase(nodeUrl());
     const on = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
@@ -629,11 +631,14 @@ export default function Page() {
         <a href="#/about">About</a>
         <a href="#/frontier">The frontier</a>
         <a href="#/names">Names</a>
-        <span>Node: <button type="button" className="cp-linkbtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{nodeLabel(base)}</button></span>
-        {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
-        {release.meta?.source === "ipfs" && release.meta.cid && <span title={`This page is the release ${release.meta.cid}, named by ${RELEASE_NAME}.csd on the network, checked block by block against that address and kept in this browser. It opens without any host.`}>Release …{release.meta.cid.slice(-8)}, from the network</span>}
         {release.ready && <span><button type="button" className="cp-linkbtn" onClick={() => location.reload()}>A new release is ready: reload</button></span>}
-        {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
+        <span><button type="button" className="cp-linkbtn" onClick={() => setDetails(d => !d)} aria-expanded={details}>{details ? "Fewer details" : "Details"}</button></span>
+        {details && <span className="cp-foot-details">
+          <span>Node: <button type="button" className="cp-linkbtn cp-nodebtn" onClick={() => setChoosingNode(true)} title="Read the network through another node, or your own">{nodeLabel(base)}</button></span>
+          {height > 0 && <span>Block {height.toLocaleString("en-US")}</span>}
+          {height > 0 && <span title="The network ranks every topic anew each epoch of 30 blocks">Epoch {epochOf(height).toLocaleString("en-US")}, ends in {epochEnds(height)}</span>}
+          {release.meta?.source === "ipfs" && release.meta.cid && <span title={`This page is the release ${release.meta.cid}, named by ${RELEASE_NAME}.csd on the network, checked block by block against that address and kept in this browser. It opens without any host.`}>Release …{release.meta.cid.slice(-8)}, from the network</span>}
+        </span>}
       </footer>
       {choosingNode && <NodeDialog byName={async n => nodeOf(await lookupCsdName(n, light, { node: nodeSrc }))} current={base} onPick={n => { chooseNode(n); workingNode = null; setNetError(null); setBase(nodeUrl()); setChoosingNode(false); }} onClose={() => setChoosingNode(false)} />}
       {keeping && (
@@ -1220,7 +1225,6 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
         {showTopic && <TopicLink topic={e.topic} />}
         {e.kind === "reply" && e.replyTo && showTopic && <a href={hrefEntry(e.replyTo)}>in reply</a>}
         {e.pending ? <span className="cp-pending">Being kept now, waiting for the next block</span> : <span>{when(e.time)}</span>}
-        {!e.pending && <span className="cp-mono">block {e.height.toLocaleString("en-US")}</span>}
         {e.kind === "finding" ? !e.pending && <span>{checksLine(resonance) ?? (resonance?.count ? `${resonance.count} resonated` : "Not checked yet")}</span>
           : resonance && resonance.count > 0 && <span>{resonance.count} resonated</span>}
         {e.finding && <a href={e.finding.source} target="_blank" rel="noreferrer noopener">Source: {hostOf(e.finding.source)}</a>}
@@ -1260,9 +1264,9 @@ function Me(c: Ctx) {
         <div className="cp-row" style={{ justifyContent: "flex-start", gap: 16 }}>
           <Avatar addr={c.me.addr20} pic={prof?.pic} size={56} label="Your picture" />
           <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <span style={{ fontFamily: "var(--serif)", fontSize: 22 }}>{prof?.name || "No display name yet"}</span>
+            <span style={{ fontFamily: "var(--serif)", fontSize: 22 }}>{prof?.name || friendlyName(c.me.addr20)}</span>
             {csdName && <CsdNameTag name={csdName} />}
-            <span className="cp-who" style={{ color: "var(--muted)" }}>{c.me.addr20}</span>
+            {!prof?.name && !csdName && <span className="cp-hint" style={{ margin: 0 }}>A name made up for you until you choose one</span>}
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <a className="cp-btn-ghost" style={{ textDecoration: "none" }} href={hrefPerson(c.me.addr20)}>Your page as others see it</a>
@@ -1534,11 +1538,11 @@ function Topic(c: Ctx & { topic: string }) {
           )}
           {list.length > 0 && c.height > 0 && (
             <section className="cp-list" aria-labelledby="now">
-              <h2 id="now" className="cp-h2">{topEpoch === epochOf(c.height) - 1 ? "Resonated most last epoch" : "Resonating this epoch"}</h2>
+              <h2 id="now" className="cp-h2">{topEpoch === epochOf(c.height) - 1 ? "Resonated most in the last hour" : "Resonating now"}</h2>
               <p className="cp-hint" style={{ margin: "0 0 4px" }}>
-                {(() => { const ep = topEpoch ?? epochOf(c.height); return `Epoch ${ep.toLocaleString("en-US")}, blocks ${(ep * EPOCH_LEN).toLocaleString("en-US")} to ${(ep * EPOCH_LEN + EPOCH_LEN - 1).toLocaleString("en-US")}${ep === epochOf(c.height) ? `, ends in ${epochEnds(c.height)}` : ""}. `; })()}
-                The network ranks each topic anew every epoch (30 blocks, about an hour), by what was paid to resonate.
-                {nowEntries.length === 0 ? " Nothing here has been resonated with this epoch or the last." : ""}
+                {(topEpoch ?? epochOf(c.height)) === epochOf(c.height) ? `Ranked anew in about ${epochEnds(c.height)}. ` : ""}
+                Every hour or so, by what people paid to resonate.
+                {nowEntries.length === 0 ? " Nothing here has been resonated with this hour or the last." : ""}
               </p>
               {nowEntries.map(e => <EntryItem key={e.id} e={e} resonance={c.resonance[e.id]} showAuthor showTopic={false} />)}
             </section>
@@ -1589,7 +1593,7 @@ function EntryView(c: Ctx & { id: Hex }) {
         <div className="cp-meta">
           {e.author && <Who addr={e.author} size={24} />}
           <TopicLink topic={e.topic} />
-          {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><span className="cp-mono">block {e.height.toLocaleString("en-US")}</span><CheckMark s={check} /><CopyLink id={e.id} /></>}
+          {e.pending ? <span className="cp-pending">Being kept now</span> : <><span>{when(e.time)}</span><CheckMark s={check} /><CopyLink id={e.id} /></>}
         </div>
         {e.kind === "doc" && <span className="cp-doclabel">Document</span>}
         {e.kind === "finding" && <span className="cp-doclabel">Finding</span>}
@@ -1689,7 +1693,7 @@ function CheckMark({ s }: { s: CheckState | null }) {
 }
 function CheckWarning({ s }: { s: CheckState | null }) {
   if (!failed(s)) return null;
-  const other = <a href="#" onClick={ev => { ev.preventDefault(); document.querySelector<HTMLButtonElement>(".cp-foot .cp-linkbtn")?.click(); }}>another node</a>;
+  const other = <a href="#" onClick={ev => { ev.preventDefault(); window.dispatchEvent(new Event("cp:choose-node")); }}>another node</a>;
   return <p className="cp-check bad" role="alert">{s!.differs ? <>The node showed {s!.differs} differently from what the network holds. Don&apos;t rely on it; try {other}.</> : <>This couldn&apos;t be confirmed against the network ({(s!.why ?? "").replace(/^[A-Z_]+: /, "")}). The node may be wrong, or behind; try {other}.</>}</p>;
 }
 
@@ -3334,7 +3338,6 @@ function Person(c: Ctx & { addr: Hex }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: "1 1 260px" }}>
           <h1 className="cp-topic-title" style={{ fontSize: 40 }}>{prof?.name || (csdName ? <>{csdName}<span className="cp-name-scheme">.csd</span></> : friendlyName(c.addr))}</h1>
           {csdName && prof?.name && <CsdNameTag name={csdName} />}
-          <span className="cp-who" style={{ color: "var(--muted)", overflowWrap: "anywhere" }}>{c.addr}</span>
           {lately && (
             <a className="cp-lately" href={hrefEntry(lately.id)}>
               <span className="label">Lately</span>
