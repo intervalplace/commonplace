@@ -1027,7 +1027,7 @@ function Invite({ code, keyState }: { code: string; keyState: [Me | null, (k: Me
               <button className="cp-btn" disabled={busy} onClick={take}>{busy ? "Taking it…" : "Take it"}</button>
             </div>
           )}
-          {me && <p className="cp-hint" style={{ margin: 0 }}>It goes to your account, <span className="cp-mono">{short(me.addr20)}</span>.</p>}
+          {me && <p className="cp-hint" style={{ margin: 0 }}>It goes to your account, <span title={me.addr20}>{friendlyName(me.addr20)}</span>.</p>}
           {err && <p className="err">{err}</p>}
         </>
       )}
@@ -2002,7 +2002,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLa
           {doc && <li>The file is stored on Arweave, which keeps it for good (free at this size), and the entry holds its fingerprint, so anyone can check it is exactly this file.</li>}
         </ul>
         <a className="cp-hint" href="#/about" target="_blank" rel="noopener" style={{ marginTop: -8 }}>What being kept for good means</a>
-        <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span className="cp-mono" style={{ color: "var(--ink)" }}>{short(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>One post&apos;s worth</span></div>
+        <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span style={{ color: "var(--ink)" }} title={guestbookOwner(normTopic(topic))!}>{friendlyName(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>One post&apos;s worth</span></div>
         {!key ? (
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
         ) : short_ ? (
