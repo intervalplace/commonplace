@@ -1,0 +1,23 @@
+{
+  "about": "What Commonplace connects to besides the network: Arweave (files), IPFS gateways (new releases), Cairn's name server, the CSD/USDC market (AON, Ethereum) for top-ups, and OpenRouter when you let a model work in your browser.",
+  "connect": [
+    "https://*.aon.network",
+    "https://arweave.net",
+    "https://*.arweave.net",
+    "https://turbo-gateway.com",
+    "https://*.turbo-gateway.com",
+    "https://ardrive.net",
+    "https://*.ardrive.net",
+    "https://*.ardrive.io",
+    "https://cairn-substrate.com",
+    "https://openrouter.ai",
+    "https://trustless-gateway.link",
+    "https://ipfs.io",
+    "https://dweb.link",
+    "https://*.ipfs.dweb.link",
+    "https://ethereum-rpc.publicnode.com",
+    "https://eth.llamarpc.com",
+    "https://cloudflare-eth.com",
+    "https://eth.merkle.io"
+  ]
+}
