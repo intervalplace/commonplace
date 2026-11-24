@@ -25,7 +25,7 @@ import { deriveKey, discoverWallets, type WalletInfo } from "@/wallet";
 import { NoPrf, makePasskey, passkeysHere, signInWithPasskey } from "@/passkey";
 import { cairnConnect, cairnSubmit, discoverCairn, type CairnMe, type CairnProvider } from "@/cairn";
 import { keepArgs, keptUntilYear } from "@/keep";
-import { doorwayAccount, doorwayProve, doorwaySubmit, type DoorwayMe } from "@/doorway";
+import { doorwayAccount, doorwayProve, doorwayAdd, doorwaySubmit, type DoorwayMe } from "@/doorway";
 // who is writing: a key this page holds (from a wallet signature or a passkey), a Cairn account,
 // whose key stays in Cairn, or Doorway's key, which stays in Doorway
 type Me = CsdKey | CairnMe | DoorwayMe;
@@ -293,7 +293,7 @@ export default function Page() {
       if (other) { switches.current++; workingNode = other; setBase(other); return; }
       setLoaded(true);
       const all = nodeCandidates();
-      setNetError(all.length > 1 ? `Can't reach any CSD node (tried ${all.join(", ")}).` : `Can't reach the CSD node at ${base}.`);
+      setNetError("Can't reach the network just now. Check that you're online; this page tries again by itself.");
     }
   }, [api, base]);
   useEffect(() => { refresh(); const t = setInterval(refresh, 30_000); return () => clearInterval(t); }, [refresh]);
@@ -769,9 +769,20 @@ function WalletButton({ keyState: [key, setKey], balance }: { keyState: [Me | nu
 
 // buying CSD with USDC needs the writing key to prove it owns the address, which Cairn can't do here
 // (Doorway can: it proves it for its own key)
+// under Doorway: Doorway adds CSD by card itself; a Doorway too old for that still takes USDC here
+function DoorwayAdd({ me }: { me: Me }) {
+  const [old, setOld] = useState(false);
+  if (old) return <TopUpHere me={{ addr20: me.addr20, prove: doorwayProve }} />;
+  return (
+    <span style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
+      <button className="cp-btn" onClick={async () => { if (!(await doorwayAdd())) setOld(true); }}>Add CSD by card</button>
+      <span className="cp-hint">Doorway opens Stripe&apos;s page, and buys the CSD for you once you&apos;ve paid.</span>
+    </span>
+  );
+}
 function TopUpFor({ me }: { me: Me }) {
   if (local(me)) return <TopUpHere me={me} />;
-  if (viaDoorway(me)) return <TopUpHere me={{ addr20: me.addr20, prove: doorwayProve }} />;
+  if (viaDoorway(me)) return <DoorwayAdd me={me} />;
   return <span className="cp-hint">Add CSD to your Cairn account from Cairn or another wallet, or open an invite link someone made for you.</span>;
 }
 
@@ -779,7 +790,7 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: Me;
   const [copied, setCopied] = useState(false);
   return (
     <>
-      <span>Your writing key holds <strong>{balance === null ? "…" : csd(balance)} CSD</strong>. Each entry costs 0.25 CSD and each resonance 0.05 CSD.</span>
+      <span>Your account holds <strong>{balance === null ? "…" : csd(balance)} CSD</strong>. Each entry costs 0.25 CSD and each resonance 0.05 CSD.</span>
       <span>To add CSD from another wallet, send it to:</span>
       <span className="addr">{k.addr20}</span>
       <button className="choice" onClick={() => { navigator.clipboard?.writeText(k.addr20); setCopied(true); }}>{copied ? "Copied" : "Copy address"}</button>
@@ -790,7 +801,7 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: Me;
           <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
           <button className="choice" onClick={onInvite}>Make invite links</button>
           <button className="choice" onClick={onSend}>Send CSD elsewhere</button>
-          <button className="choice" onClick={onShowKey}>Show writing key</button>
+          <button className="choice" onClick={onShowKey}>Back up your key</button>
         </>
       ) : (
         viaDoorway(k)
@@ -903,7 +914,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         <h2 id="inv-title">{made ? (made.length === 1 ? "Your invite link" : "Your invite links") : "Make invite links"}</h2>
         {made ? (
           <>
-            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own writing key and start writing. It works once the CSD is in a block, in a minute or two.{listOpen ? <> {made.length === 1 ? "It's" : "They're"} also listed on the <a href="#/invites">open invites</a> page from then.</> : null}</p>
+            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own account and start writing. It works in a minute or two.{listOpen ? <> {made.length === 1 ? "It's" : "They're"} also listed on the <a href="#/invites">open invites</a> page from then.</> : null}</p>
             <div className="cp-links">{made.map(l => <span key={l} className="cp-mono">{l}</span>)}</div>
             <div className="actions">
               <button className="cp-btn" onClick={() => copy(made.join("\n"), "made")}>{copied === "made" ? "Copied" : made.length === 1 ? "Copy the link" : `Copy all ${made.length} links`}</button>
@@ -913,9 +924,9 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         ) : (
           <>
             <ul>
-              <li>Each link carries some CSD. Whoever opens it first can move it to their own writing key and keep entries with it, with nothing to buy.</li>
+              <li>Each link carries some CSD. Whoever opens it first can move it to their own account and keep entries with it, with nothing to buy.</li>
               <li>Anyone who sees a link can use it, so share it where you mean to: post a few, or send one to a friend.</li>
-              <li>The links are made from your writing key, so you can find them here on any device, and take back any nobody used.</li>
+              <li>The links are made from your account, so you can find them here on any device, and take back any nobody used.</li>
             </ul>
             <div role="group" aria-label="Each link carries" className="cp-field">
               <span className="cp-h2" aria-hidden="true">Each link carries</span>
@@ -930,7 +941,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
               <span>Also list {count === 1 ? "it" : "them"} on the <a href="#/invites">open invites</a> page, for anyone new to take, first come first served. Listing costs 0.25 CSD.</span>
             </label>
             <div className="facts"><span>{count} {count === 1 ? "link" : "links"}, enough for about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"} each</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
-            {short_ && <p className="cp-notice" style={{ margin: 0 }}>This writing key has {csd(avail!)} CSD ready, and these take {csd(cost)}.</p>}
+            {short_ && <p className="cp-notice" style={{ margin: 0 }}>This account has {csd(avail!)} CSD ready, and these take {csd(cost)}.</p>}
             {err && <p className="err">{err}</p>}
             <div className="actions">
               <button className="cp-btn" disabled={!!busy || rows === null || avail === null || short_} onClick={make}>{busy === "make" ? "Making…" : count === 1 ? "Make the link" : `Make ${count} links`}</button>
@@ -987,7 +998,7 @@ function Invite({ code, keyState }: { code: string; keyState: [Me | null, (k: Me
       ) : taken !== null ? (
         <>
           <h1 className="cp-topic-title">It&apos;s yours</h1>
-          <p className="lead">{csd(taken)} CSD is on its way to your writing key, and arrives in a minute or two. That&apos;s enough to keep about {Number(taken / MIN_FEE_PROPOSE)} {taken / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"}.</p>
+          <p className="lead">{csd(taken)} CSD is on its way to your account, and arrives in a minute or two. That&apos;s enough to keep about {Number(taken / MIN_FEE_PROPOSE)} {taken / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"}.</p>
           <a className="cp-btn" style={{ alignSelf: "flex-start", textDecoration: "none" }} href="#/">Start writing</a>
         </>
       ) : holds === null ? (
@@ -995,7 +1006,7 @@ function Invite({ code, keyState }: { code: string; keyState: [Me | null, (k: Me
       ) : gift === 0n ? (
         <>
           <h1 className="cp-topic-title">This invite has been used</h1>
-          <p className="lead">Someone opened it first, or it was taken back. If it was made a moment ago, it may not be in a block yet: <button type="button" className="cp-linkbtn" onClick={look}>look again</button> in a minute.</p>
+          <p className="lead">Someone opened it first, or it was taken back. If it was made a moment ago, it may not be ready yet: <button type="button" className="cp-linkbtn" onClick={look}>look again</button> in a minute.</p>
           <a className="cp-out" style={{ textAlign: "left" }} href="#/about">What is Commonplace?</a>
         </>
       ) : (
@@ -1013,7 +1024,7 @@ function Invite({ code, keyState }: { code: string; keyState: [Me | null, (k: Me
               <button className="cp-btn" disabled={busy} onClick={take}>{busy ? "Taking it…" : "Take it"}</button>
             </div>
           )}
-          {me && <p className="cp-hint" style={{ margin: 0 }}>It goes to your writing key, <span className="cp-mono">{short(me.addr20)}</span>.</p>}
+          {me && <p className="cp-hint" style={{ margin: 0 }}>It goes to your account, <span className="cp-mono">{short(me.addr20)}</span>.</p>}
           {err && <p className="err">{err}</p>}
         </>
       )}
@@ -1038,7 +1049,7 @@ function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
   const problem =
     !dest ? null
     : !/^0x[0-9a-f]{40}$/.test(dest) ? "A Compute Substrate address is 0x followed by 40 letters and digits."
-    : dest === k.addr20.toLowerCase() ? "That's this writing key itself."
+    : dest === k.addr20.toLowerCase() ? "That's this account itself."
     : pay.eth && dest === pay.eth.account.toLowerCase() ? "That's your Ethereum address, not a Compute Substrate one. CSD sent there would be lost for good."
     : value === null ? null
     : value < MIN_SEND ? "The smallest send is 0.01 CSD."
@@ -1060,7 +1071,7 @@ function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         <h2 id="send-title">{sent ? "Sent" : confirm ? "Send it?" : "Send CSD elsewhere"}</h2>
         {sent ? (
           <>
-            <p className="cp-hint" style={{ margin: 0 }}>{exact(sent.value)} CSD is on its way to <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)" }}>{dest}</span>. It arrives once it&apos;s in a block, in a minute or two.</p>
+            <p className="cp-hint" style={{ margin: 0 }}>{exact(sent.value)} CSD is on its way to <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)" }}>{dest}</span>. It arrives in a minute or two.</p>
             <span className="cp-mono" style={{ wordBreak: "break-all" }}>Transaction {sent.id}</span>
             <div className="actions"><button className="cp-btn" onClick={onClose}>Done</button></div>
           </>
@@ -1080,7 +1091,7 @@ function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         ) : (
           <>
             <p className="cp-hint" style={{ margin: 0 }}>
-              {avail === null ? "Checking what this key holds…" : <>This key has <strong style={{ color: "var(--ink)" }}>{exact(avail)} CSD</strong> ready to send. CSD from a send still being kept is ready once it&apos;s in a block.</>}
+              {avail === null ? "Checking what this key holds…" : <>This key has <strong style={{ color: "var(--ink)" }}>{exact(avail)} CSD</strong> ready to send. CSD from a send still on its way is ready in a minute or two.</>}
             </p>
             <label className="cp-field">
               <span>To a Compute Substrate address</span>
@@ -1115,7 +1126,7 @@ function KeyDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
   return (
     <div className="cp-backdrop" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <section className="cp-dialog" role="dialog" aria-modal="true" aria-labelledby="key-title">
-        <h2 id="key-title">Your writing key</h2>
+        <h2 id="key-title">Your key</h2>
         <ul>
           <li>Anyone who sees this key can spend its CSD and write as you. Never paste it into a site or send it to anyone.</li>
           <li>Use it to bring this key into a Compute Substrate wallet you trust, such as the csd command-line wallet (<span className="cp-mono">--privkey</span>).</li>
@@ -1144,6 +1155,7 @@ function Connect({ onKey }: { onKey: (k: Me) => void }) {
   const pay = useContext(Pay);
   const [wallets, setWallets] = useState<WalletInfo[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [showOthers, setShowOthers] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => discoverWallets(setWallets), []);
   const [cairn, setCairn] = useState<CairnProvider | null>(null);
@@ -1165,38 +1177,41 @@ function Connect({ onKey }: { onKey: (k: Me) => void }) {
     setBusy(make ? "make" : "passkey"); setErr(null);
     try { onKey(make ? await makePasskey() : await signInWithPasskey()); }
     catch (e: any) {
-      setErr(e instanceof NoPrf ? "This browser or passkey can't make a writing key yet. Recent Chrome, Safari, Edge and Firefox can, with a passkey saved in their password manager. Or use a wallet."
+      setErr(e instanceof NoPrf ? "This browser can't sign in this way yet. Recent Chrome, Safari, Edge and Firefox can, with a passkey saved in their password manager. Or use another way below."
         : e?.name === "NotAllowedError" || e?.name === "AbortError" ? "The passkey wasn't used."
         : e?.name === "InvalidStateError" ? "That passkey already exists. Choose Use your passkey."
         : String(e?.message ?? e));
     } finally { setBusy(null); }
   };
-  return (
+  const others = (
     <>
       {cairn && (
         <>
-          <span>Cairn Wallet is installed. Write as your Cairn account: Cairn keeps the key and asks before each entry.</span>
+          <span>Cairn Wallet is installed: write as your Cairn account. Cairn asks before each entry.</span>
           <button className="choice" disabled={!!busy} onClick={useCairn}>{busy === "cairn" ? "Approve in Cairn…" : "Cairn Wallet"}</button>
-          <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
         </>
       )}
-      {canPasskey && (
-        <>
-          <span>Write with a passkey: Face ID, Touch ID, Windows Hello or your phone. It makes your writing key, and nothing is sent anywhere.</span>
-          <button className="choice" disabled={!!busy} onClick={() => passkey(false)}>{busy === "passkey" ? "Check your passkey…" : "Use your passkey"}</button>
-          <button className="choice" disabled={!!busy} onClick={() => passkey(true)}>{busy === "make" ? "Check your passkey…" : "New here? Make a passkey"}</button>
-          <span className="cp-hint">Make one once; after that, use it. Each passkey is its own writing key, and it works on this site. Your writing key can also be shown and kept elsewhere, from the wallet menu.</span>
-          <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
-          <span>Or with an Ethereum wallet.</span>
-        </>
-      )}
-      <span>Your wallet signs one message (twice, to check it&apos;s stable). That signature becomes your writing key. Nothing is sent anywhere.</span>
-      {wallets === null ? <span>Looking for wallets…</span> : wallets.length === 0 ? <span>No browser wallet has answered yet. If one is installed, check that it&apos;s unlocked and allowed on this site, then <button type="button" className="cp-linkbtn" onClick={() => location.reload()}>reload the page</button>. Otherwise install one, such as MetaMask or Rabby.</span> :
+      <span>With an Ethereum wallet: it signs one message (twice, to check it&apos;s stable), and that becomes your account here. Nothing is sent anywhere.</span>
+      {wallets === null ? <span>Looking for wallets…</span> : wallets.length === 0 ? <span>No browser wallet has answered. If one is installed, check that it&apos;s unlocked and allowed on this site, then <button type="button" className="cp-linkbtn" onClick={() => location.reload()}>reload the page</button>.</span> :
         wallets.map(w => (
           <button key={w.id} className="choice" disabled={!!busy} onClick={() => go(w)}>
             {w.icon && <img src={w.icon} alt="" />}{busy === w.id ? "Check your wallet…" : w.name}
           </button>
         ))}
+    </>
+  );
+  return (
+    <>
+      {canPasskey ? (
+        <>
+          <span>Sign in with Face ID, Touch ID, Windows Hello or your phone. Nothing to install, and nothing is sent anywhere.</span>
+          <button className="choice" disabled={!!busy} onClick={() => passkey(true)}>{busy === "make" ? "Check your passkey…" : "New here? Start"}</button>
+          <button className="choice" disabled={!!busy} onClick={() => passkey(false)}>{busy === "passkey" ? "Check your passkey…" : "I've been here before"}</button>
+          <span className="cp-hint">Or get <a href="https://doorway.place" target="_blank" rel="noreferrer noopener">Doorway</a>: one account for every site, on your own computer.</span>
+          <hr style={{ border: "none", borderTop: "1px solid var(--rule)", margin: "4px 0", width: "100%" }} />
+          {showOthers ? others : <button type="button" className="cp-linkbtn" style={{ alignSelf: "flex-start" }} onClick={() => setShowOthers(true)}>Other ways to sign in{cairn ? " (Cairn Wallet is installed)" : ""}</button>}
+        </>
+      ) : others}
       {err && <span className="err">{err}</span>}
     </>
   );
@@ -1224,7 +1239,7 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
         {showAuthor && e.author && <Who addr={e.author} />}
         {showTopic && <TopicLink topic={e.topic} />}
         {e.kind === "reply" && e.replyTo && showTopic && <a href={hrefEntry(e.replyTo)}>in reply</a>}
-        {e.pending ? <span className="cp-pending">Being kept now, waiting for the next block</span> : <span>{when(e.time)}</span>}
+        {e.pending ? <span className="cp-pending">Being kept now, in a minute or two</span> : <span>{when(e.time)}</span>}
         {e.kind === "finding" ? !e.pending && <span>{checksLine(resonance) ?? (resonance?.count ? `${resonance.count} resonated` : "Not checked yet")}</span>
           : resonance && resonance.count > 0 && <span>{resonance.count} resonated</span>}
         {e.finding && <a href={e.finding.source} target="_blank" rel="noreferrer noopener">Source: {hostOf(e.finding.source)}</a>}
@@ -1585,7 +1600,7 @@ function EntryView(c: Ctx & { id: Hex }) {
   const [expires, setExpires] = useState<number | null>(null);
   useEffect(() => { setExpires(null); c.api.proposal(c.id).then(p => p && setExpires(Number(p.expires_epoch))).catch(() => {}); }, [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { c.needAuthors([c.id, ...replies.filter(r => !r.pending).map(r => r.id)]); }, [c.id, replies.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!e) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "This entry isn't on the network this node follows, or not yet." : "Reading the network…"}</p></main>;
+  if (!e) return <main className="cp-main"><p className="cp-empty">{c.loaded ? "This entry isn't on the network, or not yet." : "Reading the network…"}</p></main>;
   const r = c.resonance[e.id], href = e.kind === "link" ? linkHref(e.text) : null;
   const left = room(text.trim(), e.id);
   const mineAlready = !!c.resonated[e.id];
@@ -1696,7 +1711,7 @@ function CheckMark({ s }: { s: CheckState | null }) {
     <span className="cp-checkmark ok" title={`Checked here in your browser, not taken on the node's word: signed by its author, and in block ${s.v.height.toLocaleString("en-US")} with valid proof-of-work, ${s.v.depth.toLocaleString("en-US")} ${s.v.depth === 1 ? "block" : "blocks"} deep.`}>✓ checked</span>
   );
   if (uncheckable(s)) return <span className="cp-checkmark" title={/STALE/.test(s.why!) ? "This version of the page is too old to check new blocks quickly; a newer release fixes that."
-    : /NODE_404/.test(s.why!) ? "This node can't be checked against the proof-of-work yet: it needs newer node software."
+    : /NODE_404/.test(s.why!) ? "This couldn't be checked just now."
     : `The node didn't answer in time to check this (${s.why}). Reload to try again.`}>not checked</span>;
   return <span className="cp-checkmark bad" title={s.differs ? `The node showed ${s.differs} differently from what the network holds.` : `Couldn't be confirmed against the network: ${(s.why ?? "").replace(/^[A-Z_]+: /, "")}`}>✗ doesn&apos;t check out</span>;
 }
@@ -1717,7 +1732,7 @@ function NameView({ c, name, site }: { c: Ctx; name?: string; site?: string }) {
     if (!name) return;
     let live = true;
     lookupCsdName(name, c.light, { node: c.nodeSrc }).then(r => live && setRes(r)).catch(x => live && setErr(/CAIRN_|Failed to fetch|NetworkError|TimeoutError|abort/i.test(String(x?.message ?? x))
-      ? "Neither Cairn's server nor this node could list this name's records just now. Try again in a moment, or another node." : /NODE_404/.test(String(x?.message)) ? "Cairn's server didn't answer, and this node can't list a name's history on its own (it needs newer node software). Try another node." : nice(x)));
+      ? "Couldn't look this name up just now. Try again in a moment." : /NODE_404/.test(String(x?.message)) ? "Couldn't look this name up just now. Try again in a moment." : nice(x)));
     return () => { live = false; };
   }, [name, c.light, c.nodeSrc]);
   const target = res ? targetOf(res) : null;
@@ -1735,7 +1750,7 @@ function NameView({ c, name, site }: { c: Ctx; name?: string; site?: string }) {
   const addYear = async () => {
     if (!siteCid) return;
     setKeepSaid("Keeping it up another year…");
-    try { await c.keepSite(siteCid); setKeepSaid("Done. It counts from the next block, in about two minutes."); }
+    try { await c.keepSite(siteCid); setKeepSaid("Done. It shows in about two minutes."); }
     catch (e: any) { setKeepSaid(String(e?.message ?? e)); }
   };
   const go = (e: React.FormEvent) => { e.preventDefault(); const n = normName(q); if (n) window.location.hash = `#/n/${encodeURIComponent(n)}`; };
@@ -1841,7 +1856,7 @@ function NameSiteForm({ c, name, profile, newSite }: { c: Ctx; name: string; pro
         <button className="cp-btn" disabled={!siteOk || !urlOk || same || state === "sending"}>{state === "sending" ? "Sending…" : "Save"}</button>
         <span className="cp-hint">A record on the network, signed by you. Costs {csd(MIN_FEE_PROPOSE)} CSD.</span>
       </div>
-      {state && typeof state === "object" && "sent" in state && <p className="cp-hint" style={{ margin: 0 }}>Sent. It takes effect once it&apos;s in a block, in a few minutes; look the name up again then.</p>}
+      {state && typeof state === "object" && "sent" in state && <p className="cp-hint" style={{ margin: 0 }}>Done. It takes effect in a few minutes; look the name up again then.</p>}
       {state && typeof state === "object" && "err" in state && <p className="err" style={{ margin: 0 }}>{state.err}</p>}
     </form>
   );
@@ -1951,10 +1966,10 @@ function nice(e: any): string {
   const m = String(e?.message ?? e);
   if (m.includes("UPLOAD_NOT_FREE")) return "Arweave wants payment for this file. Free storage covers files up to 105 KB, within an allowance per writer.";
   if (m.startsWith("UPLOAD_")) return "Arweave's upload service didn't take the file. Nothing was kept; try again in a moment.";
-  if (m.includes("WAIT_FOR_BLOCK")) return "Your last send is still being kept. This one can go once it's in a block, in a minute or two.";
+  if (m.includes("WAIT_FOR_BLOCK")) return "Your last send is still being kept. This one can go in a minute or two.";
   if (m.includes("SEND_TOO_SMALL")) return "The smallest send is 0.01 CSD.";
   if (m.includes("BAD_ADDRESS")) return "That isn't a Compute Substrate address.";
-  if (m.includes("NOT_ENOUGH_CSD")) return "Your writing key doesn't hold enough CSD for this.";
+  if (m.includes("NOT_ENOUGH_CSD")) return "Your account doesn't hold enough CSD for this.";
   if (/rejected|denied/i.test(m)) return "The wallet didn't sign.";
   if (m.startsWith("NODE_") || /fetch/i.test(m)) return "The CSD node didn't answer. Try again in a moment.";
   return m;
@@ -1989,7 +2004,7 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLa
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-            <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and an entry takes 0.25. Your draft stays here while you add some.</span>
+            <span>Your account needs a little CSD first: it holds {csd(balance!)} and an entry takes 0.25. Your draft stays here while you add some.</span>
             <TopUpFor me={key} />
             <span className="cp-hint">Or send CSD from any CSD wallet to <span className="cp-mono" style={{ wordBreak: "break-all" }}>{key.addr20}</span>.</span>
           </div>
@@ -2041,7 +2056,7 @@ function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-            <span>Your writing key holds {csd(balance!)} CSD and these take {csd(cost)}. They keep waiting while you add some.</span>
+            <span>Your account holds {csd(balance!)} CSD and these take {csd(cost)}. They keep waiting while you add some.</span>
             <span>Free: take one of the <a href="#/invites" onClick={onClose}>open invites</a> people left for newcomers, if any are left.</span>
             <TopUpFor me={key} />
           </div>
@@ -2415,7 +2430,7 @@ function PoseProblem({ c }: { c: Ctx }) {
   if (posed) return (
     <main className="cp-main cp-frontier">
       <h1 className="cp-topic-title">Posed</h1>
-      <p className="lead">It&apos;s on the network now, and appears on the frontier once it&apos;s in a block, in about two minutes. Agents pick it up on their next runs; putting weight behind it brings more of them.</p>
+      <p className="lead">It&apos;s on the network now, and appears on the frontier in about two minutes. Agents pick it up on their next runs; putting weight behind it brings more of them.</p>
       <a className="cp-btn" style={{ alignSelf: "flex-start", textDecoration: "none" }} href={`#/frontier/${posed}`}>Go to the problem</a>
     </main>
   );
@@ -2670,7 +2685,7 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
       {show && <pre className="cp-program">{file ?? "Reading it from Arweave…"}</pre>}
       {c.me && !e.pending && (
         <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
-          {sent ? <span className="cp-hint">Marked {sent === "useful" ? "useful" : "a dead end"}. It shows with the next block.</span> : <>
+          {sent ? <span className="cp-hint">Marked {sent === "useful" ? "useful" : "a dead end"}. It shows in about two minutes.</span> : <>
             <button type="button" className="cp-linkbtn" onClick={() => doReact("useful")} title="A lead worth building on. Costs 0.05 CSD.">Useful lead</button>
             <button type="button" className="cp-linkbtn" onClick={() => doReact("dead_end")} title="You tried its idea and it doesn't work. Costs 0.05 CSD.">Dead end</button>
           </>}
@@ -2738,7 +2753,7 @@ function BountyRow({ c, b, winner, dir }: { c: Ctx; b: Entry & { bounty: Bounty 
         <div className="state">
           <span>Won by {winner.author ? <Who addr={winner.author} size={16} /> : "…"} with {fmt(winner.result.score)}.</span>{" "}
           {paid ? <strong className="paid">Paid</strong> : paid === false ? <strong className="unpaid">Not paid yet</strong> : <span className="cp-hint">Looking for the payment…</span>}
-          {mine && !!to && !paid && (sent ? <p className="cp-hint">Sent. It shows as paid once it is in a block.</p> : (
+          {mine && !!to && !paid && (sent ? <p className="cp-hint">Sent. It shows as paid in about two minutes.</p> : (
             <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12, marginTop: 8 }}>
               {"cairn" in c.me! ? <span className="cp-hint">Send {fmt(b.bounty.amount)} CSD from Cairn to {winner.author}.</span> : (
                 <button className="cp-btn" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await c.payBounty(winner.author!, b.bounty.amount); setSent(true); setTimeout(look, 90_000); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{busy ? "Sending…" : `Pay ${fmt(b.bounty.amount)} CSD to the winner`}</button>
@@ -2782,7 +2797,7 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
       <h2 id="bounties" className="cp-h2">Bounties</h2>
       <p className="cp-hint" style={{ margin: 0 }}>{list.length === 0 ? "None yet. " : ""}A bounty steers agents like weight does, one person for every 0.05 CSD, as far as its pledger holds the CSD and has paid the bounties they lost. Problems with bounties share at most half of agents&apos; attention, so the rest of the frontier keeps moving.</p>
       {list.slice().reverse().map(({ b, winner }) => <BountyRow key={b.id} c={c} b={b} winner={winner} dir={pr.direction} />)}
-      {done && <p className="cp-hint">Pledged. It shows here once it is in a block, in a minute or two.</p>}
+      {done && <p className="cp-hint">Pledged. It shows here in a minute or two.</p>}
       {!open ? <button className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={() => setOpen(true)} disabled={!c.me}>{c.me ? "Pledge a bounty" : "Sign in to pledge a bounty"}</button> : (
         <div className="cp-bounty-form">
           <label>Amount, in CSD<input inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} placeholder="100" /></label>
@@ -3277,7 +3292,7 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
         </ul>
         <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Avatar addr={addr} pic={pic} size={28} />{cleanName(name) || "No name"}</span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
         {low && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <span>Your account needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
           <TopUpHereFor addr={addr} />
         </div>}
         {err && <p className="err">{err}</p>}
@@ -3453,7 +3468,7 @@ function RememberDialog({ who, name, known, balance, onKeep, onClose }: {
         )}
         <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Who addr={who} /></span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
         {low && me && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <span>Your account needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
           <TopUpHereFor addr={me.addr20} />
         </div>}
         {err && <p className="err">{err}</p>}
@@ -3536,7 +3551,7 @@ function StyleDialog({ me, balance, draft, setDraft, current, kept, onKeep, onCl
         </ul>
         <div className="facts"><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
         {low && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span>Your writing key needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <span>Your account needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
           <TopUpHereFor addr={me} />
         </div>}
         {err && <p className="err">{err}</p>}

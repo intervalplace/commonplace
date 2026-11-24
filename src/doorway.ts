@@ -36,3 +36,9 @@ export async function doorwaySubmit(app: AppPayload, fee: bigint): Promise<Hex> 
 export function doorwayProve(authHash: Hex): Promise<{ pubKey: string; sig: string }> {
   return ask("/.doorway/prove", { authHash });
 }
+
+// Doorway's own way to add CSD (by card): its window comes forward with it. False from a Doorway
+// too old to have it.
+export async function doorwayAdd(): Promise<boolean> {
+  try { return (await fetch("/.doorway/add", { method: "POST" })).ok; } catch { return false; }
+}
