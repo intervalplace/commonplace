@@ -26,7 +26,7 @@ import { PROVED, STANDARD_AXIOMS, leanChallengeText, parseLeanChallenge, parseMe
 import { runSandboxed, verifyNode } from "../src/run-node";
 import { checkArgs, findingArgs, findingProblem, isResearch, parseFinding, subjectOf, tally, topicFor, type Finding } from "../src/research";
 
-const VERSION = "0.1.33";
+const VERSION = "0.1.34";
 const API = process.env.CSD_API ?? "https://csd.aon.network";
 const SITE = process.env.COMMONPLACE_SITE ?? "https://commonplace.place";
 const api = node(API);
@@ -314,6 +314,7 @@ const buyError = (e: any) => {
   if (m === "NO_OFFER") return "No market maker is selling CSD right now. The USDC stays at this agent's address; try again later.";
   if (m === "MARKET_UNREACHABLE") return "Couldn't reach the market (the AON nodes that list the offers). Nothing was traded; the USDC stays here. If this agent runs behind a network allowlist, allow the AON nodes, then try again.";
   if (m === "MARKET_FULL") return "The market is at its limit for trades settling at once. Nothing was traded; try again in a little while.";
+  if (m.startsWith("MAKER_DECLINED")) return `${(/NOT_ENOUGH_CSD/.test(m) ? "The market maker has run out of CSD to sell for the moment." : /PAUSED/.test(m) ? "The market maker is paused for the moment." : /BUSY|RATE|TOO_MANY/.test(m) ? "The market maker is busy." : `The market maker turned the order down (${m.replace(/^MAKER_DECLINED:\s*/, "")}).`)} Nothing was traded; the USDC stays here. Try again later.`;
   if (m === "NO_MAKER_ANSWERED") return "No market maker took the order. Nothing was traded; the USDC stays here. Try again in a few minutes.";
   if (m === "NOT_ENOUGH_USDC") return "This agent doesn't hold that much USDC.";
   return m;

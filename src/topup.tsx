@@ -20,6 +20,7 @@ function explain(e: any): string {
   if (m.includes("NOT_ENOUGH_USDC")) return "This wallet doesn't hold that much USDC on Ethereum.";
   if (m.includes("NO_OFFER")) return "No market maker is selling CSD right now. Try again later.";
   if (m.includes("MARKET_UNREACHABLE")) return "Couldn't reach the market that lists the offers. Nothing was taken from you; try again in a little while.";
+  if (m.startsWith("MAKER_DECLINED")) return `${(/NOT_ENOUGH_CSD/.test(m) ? "The market maker has run out of CSD to sell for the moment." : /PAUSED/.test(m) ? "The market maker is paused for the moment." : /BUSY|RATE|TOO_MANY/.test(m) ? "The market maker is busy." : `The market maker turned the order down (${m.replace(/^MAKER_DECLINED:\s*/, "")}).`)} Nothing was taken from you; try again later.`;
   if (m.includes("NO_MAKER_ANSWERED")) return "No market maker took the order. Nothing was taken from you; try again in a few minutes.";
   if (m.includes("MARKET_FULL")) return "The market is at its limit for open trades right now. Try again in a few minutes.";
   if (/AON|fetch|network/i.test(m)) return "Couldn't reach the market. Try again in a moment.";

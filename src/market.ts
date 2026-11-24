@@ -214,10 +214,11 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Top
   const csdMaxTarget = bitsToTarget(bits) * 11n / 10n;
 
   const tried = new Set<string>();
+  let declined = "";
   for (let attempt = 0; attempt < 3; attempt++) {
     onStep("Finding the best offer…");
     const q = (await quotes(spend, tried))[0];
-    if (!q) throw new Error(tried.size ? "NO_MAKER_ANSWERED" : "NO_OFFER");
+    if (!q) throw new Error(declined ? `MAKER_DECLINED: ${declined}` : tried.size ? "NO_MAKER_ANSWERED" : "NO_OFFER");
     tried.add(q.maker.toLowerCase());
     const [locked, max] = await Promise.all([
       read.readContract({ address: SETTLEMENT, abi: settlementAbi, functionName: "totalLocked" }),
@@ -264,6 +265,8 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Top
       for (const o of r.inbound ?? []) if (o.objectType === "response" && (await objectSigner(o)) === q.maker.toLowerCase()) { answer = o.payload; break; }
       if (!answer) await new Promise(r => setTimeout(r, 1500));
     }
+    // declined: kept, so the person hears why (out of CSD, paused, busy) rather than "no answer"
+    if (answer && !answer.accepted) declined = String(answer.error ?? answer.code ?? "DECLINED");
     if (!answer || !answer.accepted) continue; // silent or declined: the next maker
     onStep("The maker is locking your USDC on Ethereum…");
     for (let i = 0; i < 60; i++) {
@@ -272,7 +275,7 @@ export async function topUp(args: { provider: Provider; buyer: Address; key: Top
     }
     return record; // accepted, lock not seen yet: followed from here
   }
-  throw new Error("NO_MAKER_ANSWERED");
+  throw new Error(declined ? `MAKER_DECLINED: ${declined}` : "NO_MAKER_ANSWERED");
 }
 
 // The market maker's signed receipt for a top-up, published on AON once the trade settles
