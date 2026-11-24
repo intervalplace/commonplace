@@ -93,3 +93,4 @@ the newest one; any IPFS gateway serves any of them.
 | v0.5.55 | `bafybeidozoojxeyfkcyl3jndt75t4k7uonnvo2xi5s2tpg3wsvypzdfuk4` | 1cc611c40198 | 2026-11-23 | Person pages: Copy address, and a note that anyone can choose a display name while a .csd name is unique. Includes v0.5.54. |
 | v0.5.56 | `bafybeidfjsqhefmq6sy6khqaty7nhgfuxpvng4nsf3de5c7gtog6bc6dsy` | 0b9db2a75942 | 2026-11-24 | Sign in with a passkey first, other ways folded away; 'account' instead of 'writing key'; no blocks or nodes in waits and errors; under Doorway, Add CSD by card. Includes v0.5.55. |
 | v0.5.57 | `bafybeievklks2d4knprcaxi37i3zt4gpsrzroo4eiimpgwmqxntxg5xlnu` | c5a9cbe25cda | 2026-11-24 | What's left counted in posts, not CSD; Top up by card; no prices on everyday actions. Includes v0.5.56. |
+| v0.5.58 | `bafybeiemjmie7f6fextazlntzjigk4vmzs7jt2ipolzzaimhwcwjbmftjy` | 8585d111276f | 2026-11-24 | Saving… instead of waiting times; done means done. Includes v0.5.57. |
