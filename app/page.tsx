@@ -88,6 +88,9 @@ const HIDDEN = new Map<string, string>(((hiddenList as any).entries ?? []).map((
 const HIDDEN_POLICY = "https://github.com/intervalplace/commonplace/blob/main/moderation/README.md";
 
 // ── formatting ──────────────────────────────────────────────────────────────
+// what's left, counted in posts (an entry is 0.25 CSD; a resonance a fifth of one): a number of
+// CSD means nothing to someone new
+const postsLeft = (b: bigint | null | undefined) => { const n = b == null ? 0 : Number(b / MIN_FEE_PROPOSE); return n === 1 ? "1 post" : `${n.toLocaleString("en-US")} posts`; };
 const short = (a?: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "");
 const csd = (v: bigint) => { const n = Number(v) / Number(COIN); return n >= 100 ? Math.floor(n).toLocaleString("en-US") : n.toLocaleString("en-US", { maximumFractionDigits: 2 }); };
 function when(t: number): string {
@@ -608,7 +611,7 @@ export default function Page() {
       <Header route={route} keyState={[key, setKey]} balance={balance} newReplies={newReplies.length} />
       {welcomed !== null && (
         <div className="cp-welcome" role="status">
-          <span>Welcome. Someone left you {csd(welcomed)} CSD to write with, ready in about two minutes.</span>
+          <span>Welcome. Someone left you enough for about {postsLeft(welcomed)}, ready in about two minutes.</span>
           <button className="cp-linkbtn" onClick={() => setWelcomed(null)}>OK</button>
         </div>
       )}
@@ -775,8 +778,8 @@ function DoorwayAdd({ me }: { me: Me }) {
   if (old) return <TopUpHere me={{ addr20: me.addr20, prove: doorwayProve }} />;
   return (
     <span style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
-      <button className="cp-btn" onClick={async () => { if (!(await doorwayAdd())) setOld(true); }}>Add CSD by card</button>
-      <span className="cp-hint">Doorway opens Stripe&apos;s page, and buys the CSD for you once you&apos;ve paid.</span>
+      <button className="cp-btn" onClick={async () => { if (!(await doorwayAdd())) setOld(true); }}>Top up by card</button>
+      <span className="cp-hint">Doorway opens Stripe&apos;s page, and does the rest once you&apos;ve paid.</span>
     </span>
   );
 }
@@ -790,7 +793,7 @@ function KeyInfo({ k, balance, onForget, onSend, onShowKey, onInvite }: { k: Me;
   const [copied, setCopied] = useState(false);
   return (
     <>
-      <span>Your account holds <strong>{balance === null ? "…" : csd(balance)} CSD</strong>. Each entry costs 0.25 CSD and each resonance 0.05 CSD.</span>
+      <span>Enough for about <strong>{balance === null ? "…" : postsLeft(balance)}</strong> <span className="cp-hint">({balance === null ? "…" : csd(balance)} CSD)</span>. A resonance is a fifth of a post.</span>
       <span>To add CSD from another wallet, send it to:</span>
       <span className="addr">{k.addr20}</span>
       <button className="choice" onClick={() => { navigator.clipboard?.writeText(k.addr20); setCopied(true); }}>{copied ? "Copied" : "Copy address"}</button>
@@ -940,7 +943,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
               <input type="checkbox" checked={listOpen} onChange={e => setListOpen(e.target.checked)} style={{ marginTop: 3 }} />
               <span>Also list {count === 1 ? "it" : "them"} on the <a href="#/invites">open invites</a> page, for anyone new to take, first come first served. Listing costs 0.25 CSD.</span>
             </label>
-            <div className="facts"><span>{count} {count === 1 ? "link" : "links"}, enough for about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"} each</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
+            <div className="facts"><span>{count} {count === 1 ? "link" : "links"}, enough for about {Number(gift / MIN_FEE_PROPOSE)} {gift / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"} each</span><span>Takes {csd(cost)} CSD</span></div>
             {short_ && <p className="cp-notice" style={{ margin: 0 }}>This account has {csd(avail!)} CSD ready, and these take {csd(cost)}.</p>}
             {err && <p className="err">{err}</p>}
             <div className="actions">
@@ -1638,7 +1641,7 @@ function EntryView(c: Ctx & { id: Hex }) {
             <button className="cp-btn-line" disabled={busy || !c.me || mineAlready || closed} onClick={async () => { setBusy(true); setErr(null); try { await c.resonate(e.id); } catch (x: any) { setErr(nice(x)); } finally { setBusy(false); } }}>
               {mineAlready ? "You resonated" : busy ? "Sending…" : "Resonate"}
             </button>
-            <span className="cp-hint">{r?.count && e.kind !== "finding" ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? `Each costs 0.05 CSD${inUsd(MIN_FEE_ATTEST, price)}, and is public. ` : "Sign in to resonate. "}{openLine}</span>
+            <span className="cp-hint">{r?.count && e.kind !== "finding" ? `${r.count} resonated. ` : ""}{closed ? "" : c.me ? "Each is public. " : "Sign in to resonate. "}{openLine}</span>
           </div>
         )}
         {err && <p className="cp-hint over" style={{ margin: 0 }}>{err}</p>}
@@ -1999,14 +2002,13 @@ function KeepDialog({ text, topic, replyTo, doc, keyState, balance, onKeep, onLa
           {doc && <li>The file is stored on Arweave, which keeps it for good (free at this size), and the entry holds its fingerprint, so anyone can check it is exactly this file.</li>}
         </ul>
         <a className="cp-hint" href="#/about" target="_blank" rel="noopener" style={{ marginTop: -8 }}>What being kept for good means</a>
-        <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span className="cp-mono" style={{ color: "var(--ink)" }}>{short(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
+        <div className="facts"><span>{guestbookOwner(normTopic(topic)) ? <>In the guestbook of <span className="cp-mono" style={{ color: "var(--ink)" }}>{short(guestbookOwner(normTopic(topic))!)}</span></> : <>Topic <span style={{ color: "var(--ink)" }}>{normTopic(topic)}</span></>}</span><span>One post&apos;s worth</span></div>
         {!key ? (
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-            <span>Your account needs a little CSD first: it holds {csd(balance!)} and an entry takes 0.25. Your draft stays here while you add some.</span>
+            <span>You&apos;ve run out for now. Your draft stays here while you top up.</span>
             <TopUpFor me={key} />
-            <span className="cp-hint">Or send CSD from any CSD wallet to <span className="cp-mono" style={{ wordBreak: "break-all" }}>{key.addr20}</span>.</span>
           </div>
         ) : null}
         {err && <p className="err">{err}</p>}
@@ -2051,12 +2053,12 @@ function WaitingDialog({ waiting, keyState, balance, onKeepOne, onClose }: {
           <li>Nobody can edit or remove {n === 1 ? "it" : "them"}, including you.</li>
           <li>Each is kept with the time it is kept now, not when you wrote it.</li>
         </ul>
-        <div className="facts"><span>{n} {n === 1 ? "entry" : "entries"}</span><span>Costs {csd(cost)} CSD{inUsd(cost, price)}</span></div>
+        <div className="facts"><span>{n} {n === 1 ? "entry" : "entries"}</span><span>{n === 1 ? "One post" : `${n} posts`}</span></div>
         {!key ? (
           <div className="cp-menu" style={{ position: "static", width: "auto", boxShadow: "none" }}><Connect onKey={setKey} /></div>
         ) : short_ ? (
           <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-            <span>Your account holds {csd(balance!)} CSD and these take {csd(cost)}. They keep waiting while you add some.</span>
+            <span>You have enough for about {postsLeft(balance)}, and these are {n}. They keep waiting while you top up.</span>
             <span>Free: take one of the <a href="#/invites" onClick={onClose}>open invites</a> people left for newcomers, if any are left.</span>
             <TopUpFor me={key} />
           </div>
@@ -3290,9 +3292,9 @@ function ProfileDialog({ addr, current, balance, onKeep, onClose }: {
           <li>You can change them later. The newest one is the one people see, and the old ones stay on the record.</li>
           <li>Names aren&apos;t unique, so your address always shows beside yours.</li>
         </ul>
-        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Avatar addr={addr} pic={pic} size={28} />{cleanName(name) || "No name"}</span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
+        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Avatar addr={addr} pic={pic} size={28} />{cleanName(name) || "No name"}</span><span>One post&apos;s worth</span></div>
         {low && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span>Your account needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <span>You&apos;ve run out for now. Top up to do this.</span>
           <TopUpHereFor addr={addr} />
         </div>}
         {err && <p className="err">{err}</p>}
@@ -3466,9 +3468,9 @@ function RememberDialog({ who, name, known, balance, onKeep, onClose }: {
             <li>It is kept on the network for good, so it comes back on any device where you connect this wallet, with or without this site.</li>
           </ul>
         )}
-        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Who addr={who} /></span><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
+        <div className="facts"><span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}><Who addr={who} /></span><span>One post&apos;s worth</span></div>
         {low && me && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span>Your account needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <span>You&apos;ve run out for now. Top up to do this.</span>
           <TopUpHereFor addr={me.addr20} />
         </div>}
         {err && <p className="err">{err}</p>}
@@ -3549,9 +3551,9 @@ function StyleDialog({ me, balance, draft, setDraft, current, kept, onKeep, onCl
         <ul>
           <li>Your page&apos;s look is kept like an entry: public, and on the network for good. The newest one is the one people see.</li>
         </ul>
-        <div className="facts"><span>Costs 0.25 CSD{inUsd(MIN_FEE_PROPOSE, price)}</span></div>
+        <div className="facts"><span>One post&apos;s worth</span></div>
         {low && <div className="cp-notice" style={{ margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span>Your account needs a little CSD first: it holds {csd(balance!)} and this takes 0.25.</span>
+          <span>You&apos;ve run out for now. Top up to do this.</span>
           <TopUpHereFor addr={me} />
         </div>}
         {err && <p className="err">{err}</p>}
