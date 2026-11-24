@@ -55,7 +55,7 @@ export function TopUpBox({ me, eth, setEth, csdNode, onLocked, compact }: {
       saveTopUps([t, ...loadTopUps()]);
       setDoneLink(aonLink(t.aonHash));
       setDone(t.status === "locked"
-        ? `Done. About ${fmt(BigInt(t.csd), COIN)} CSD is on its way to your account and shows up within a few minutes.`
+        ? `Done. About ${fmt(BigInt(t.csd), COIN)} CSD is on its way to your account.`
         : "The market maker took the order. Your CSD should arrive within a few minutes; if it doesn't, your USDC comes back.");
       onLocked();
     } catch (e) { setErr(explain(e)); } finally { setBusy(null); }

@@ -611,7 +611,7 @@ export default function Page() {
       <Header route={route} keyState={[key, setKey]} balance={balance} newReplies={newReplies.length} />
       {welcomed !== null && (
         <div className="cp-welcome" role="status">
-          <span>Welcome. Someone left you enough for about {postsLeft(welcomed)}, ready in about two minutes.</span>
+          <span>Welcome. Someone left you enough for about {postsLeft(welcomed)}, on its way.</span>
           <button className="cp-linkbtn" onClick={() => setWelcomed(null)}>OK</button>
         </div>
       )}
@@ -917,7 +917,7 @@ function InviteDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         <h2 id="inv-title">{made ? (made.length === 1 ? "Your invite link" : "Your invite links") : "Make invite links"}</h2>
         {made ? (
           <>
-            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own account and start writing. It works in a minute or two.{listOpen ? <> {made.length === 1 ? "It's" : "They're"} also listed on the <a href="#/invites">open invites</a> page from then.</> : null}</p>
+            <p className="cp-hint" style={{ margin: 0 }}>Each link carries {csd(gift)} CSD. Whoever opens one first can take it onto their own account and start writing. It works in a moment.{listOpen ? <> {made.length === 1 ? "It's" : "They're"} also listed on the <a href="#/invites">open invites</a> page from then.</> : null}</p>
             <div className="cp-links">{made.map(l => <span key={l} className="cp-mono">{l}</span>)}</div>
             <div className="actions">
               <button className="cp-btn" onClick={() => copy(made.join("\n"), "made")}>{copied === "made" ? "Copied" : made.length === 1 ? "Copy the link" : `Copy all ${made.length} links`}</button>
@@ -1001,7 +1001,7 @@ function Invite({ code, keyState }: { code: string; keyState: [Me | null, (k: Me
       ) : taken !== null ? (
         <>
           <h1 className="cp-topic-title">It&apos;s yours</h1>
-          <p className="lead">{csd(taken)} CSD is on its way to your account, and arrives in a minute or two. That&apos;s enough to keep about {Number(taken / MIN_FEE_PROPOSE)} {taken / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"}.</p>
+          <p className="lead">{csd(taken)} CSD is on its way to your account, and arrives in a moment. That&apos;s enough to keep about {Number(taken / MIN_FEE_PROPOSE)} {taken / MIN_FEE_PROPOSE === 1n ? "entry" : "entries"}.</p>
           <a className="cp-btn" style={{ alignSelf: "flex-start", textDecoration: "none" }} href="#/">Start writing</a>
         </>
       ) : holds === null ? (
@@ -1074,7 +1074,7 @@ function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         <h2 id="send-title">{sent ? "Sent" : confirm ? "Send it?" : "Send CSD elsewhere"}</h2>
         {sent ? (
           <>
-            <p className="cp-hint" style={{ margin: 0 }}>{exact(sent.value)} CSD is on its way to <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)" }}>{dest}</span>. It arrives in a minute or two.</p>
+            <p className="cp-hint" style={{ margin: 0 }}>{exact(sent.value)} CSD is on its way to <span className="cp-mono" style={{ wordBreak: "break-all", color: "var(--ink)" }}>{dest}</span>. It arrives in a moment.</p>
             <span className="cp-mono" style={{ wordBreak: "break-all" }}>Transaction {sent.id}</span>
             <div className="actions"><button className="cp-btn" onClick={onClose}>Done</button></div>
           </>
@@ -1094,7 +1094,7 @@ function SendDialog({ k, onClose }: { k: CsdKey; onClose: () => void }) {
         ) : (
           <>
             <p className="cp-hint" style={{ margin: 0 }}>
-              {avail === null ? "Checking what this key holds…" : <>This key has <strong style={{ color: "var(--ink)" }}>{exact(avail)} CSD</strong> ready to send. CSD from a send still on its way is ready in a minute or two.</>}
+              {avail === null ? "Checking what this key holds…" : <>This key has <strong style={{ color: "var(--ink)" }}>{exact(avail)} CSD</strong> ready to send. CSD from a send still on its way is ready in a moment.</>}
             </p>
             <label className="cp-field">
               <span>To a Compute Substrate address</span>
@@ -1242,7 +1242,7 @@ function EntryItem({ e, resonance, showAuthor, showTopic = true }: { e: Entry; r
         {showAuthor && e.author && <Who addr={e.author} />}
         {showTopic && <TopicLink topic={e.topic} />}
         {e.kind === "reply" && e.replyTo && showTopic && <a href={hrefEntry(e.replyTo)}>in reply</a>}
-        {e.pending ? <span className="cp-pending">Being kept now, in a minute or two</span> : <span>{when(e.time)}</span>}
+        {e.pending ? <span className="cp-pending">Saving…</span> : <span>{when(e.time)}</span>}
         {e.kind === "finding" ? !e.pending && <span>{checksLine(resonance) ?? (resonance?.count ? `${resonance.count} resonated` : "Not checked yet")}</span>
           : resonance && resonance.count > 0 && <span>{resonance.count} resonated</span>}
         {e.finding && <a href={e.finding.source} target="_blank" rel="noreferrer noopener">Source: {hostOf(e.finding.source)}</a>}
@@ -1753,7 +1753,7 @@ function NameView({ c, name, site }: { c: Ctx; name?: string; site?: string }) {
   const addYear = async () => {
     if (!siteCid) return;
     setKeepSaid("Keeping it up another year…");
-    try { await c.keepSite(siteCid); setKeepSaid("Done. It shows in about two minutes."); }
+    try { await c.keepSite(siteCid); setKeepSaid("Done. Another year is added."); }
     catch (e: any) { setKeepSaid(String(e?.message ?? e)); }
   };
   const go = (e: React.FormEvent) => { e.preventDefault(); const n = normName(q); if (n) window.location.hash = `#/n/${encodeURIComponent(n)}`; };
@@ -1859,7 +1859,7 @@ function NameSiteForm({ c, name, profile, newSite }: { c: Ctx; name: string; pro
         <button className="cp-btn" disabled={!siteOk || !urlOk || same || state === "sending"}>{state === "sending" ? "Sending…" : "Save"}</button>
         <span className="cp-hint">A record on the network, signed by you. Costs {csd(MIN_FEE_PROPOSE)} CSD.</span>
       </div>
-      {state && typeof state === "object" && "sent" in state && <p className="cp-hint" style={{ margin: 0 }}>Done. It takes effect in a few minutes; look the name up again then.</p>}
+      {state && typeof state === "object" && "sent" in state && <p className="cp-hint" style={{ margin: 0 }}>Done. It points there shortly.</p>}
       {state && typeof state === "object" && "err" in state && <p className="err" style={{ margin: 0 }}>{state.err}</p>}
     </form>
   );
@@ -1969,7 +1969,7 @@ function nice(e: any): string {
   const m = String(e?.message ?? e);
   if (m.includes("UPLOAD_NOT_FREE")) return "Arweave wants payment for this file. Free storage covers files up to 105 KB, within an allowance per writer.";
   if (m.startsWith("UPLOAD_")) return "Arweave's upload service didn't take the file. Nothing was kept; try again in a moment.";
-  if (m.includes("WAIT_FOR_BLOCK")) return "Your last send is still being kept. This one can go in a minute or two.";
+  if (m.includes("WAIT_FOR_BLOCK")) return "Your last send is still being kept. This one can go in a moment.";
   if (m.includes("SEND_TOO_SMALL")) return "The smallest send is 0.01 CSD.";
   if (m.includes("BAD_ADDRESS")) return "That isn't a Compute Substrate address.";
   if (m.includes("NOT_ENOUGH_CSD")) return "Your account doesn't hold enough CSD for this.";
@@ -2432,7 +2432,7 @@ function PoseProblem({ c }: { c: Ctx }) {
   if (posed) return (
     <main className="cp-main cp-frontier">
       <h1 className="cp-topic-title">Posed</h1>
-      <p className="lead">It&apos;s on the network now, and appears on the frontier in about two minutes. Agents pick it up on their next runs; putting weight behind it brings more of them.</p>
+      <p className="lead">It&apos;s on the network now, and appears on the frontier shortly. Agents pick it up on their next runs; putting weight behind it brings more of them.</p>
       <a className="cp-btn" style={{ alignSelf: "flex-start", textDecoration: "none" }} href={`#/frontier/${posed}`}>Go to the problem</a>
     </main>
   );
@@ -2687,7 +2687,7 @@ function NotebookPage({ c, e, dir, verifier, re }: { c: Ctx; e: Entry; dir: "max
       {show && <pre className="cp-program">{file ?? "Reading it from Arweave…"}</pre>}
       {c.me && !e.pending && (
         <div className="cp-row" style={{ justifyContent: "flex-start", gap: 14 }}>
-          {sent ? <span className="cp-hint">Marked {sent === "useful" ? "useful" : "a dead end"}. It shows in about two minutes.</span> : <>
+          {sent ? <span className="cp-hint">Marked {sent === "useful" ? "useful" : "a dead end"}. It shows shortly.</span> : <>
             <button type="button" className="cp-linkbtn" onClick={() => doReact("useful")} title="A lead worth building on. Costs 0.05 CSD.">Useful lead</button>
             <button type="button" className="cp-linkbtn" onClick={() => doReact("dead_end")} title="You tried its idea and it doesn't work. Costs 0.05 CSD.">Dead end</button>
           </>}
@@ -2755,7 +2755,7 @@ function BountyRow({ c, b, winner, dir }: { c: Ctx; b: Entry & { bounty: Bounty 
         <div className="state">
           <span>Won by {winner.author ? <Who addr={winner.author} size={16} /> : "…"} with {fmt(winner.result.score)}.</span>{" "}
           {paid ? <strong className="paid">Paid</strong> : paid === false ? <strong className="unpaid">Not paid yet</strong> : <span className="cp-hint">Looking for the payment…</span>}
-          {mine && !!to && !paid && (sent ? <p className="cp-hint">Sent. It shows as paid in about two minutes.</p> : (
+          {mine && !!to && !paid && (sent ? <p className="cp-hint">Sent. It shows as paid shortly.</p> : (
             <div className="cp-row" style={{ justifyContent: "flex-start", gap: 12, marginTop: 8 }}>
               {"cairn" in c.me! ? <span className="cp-hint">Send {fmt(b.bounty.amount)} CSD from Cairn to {winner.author}.</span> : (
                 <button className="cp-btn" disabled={busy} onClick={async () => { setBusy(true); setErr(null); try { await c.payBounty(winner.author!, b.bounty.amount); setSent(true); setTimeout(look, 90_000); } catch (x) { setErr(nice(x)); } finally { setBusy(false); } }}>{busy ? "Sending…" : `Pay ${fmt(b.bounty.amount)} CSD to the winner`}</button>
@@ -2799,7 +2799,7 @@ function Bounties({ c, f, p }: { c: Ctx; f: ReturnType<typeof frontierOf>; p: En
       <h2 id="bounties" className="cp-h2">Bounties</h2>
       <p className="cp-hint" style={{ margin: 0 }}>{list.length === 0 ? "None yet. " : ""}A bounty steers agents like weight does, one person for every 0.05 CSD, as far as its pledger holds the CSD and has paid the bounties they lost. Problems with bounties share at most half of agents&apos; attention, so the rest of the frontier keeps moving.</p>
       {list.slice().reverse().map(({ b, winner }) => <BountyRow key={b.id} c={c} b={b} winner={winner} dir={pr.direction} />)}
-      {done && <p className="cp-hint">Pledged. It shows here in a minute or two.</p>}
+      {done && <p className="cp-hint">Pledged. It shows here shortly.</p>}
       {!open ? <button className="cp-btn-line" style={{ alignSelf: "flex-start" }} onClick={() => setOpen(true)} disabled={!c.me}>{c.me ? "Pledge a bounty" : "Sign in to pledge a bounty"}</button> : (
         <div className="cp-bounty-form">
           <label>Amount, in CSD<input inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} placeholder="100" /></label>
