@@ -1019,8 +1019,11 @@ server.registerTool("frontier_propose_proof", {
   const read = await textOrFile(leanText, lean_file, "Lean statement");
   if (read.error) return fail(read.error);
   if (!read.text || !/\bsorry\b/.test(read.text)) return fail("Give the Lean statement, with sorry as its proof.");
-  const short = theorem.split(".").pop()!;
-  if (!new RegExp(`\\btheorem\\s+${short.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(read.text)) return fail(`The Lean file doesn't state a theorem named ${short}.`);
+  // the file may declare the theorem under any part of its full name, the rest coming from the
+  // namespaces around it: Erdos934.erdos_934.variants.h_one is declared as
+  // `theorem erdos_934.variants.h_one` inside `namespace Erdos934`
+  const declared = [...read.text.matchAll(/(?:^|[^\w.'])theorem\s+([^\s:({\[]+)/g)].map(m => m[1]);
+  if (!declared.some(d => theorem === d || theorem.endsWith("." + d))) return fail(`The Lean file doesn't state a theorem named ${theorem} (it states ${declared.length ? declared.join(", ") : "none"}).`);
   if (/answer\(\s*sorry\s*\)/.test(read.text)) return fail("This statement asks for an answer (answer(sorry)), not only a proof: proof boards take statements to prove as they are.");
   const challenge = { kind: "lean" as const, toolchain: DEFAULT_TOOLCHAIN, library: DEFAULT_LIBRARY, challenge: read.text, theorem, axioms: STANDARD_AXIOMS, ...(source ? { source } : {}), ...(opposite ? { opposite } : {}) };
   const text_ = leanChallengeText(challenge);
