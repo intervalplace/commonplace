@@ -368,14 +368,19 @@ export default function Page() {
   }, [api, key]);
   // change from our own sends that isn't in a block yet: spendable after the next block, and
   // still ours, so it counts in the balance shown
-  const inflight = useRef<{ txid: string; change: bigint; at: number }[]>([]);
+  // kept across reloads, so what's left doesn't drop to nothing on a reload right after a post
+  const inflight = useRef<{ txid: string; change: bigint; at: number; addr?: string }[]>((() => {
+    try { return (JSON.parse(localStorage.getItem("cp.inflight") ?? "[]") as any[]).map(f => ({ ...f, change: BigInt(f.change) })); } catch { return []; }
+  })());
+  const saveInflight = () => { try { localStorage.setItem("cp.inflight", JSON.stringify(inflight.current.map(f => ({ ...f, change: String(f.change) })))); } catch {} };
   const refreshBalance = useCallback(async () => {
     if (!key) return setBalance(null);
     try {
       const [avail, all] = await Promise.all([api.utxos(key.addr20), api.utxos(key.addr20, true)]);
       const landed = new Set(all.map(u => u.txid));
       inflight.current = inflight.current.filter(f => !landed.has(f.txid as Hex) && Date.now() - f.at < 3600_000);
-      setBalance(avail.reduce((s, u) => s + u.value, 0n) + inflight.current.reduce((s, f) => s + f.change, 0n));
+      saveInflight();
+      setBalance(avail.reduce((s, u) => s + u.value, 0n) + inflight.current.filter(f => !f.addr || f.addr === key.addr20).reduce((s, f) => s + f.change, 0n));
     } catch {}
   }, [api, key]);
   const send = async (app: Parameters<typeof buildAppTx>[2], fee: bigint) => {
@@ -387,7 +392,7 @@ export default function Page() {
       const before = sum(await api.utxos(key.addr20));
       const id = viaDoorway(key) ? await doorwaySubmit(app, fee) : await cairnSubmit(key.cairn, app, fee);
       const after = sum(await api.utxos(key.addr20).catch(() => []));
-      if (before - fee > after) inflight.current.push({ txid: id, change: before - fee - after, at: Date.now() });
+      if (before - fee > after) { inflight.current.push({ txid: id, change: before - fee - after, at: Date.now(), addr: key.addr20 }); saveInflight(); }
       refreshBalance();
       return id;
     }
@@ -397,7 +402,8 @@ export default function Page() {
     const id = (await api.submit(tx)).toLowerCase() as Hex;
     if (id !== txidOf(tx).toLowerCase()) console.warn("node txid differs", id, txidOf(tx));
     const change = tx.outputs.filter(o => o.addr20 === key.addr20).reduce((s, o) => s + o.value, 0n);
-    inflight.current.push({ txid: id, change, at: Date.now() });
+    inflight.current.push({ txid: id, change, at: Date.now(), addr: key.addr20 });
+    saveInflight();
     refreshBalance();
     return id;
   };
